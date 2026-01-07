@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/src/assets/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Auto Manager - Sistema de Gestión de Flotilla</title>
+    
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Configuración de Tailwind con colores corporativos -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              // COLORES CORPORATIVOS OFICIALES
+              primary: '#5cbfde',     // Azul cyan oficial
+              dark: '#24272c',        // Gris oscuro oficial
+              
+              // Variaciones del azul
+              'primary-light': '#7dd3f0',
+              'primary-dark': '#3ca5c4',
+              
+              // Grises personalizados basados en el dark
+              'gray-850': '#1a1d21',
+              'gray-950': '#0f1114',
+              
+              // Colores de estado
+              success: '#10b981',
+              warning: '#f59e0b',
+              danger: '#ef4444',
+              info: '#3b82f6'
+            }
+          }
+        }
+      }
+    </script>
+    
+    <!-- Estilos personalizados -->
+    <style>
+      body {
+        background: linear-gradient(135deg, #24272c 0%, #1a1d21 50%, #24272c 100%);
+        min-height: 100vh;
+      }
+      
+      /* Glassmorphism actualizado */
+      .glass {
+        background: rgba(92, 191, 222, 0.05);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(92, 191, 222, 0.1);
+      }
+      
+      .glass-dark {
+        background: rgba(36, 39, 44, 0.8);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(92, 191, 222, 0.1);
+      }
+      
+      /* Scrollbar personalizada con colores corporativos */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      
+      ::-webkit-scrollbar-track {
+        background: #24272c;
+      }
+      
+      ::-webkit-scrollbar-thumb {
+        background: #5cbfde;
+        border-radius: 4px;
+      }
+      
+      ::-webkit-scrollbar-thumb:hover {
+        background: #7dd3f0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

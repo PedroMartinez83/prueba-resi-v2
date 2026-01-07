@@ -1,0 +1,123 @@
+{
+  "timestamp": "2025-09-12T19:29:23.189Z",
+  "environment": "development",
+  "database": "auto_manager_db",
+  "duplicadosEliminados": {
+    "clientes": {
+      "total": 25,
+      "eliminados": 4,
+      "campos": {
+        "email": 4
+      }
+    },
+    "conductores": {
+      "total": 67,
+      "eliminados": 6,
+      "campos": {
+        "telefono": 6
+      }
+    },
+    "vehiculos": {
+      "total": 1,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "usuarios": {
+      "total": 1,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "viajes": {
+      "total": 29,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "mensajes": {
+      "total": 135,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "calificaciones": {
+      "total": 41,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "registros_financieros": {
+      "total": 1,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "rechazos": {
+      "total": 29,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "rentas": {
+      "total": 1,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "mantenimientos": {
+      "total": 3,
+      "eliminados": 0,
+      "campos": {}
+    },
+    "siniestros": {
+      "total": 3,
+      "eliminados": 0,
+      "campos": {}
+    }
+  },
+  "tablas": {
+    "clientes": {
+      "total": "21",
+      "ultimoRegistro": "2025-09-12T19:29:20.507Z"
+    },
+    "usuarios": {
+      "total": "1",
+      "ultimoRegistro": "2025-09-12T19:29:20.776Z"
+    },
+    "conductores": {
+      "total": "61",
+      "ultimoRegistro": "2025-09-12T19:29:21.172Z"
+    },
+    "vehiculos": {
+      "total": "1",
+      "ultimoRegistro": "2025-09-12T19:29:21.397Z"
+    },
+    "viajes": {
+      "total": "29",
+      "ultimoRegistro": "2025-09-12T19:29:21.602Z"
+    },
+    "calificaciones": {
+      "total": "41",
+      "ultimoRegistro": "2025-09-12T19:29:22.214Z"
+    },
+    "registros_financieros": {
+      "total": "1",
+      "ultimoRegistro": "2025-09-12T19:29:22.388Z"
+    },
+    "rechazos": {
+      "total": "29",
+      "ultimoRegistro": "2025-09-12T19:29:22.602Z"
+    },
+    "rentas": {
+      "total": "1",
+      "ultimoRegistro": "2025-09-12T19:29:22.789Z"
+    },
+    "mantenimientos": {
+      "total": "3",
+      "ultimoRegistro": "2025-09-12T19:29:22.978Z"
+    },
+    "siniestros": {
+      "total": "3",
+      "ultimoRegistro": "2025-09-12T19:29:23.141Z"
+    },
+    "mensajes": {
+      "total": "135",
+      "ultimoRegistro": "2025-09-12T19:29:21.961Z"
+    }
+  },
+  "errores": [],
+  "advertencias": []
+}
