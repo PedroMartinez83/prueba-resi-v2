@@ -1203,34 +1203,37 @@ exports.getConductoresMorosos = async (req, res) => {
         v.numero_vehiculo,
         v.tipo_socio,
         MAX(pd.fecha_pago) as ultimo_pago,
-        CURRENT_DATE - MAX(pd.fecha_pago)::date as dias_sin_pagar,
-        (CURRENT_DATE - MAX(pd.fecha_pago)::date) * a.renta_diaria as deuda_estimada
+        COALESCE(CURRENT_DATE - MAX(pd.fecha_pago)::date, CURRENT_DATE - a.fecha_inicio::date) as dias_sin_pagar,
+        COALESCE((CURRENT_DATE - MAX(pd.fecha_pago)::date) * a.renta_diaria, (CURRENT_DATE - a.fecha_inicio::date) * a.renta_diaria) as deuda_estimada
       FROM conductores c
       INNER JOIN asignaciones a ON c.id = a.conductor_id
       INNER JOIN vehiculos v ON a.vehiculo_id = v.id
       LEFT JOIN pagos_diarios pd ON a.id = pd.asignacion_id AND pd.status = 'Confirmado'
       WHERE a.activa = true
-      GROUP BY c.id, c.nombre_conductor, c.numero_telefono, v.numero_vehiculo, v.tipo_socio, a.renta_diaria
-      HAVING MAX(pd.fecha_pago) IS NULL 
-         OR (CURRENT_DATE - MAX(pd.fecha_pago)::date) >= ${diasSinPago}
-      ORDER BY dias_sin_pagar DESC NULLS FIRST
+      GROUP BY c.id, c.nombre_conductor, c.numero_telefono, v.numero_vehiculo, v.tipo_socio, a.renta_diaria, a.fecha_inicio
+      HAVING COALESCE(CURRENT_DATE - MAX(pd.fecha_pago)::date, CURRENT_DATE - a.fecha_inicio::date) >= ${diasSinPago}
+      ORDER BY dias_sin_pagar DESC NULLS LAST
     `;
     
     console.log('📊 Ejecutando SQL...');
     const result = await db.raw(sql);
     console.log('✅ Resultados obtenidos:', result.rows.length);
+    console.log('🔍 Primer resultado:', result.rows[0]);
     
     res.json({
       success: true,
       conductores_morosos: result.rows.map(row => ({
         id: row.id,
         nombre: row.nombre_conductor,
+        nombre_conductor: row.nombre_conductor,
         telefono: row.numero_telefono,
+        numero_telefono: row.numero_telefono,
         vehiculo: row.numero_vehiculo,
+        numero_vehiculo: row.numero_vehiculo,
         tipo_socio: row.tipo_socio,
-        ultimo_pago: row.ultimo_pago,
         dias_sin_pagar: parseInt(row.dias_sin_pagar || 0),
-        deuda_estimada: parseFloat(row.deuda_estimada || 0)
+        deuda_estimada: parseFloat(row.deuda_estimada || 0),
+        ultimo_pago: row.ultimo_pago
       })),
       total_morosos: result.rows.length
     });

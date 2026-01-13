@@ -344,3 +344,143 @@ exports.getEstadisticasGenerales = async (req, res) => {
     });
   }
 };
+
+// ========== SINCRONIZACIÓN DE RENTAS ==========
+/**
+ * Sincroniza rentas desde Airtable a PostgreSQL
+ * POST /admin/sync/rentas
+ */
+exports.syncRentasFromAirtable = async (req, res) => {
+  console.log('🔄 Iniciando sincronización de RENTAS (Airtable → PostgreSQL)...');
+  
+  let sincronizados = 0;
+  let creados = 0;
+  let actualizados = 0;
+  let errores = 0;
+  const erroresDetalle = [];
+  
+  try {
+    // Verificar que Airtable esté configurado
+    if (!process.env.AIRTABLE_API_KEY || !process.env.AIRTABLE_BASE_ID) {
+      return res.status(400).json({
+        success: false,
+        error: 'Airtable no está configurado',
+        mensaje: 'Falta AIRTABLE_API_KEY o AIRTABLE_BASE_ID en variables de entorno'
+      });
+    }
+
+    const Airtable = require('airtable');
+    const base = new Airtable({
+      apiKey: process.env.AIRTABLE_API_KEY
+    }).base(process.env.AIRTABLE_BASE_ID);
+
+    // 1️⃣ Obtener todas las rentas de Airtable
+    console.log('📥 Obteniendo rentas de Airtable...');
+    const rentasAirtable = await base('Rentas')
+      .select()
+      .all();
+
+    console.log(`✅ ${rentasAirtable.length} rentas encontradas en Airtable`);
+
+    // 2️⃣ Para cada renta de Airtable, sincronizar a PostgreSQL
+    for (const record of rentasAirtable) {
+      try {
+        const fields = record.fields;
+        
+        // Mapear campos de Airtable a PostgreSQL
+        const rentaData = {
+          airtable_id: record.id,
+          folio_renta: fields['Folio Renta'] || null,
+          monto_base: parseFloat(fields['Monto Base'] || 0),
+          ajuste_refacciones: parseFloat(fields['Ajuste Refacciones'] || 0),
+          monto_total: parseFloat(fields['Monto Total'] || 0),
+          fecha_inicio: fields['Fecha Inicio'] ? new Date(fields['Fecha Inicio']) : null,
+          fecha_vencimiento: fields['Fecha Vencimiento'] ? new Date(fields['Fecha Vencimiento']) : null,
+          fecha_pago: fields['Fecha Pago'] ? new Date(fields['Fecha Pago']) : null,
+          estado: fields['Estado'] || 'Pendiente',
+          dias_retraso: fields['Días Retraso'] || null,
+          metodo_pago: fields['Método Pago'] || null,
+          stripe_payment_id: fields['Stripe Payment ID'] || null,
+          numero_semana: parseInt(fields['Número Semana'] || 0),
+          comprobante_url: fields['Comprobante URL'] || null,
+          tipo_socio: Array.isArray(fields['Tipo Socio']) ? JSON.stringify(fields['Tipo Socio']) : fields['Tipo Socio'] || null,
+          observaciones: fields['Observaciones'] || null
+        };
+
+        // Obtener conductor_id
+        let conductor_id = null;
+        if (fields['ConductorID']) {
+          conductor_id = parseInt(fields['ConductorID']);
+        }
+
+        let vehiculo_id = null;
+        if (fields['VehiculoID']) {
+          vehiculo_id = parseInt(fields['VehiculoID']);
+        }
+
+        // 3️⃣ Verificar si la renta ya existe en PostgreSQL
+        const existente = await db('rentas')
+          .where('airtable_id', record.id)
+          .first();
+
+        if (existente) {
+          // Actualizar
+          await db('rentas')
+            .where('airtable_id', record.id)
+            .update({
+              ...rentaData,
+              updated_at: new Date()
+            });
+          
+          actualizados++;
+        } else {
+          // Crear
+          await db('rentas')
+            .insert({
+              ...rentaData,
+              conductor_id: conductor_id,
+              vehiculo_id: vehiculo_id,
+              created_at: new Date(),
+              updated_at: new Date()
+            });
+          
+          creados++;
+        }
+
+        sincronizados++;
+
+      } catch (error) {
+        errores++;
+        erroresDetalle.push({
+          airtable_id: record.id,
+          error: error.message
+        });
+        console.error(`   ❌ ERROR en renta ${record.id}:`, error.message);
+      }
+    }
+
+    console.log('\n✨ ¡Sincronización completada!');
+    
+    res.json({
+      success: true,
+      mensaje: 'Sincronización de rentas completada',
+      resultado: {
+        total_procesados: sincronizados,
+        creados: creados,
+        actualizados: actualizados,
+        errores: errores,
+        rentas_airtable: rentasAirtable.length
+      },
+      detalles_errores: errores > 0 ? erroresDetalle : []
+    });
+
+  } catch (error) {
+    console.error('❌ ERROR CRÍTICO en sincronización:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Error en sincronización de rentas',
+      mensaje: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};

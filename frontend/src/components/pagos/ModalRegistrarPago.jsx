@@ -1,10 +1,11 @@
 // frontend/src/components/pagos/ModalRegistrarPago.jsx
 import { useState, useEffect } from 'react';
-import { X, DollarSign, CreditCard, Receipt, AlertCircle, CheckCircle, User, Calendar, Shield, Wrench } from 'lucide-react';
+import { X, DollarSign, CreditCard, Receipt, AlertCircle, CheckCircle, User, Calendar, Shield, Wrench, Clock } from 'lucide-react';
 import api from '../../services/api';
 
 const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
   const fechaHoy = new Date().toISOString().split('T')[0];
+  const TOLERANCIA_DIAS = 2;
   const [formData, setFormData] = useState({
     conductor_id: '',
     monto_renta: '',
@@ -20,30 +21,178 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
   const [error, setError] = useState(null);
   const [previewDivision, setPreviewDivision] = useState(null);
   const [conductorInfo, setConductorInfo] = useState(null);
+  const [infoTolerancia, setInfoTolerancia] = useState(null);
+  const [infoToleranciaPagoActual, setInfoToleranciaPagoActual] = useState(null);
+  const [ultimoPagoConductor, setUltimoPagoConductor] = useState(null);
+  const [diaCorrespondiente, setDiaCorrespondiente] = useState(null);
+
+  // Funciones de tolerancia
+  const obtenerFechaCorrespondiente = (fechaPago) => {
+    if (!fechaPago) return null;
+    const fecha = new Date(fechaPago);
+    if (Number.isNaN(fecha.getTime())) return null;
+
+    // Si fuera domingo, considerar el sábado previo porque no se cobran rentas ese día
+    if (fecha.getDay() === 0) {
+      const ajustada = new Date(fecha);
+      ajustada.setDate(ajustada.getDate() - 1);
+      ajustada.setHours(0, 0, 0, 0);
+      return ajustada;
+    }
+
+    fecha.setHours(0, 0, 0, 0);
+    return fecha;
+  };
+
+  const contarDiasHabilesSinDomingos = (inicio, fin = new Date()) => {
+    if (!inicio) return null;
+    const fechaInicio = new Date(inicio);
+    const fechaFin = new Date(fin);
+    fechaInicio.setHours(0, 0, 0, 0);
+    fechaFin.setHours(0, 0, 0, 0);
+
+    let dias = 0;
+    const cursor = new Date(fechaInicio);
+
+    while (cursor < fechaFin) {
+      cursor.setDate(cursor.getDate() + 1);
+      if (cursor.getDay() !== 0) {
+        dias += 1;
+      }
+    }
+
+    return dias;
+  };
+
+  const obtenerInfoTolerancia = (ultimoPagoData) => {
+    if (!ultimoPagoData || !ultimoPagoData.siguiente_fecha_pendiente) {
+      return {
+        fechaCorresponde: null,
+        diasHabilesTranscurridos: null,
+        diasRestantesTolerancia: null,
+        estadoTolerancia: 'Sin información'
+      };
+    }
+
+    const fechaCorresponde = obtenerFechaCorrespondiente(ultimoPagoData.siguiente_fecha_pendiente);
+    if (!fechaCorresponde) {
+      return {
+        fechaCorresponde: null,
+        diasHabilesTranscurridos: null,
+        diasRestantesTolerancia: null,
+        estadoTolerancia: 'Sin información'
+      };
+    }
+
+    const diasHabilesTranscurridos = contarDiasHabilesSinDomingos(fechaCorresponde, new Date());
+    const diasRestantesTolerancia = diasHabilesTranscurridos === null
+      ? null
+      : Math.max(0, TOLERANCIA_DIAS - diasHabilesTranscurridos);
+
+    let estadoTolerancia = 'Al corriente';
+    if (diasHabilesTranscurridos > TOLERANCIA_DIAS) {
+      estadoTolerancia = 'Atrasado';
+    } else if (diasHabilesTranscurridos > 0) {
+      estadoTolerancia = 'En tolerancia';
+    }
+
+    return {
+      fechaCorresponde,
+      diasHabilesTranscurridos,
+      diasRestantesTolerancia,
+      estadoTolerancia
+    };
+  };
+
+  const obtenerInfoToleranciaPago = (fechaPago) => {
+    const fechaCorresponde = obtenerFechaCorrespondiente(fechaPago);
+    if (!fechaCorresponde) {
+      return {
+        fechaCorresponde: null,
+        diasHabilesTranscurridos: null,
+        diasRestantesTolerancia: null,
+        estadoTolerancia: 'Sin información'
+      };
+    }
+
+    const diasHabilesTranscurridos = contarDiasHabilesSinDomingos(fechaCorresponde, new Date());
+    const diasRestantesTolerancia = diasHabilesTranscurridos === null
+      ? null
+      : Math.max(0, TOLERANCIA_DIAS - diasHabilesTranscurridos);
+
+    let estadoTolerancia = 'Al corriente';
+    if (diasHabilesTranscurridos > TOLERANCIA_DIAS) {
+      estadoTolerancia = 'Atrasado';
+    } else if (diasHabilesTranscurridos > 0) {
+      estadoTolerancia = 'En tolerancia';
+    }
+
+    return {
+      fechaCorresponde,
+      diasHabilesTranscurridos,
+      diasRestantesTolerancia,
+      estadoTolerancia
+    };
+  };
+
+  const formatDiaCorrespondiente = (fecha) => {
+    if (!fecha) return 'N/A';
+    return fecha.toLocaleDateString('es-MX', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
 
   // Auto-llenar conductor_id cuando se recibe el prop
   useEffect(() => {
     if (conductor) {
-      const tipoPoliza = conductor.tipo_poliza || 'POLIZA_100';
-      const rentaDiaria = parseFloat(conductor.renta_diaria || 400);
-      const montoExtraDefault = tipoPoliza === 'AHORRO_50' ? 50 : 100;
-      
-      setConductorInfo({
-        ...conductor,
-        tipo_poliza: tipoPoliza
-      });
+      try {
+        const tipoPoliza = conductor.tipo_poliza || 'POLIZA_100';
+        const rentaDiaria = parseFloat(conductor.renta_diaria || 400);
+        const montoExtraDefault = tipoPoliza === 'AHORRO_50' ? 50 : 100;
+        
+        setConductorInfo({
+          ...conductor,
+          tipo_poliza: tipoPoliza
+        });
 
-      setFormData(prev => ({
-        ...prev,
-        conductor_id: conductor.id,
-        monto_renta: rentaDiaria.toString(),
-        monto_extra: montoExtraDefault.toString(),
-        destino_extra: 'poliza' // Default a póliza
-      }));
+        setFormData(prev => ({
+          ...prev,
+          conductor_id: conductor.id,
+          monto_renta: rentaDiaria.toString(),
+          monto_extra: montoExtraDefault.toString(),
+          destino_extra: 'poliza' // Default a póliza
+        }));
 
-      calcularPreview(rentaDiaria, montoExtraDefault, 'poliza');
+        calcularPreview(rentaDiaria, montoExtraDefault, 'poliza');
+
+        // Cargar último pago pendiente
+        obtenerUltimoPagoConductor(conductor.id);
+      } catch (err) {
+        console.error('Error en cargarUltimoPago:', err);
+        setError('Error al cargar información del conductor');
+      }
     }
   }, [conductor]);
+
+  // Obtener último pago pendiente del conductor
+  const obtenerUltimoPagoConductor = async (conductorId) => {
+    try {
+      const response = await api.get(`/admin/pagos-rentas/conductor/${conductorId}/siguiente-pendiente`);
+      if (response.data && response.data.success) {
+        setUltimoPagoConductor(response.data);
+      } else if (response.data && response.data.error) {
+        // El conductor no tiene asignación activa, es normal
+        setUltimoPagoConductor(null);
+        console.log('Info: Conductor sin asignación activa');
+      }
+    } catch (err) {
+      console.error('Error cargando último pago:', err);
+      // No mostrar error al usuario, solo log
+      setUltimoPagoConductor(null);
+    }
+  };
 
   // Calcular preview de división
   const calcularPreview = (renta, extra, destino) => {
@@ -65,10 +214,33 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
     }
   };
 
-  // Actualizar preview cuando cambian los valores
+  // Calcular info de tolerancia cuando cambia el último pago
   useEffect(() => {
-    calcularPreview(formData.monto_renta, formData.monto_extra, formData.destino_extra);
-  }, [formData.monto_renta, formData.monto_extra, formData.destino_extra]);
+    if (ultimoPagoConductor) {
+      const info = obtenerInfoTolerancia(ultimoPagoConductor);
+      setInfoTolerancia(info);
+    } else {
+      setInfoTolerancia(null);
+    }
+  }, [ultimoPagoConductor, obtenerInfoTolerancia]);
+
+  // Calcular info de tolerancia del pago actual cuando cambia la fecha
+  useEffect(() => {
+    if (formData.fecha_pago) {
+      const info = obtenerInfoToleranciaPago(formData.fecha_pago);
+      setInfoToleranciaPagoActual(info);
+    } else {
+      setInfoToleranciaPagoActual(null);
+    }
+  }, [formData.fecha_pago, obtenerInfoToleranciaPago]);
+
+  // Actualizar día correspondiente cuando cambia la fecha
+  useEffect(() => {
+    if (formData.fecha_pago) {
+      const fechaCorresponde = obtenerFechaCorrespondiente(formData.fecha_pago);
+      setDiaCorrespondiente(fechaCorresponde);
+    }
+  }, [formData.fecha_pago]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -122,6 +294,9 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
     setError(null);
     setPreviewDivision(null);
     setConductorInfo(null);
+    setInfoTolerancia(null);
+    setInfoToleranciaPagoActual(null);
+    setUltimoPagoConductor(null);
     onClose();
   };
 
@@ -275,6 +450,114 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
             </div>
           </div>
 
+          {/* Mostrar Día Correspondiente */}
+          {diaCorrespondiente && (
+            <div className="glass border-2 border-primary/30 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Calendar className="w-5 h-5 text-primary" />
+                <h3 className="font-bold text-white">Día Correspondiente al Pago</h3>
+              </div>
+              <div className="bg-gradient-to-br from-primary/20 to-primary/10 border border-primary/30 rounded-lg p-4">
+                <p className="text-gray-300 text-sm mb-2">Este pago cubre el día:</p>
+                <p className="text-2xl font-bold text-primary capitalize">
+                  {formatDiaCorrespondiente(diaCorrespondiente)}
+                </p>
+                {new Date(formData.fecha_pago).getDay() === 0 && (
+                  <div className="mt-3 bg-yellow-500/20 border border-yellow-500/30 rounded-lg p-3">
+                    <p className="text-yellow-400 text-sm flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4" />
+                      <strong>Nota:</strong> Has seleccionado un domingo. Se ha ajustado automáticamente al sábado anterior.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Información de Tolerancia */}
+          {infoTolerancia && (
+            <div className="glass border-2 border-primary/30 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-primary" />
+                  <h3 className="font-bold text-white">Días Restantes del Conductor</h3>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  infoTolerancia.estadoTolerancia === 'Al corriente' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                  infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                  'bg-red-500/20 text-red-400 border border-red-500/30'
+                }`}>
+                  {infoTolerancia.estadoTolerancia}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Días Transcurridos */}
+                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
+                  infoTolerancia.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
+                  infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
+                  'from-red-500/10 to-red-600/10 border-red-500/30'
+                }`}>
+                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
+                    📅 Días hábiles transcurridos
+                  </p>
+                  <p className={`text-2xl font-bold ${
+                    infoTolerancia.estadoTolerancia === 'Al corriente' ? 'text-green-400' :
+                    infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'text-yellow-400' :
+                    'text-red-400'
+                  }`}>
+                    {infoTolerancia.diasHabilesTranscurridos !== null ? infoTolerancia.diasHabilesTranscurridos : 'N/A'}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Desde último pago
+                  </p>
+                </div>
+
+                {/* Días Restantes */}
+                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
+                  infoTolerancia.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
+                  infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
+                  'from-red-500/10 to-red-600/10 border-red-500/30'
+                }`}>
+                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
+                    ⏰ Días restantes de tolerancia
+                  </p>
+                  <p className={`text-2xl font-bold ${
+                    infoTolerancia.estadoTolerancia === 'Al corriente' ? 'text-green-400' :
+                    infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'text-yellow-400' :
+                    'text-red-400'
+                  }`}>
+                    {infoTolerancia.diasRestantesTolerancia !== null ? infoTolerancia.diasRestantesTolerancia : 'N/A'}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Máximo: {TOLERANCIA_DIAS} días hábiles
+                  </p>
+                </div>
+
+                {/* Estado Actual */}
+                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
+                  infoTolerancia.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
+                  infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
+                  'from-red-500/10 to-red-600/10 border-red-500/30'
+                }`}>
+                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
+                    📊 Estado actual
+                  </p>
+                  <p className={`text-lg font-bold ${
+                    infoTolerancia.estadoTolerancia === 'Al corriente' ? 'text-green-400' :
+                    infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'text-yellow-400' :
+                    'text-red-400'
+                  }`}>
+                    {infoTolerancia.estadoTolerancia}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Último pago: {ultimoPagoConductor ? new Date(ultimoPagoConductor.siguiente_fecha_pendiente).toLocaleDateString('es-MX') : 'N/A'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Preview de División */}
           {previewDivision && (
             <div className="glass border-2 border-primary/30 rounded-xl p-5">
@@ -355,6 +638,80 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
             </div>
           )}
 
+          {/* Información de Tolerancia del Pago Actual */}
+          {infoToleranciaPagoActual && (
+            <div className="glass border-2 border-primary/30 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-primary" />
+                  <h3 className="font-bold text-white">Estado Después del Pago</h3>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  infoToleranciaPagoActual.estadoTolerancia === 'Al corriente' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                  infoToleranciaPagoActual.estadoTolerancia === 'En tolerancia' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                  'bg-red-500/20 text-red-400 border border-red-500/30'
+                }`}>
+                  {infoToleranciaPagoActual.estadoTolerancia}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Día Correspondiente */}
+                <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/10 border border-blue-500/30 rounded-lg p-4">
+                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
+                    📅 Día que cubrirá
+                  </p>
+                  <p className="text-lg font-bold text-blue-400">
+                    {formatDiaCorrespondiente(infoToleranciaPagoActual.fechaCorresponde)}
+                  </p>
+                </div>
+
+                {/* Días Restantes */}
+                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
+                  infoToleranciaPagoActual.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
+                  infoToleranciaPagoActual.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
+                  'from-red-500/10 to-red-600/10 border-red-500/30'
+                }`}>
+                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
+                    ⏰ Días restantes después del pago
+                  </p>
+                  <p className={`text-2xl font-bold ${
+                    infoToleranciaPagoActual.estadoTolerancia === 'Al corriente' ? 'text-green-400' :
+                    infoToleranciaPagoActual.estadoTolerancia === 'En tolerancia' ? 'text-yellow-400' :
+                    'text-red-400'
+                  }`}>
+                    {infoToleranciaPagoActual.diasRestantesTolerancia !== null ? infoToleranciaPagoActual.diasRestantesTolerancia : 'N/A'}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Máximo: {TOLERANCIA_DIAS} días hábiles
+                  </p>
+                </div>
+
+                {/* Estado Actual */}
+                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
+                  infoToleranciaPagoActual.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
+                  infoToleranciaPagoActual.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
+                  'from-red-500/10 to-red-600/10 border-red-500/30'
+                }`}>
+                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
+                    📊 Estado después del pago
+                  </p>
+                  <p className={`text-lg font-bold ${
+                    infoToleranciaPagoActual.estadoTolerancia === 'Al corriente' ? 'text-green-400' :
+                    infoToleranciaPagoActual.estadoTolerancia === 'En tolerancia' ? 'text-yellow-400' :
+                    'text-red-400'
+                  }`}>
+                    {infoToleranciaPagoActual.estadoTolerancia}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Días transcurridos: {infoToleranciaPagoActual.diasHabilesTranscurridos || 0}
+                  </p>
+                </div>
+              </div>
+
+            </div>
+          )}
+
           {/* Método de Pago */}
           <div>
             <label className="block text-white font-medium mb-2">
@@ -387,10 +744,28 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
                 type="date"
                 required
                 value={formData.fecha_pago}
-                onChange={(e) => setFormData({ ...formData, fecha_pago: e.target.value })}
+                onChange={(e) => {
+                  const selectedDate = new Date(e.target.value);
+                  // Prevenir selección de domingos
+                  if (selectedDate.getDay() === 0) {
+                    setError('No se pueden seleccionar domingos. Los pagos se registran de lunes a sábado.');
+                    // Mantener la fecha anterior o seleccionar el sábado anterior
+                    const saturdayBefore = new Date(selectedDate);
+                    saturdayBefore.setDate(selectedDate.getDate() - 1);
+                    setFormData({ ...formData, fecha_pago: saturdayBefore.toISOString().split('T')[0] });
+                    return;
+                  }
+                  setError(null);
+                  setFormData({ ...formData, fecha_pago: e.target.value });
+                }}
+                min={new Date().toISOString().split('T')[0]} // No permitir fechas pasadas
                 className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent"
               />
             </div>
+
+            <p className="text-gray-400 text-xs mt-2">
+              💡 Solo se permiten fechas de lunes a sábado
+            </p>
           </div>
            {/* Referencia de Pago */}
           {['Transferencia', 'Tarjeta'].includes(formData.metodo_pago) && (
