@@ -118,7 +118,7 @@ const RentasDashboard = () => {
     },
     {
       titulo: 'Cobrado Este Mes',
-      valor: estadisticas?.proyeccion_mes || estadisticas?.cobrado_mes || 0,
+      valor: estadisticas?.cobrado_mes || 0,
       formato: 'dinero',
       icono: TrendingUp,
       color: 'from-purple-500 to-pink-500',
@@ -300,7 +300,7 @@ const RentasDashboard = () => {
         <div className="glass border border-white/10 rounded-2xl p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-white">
-              Conductores con deuda
+              Conductores con la mayor deuda
             </h2>
             <button
               onClick={() => setMostrarTodosDeuda(true)}
@@ -396,10 +396,10 @@ const ModalConductoresMorosos = ({ onClose, datos, loading }) => (
       <div className="flex items-center justify-between border-b border-white/10 px-6 py-4 bg-gray-900/80">
         <div>
           <h3 className="text-xl font-semibold text-white">
-            Conductores con deuda
+            Conductores con mayor deuda
           </h3>
           <p className="text-sm text-gray-400">
-            Lista completa de conductores con pagos atrasados
+            Lista completa de conductores con los mayores pagos atrasados
           </p>
         </div>
         <button

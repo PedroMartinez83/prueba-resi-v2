@@ -70,6 +70,18 @@ router.get('/vehiculo/:id',
   mantenimientosController.getHistorialVehiculo
 );
 
+// Ruta para confirmar cita
+router.put('/:id/confirmar',
+  requirePermission('mantenimientos.update'),
+  mantenimientosController.confirmarMantenimiento
+);
+
+// Ruta para cancelar mantenimiento
+router.put('/:id/cancelar',
+  requirePermission('mantenimientos.update'), 
+  mantenimientosController.cancelarMantenimiento
+);
+
 router.put('/:id/completar',
   requirePermission('mantenimientos.update'),
   mantenimientosController.completarMantenimiento
@@ -100,6 +112,8 @@ router.delete('/:id',
   requirePermission('mantenimientos.delete'),
   mantenimientosController.deleteMantenimiento
 );
+
+
 
 // ✅ UN SOLO module.exports
 module.exports = router;

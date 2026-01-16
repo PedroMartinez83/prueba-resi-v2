@@ -212,28 +212,59 @@ exports.getEstadisticasPagos = async (req, res) => {
       .sum('monto_poliza_pagado as total');
     const polizaMes = parseFloat(polizaMesResult[0]?.total || 0);
 
-    // Conductores con deuda
+    // Conductores con deuda PENDIENTE (total_debido > total_pagado)
     const deudaResult = await db.raw(`
       SELECT COUNT(DISTINCT c.id) as total
       FROM conductores c
       INNER JOIN asignaciones a ON c.id = a.conductor_id
       WHERE a.activa = true
-        AND NOT EXISTS (
-          SELECT 1 FROM pagos_diarios pd
-          WHERE pd.asignacion_id = a.id
-            AND pd.status = 'Confirmado'
-            AND pd.fecha_pago >= CURRENT_DATE - INTERVAL '2 days'
-        )
+        -- Deuda pendiente: lo que debería pagar - lo que pagó > 0
+        AND ((CURRENT_DATE - a.fecha_inicio::date) * a.renta_diaria) - COALESCE(
+          (SELECT SUM(monto_renta_pagado) FROM pagos_diarios WHERE asignacion_id = a.id AND status = 'Confirmado'),
+          0
+        ) > 0
     `);
     const conductoresDeuda = parseInt(deudaResult.rows[0]?.total || 0);
 
-    // Proyección mensual
-    const diasDelMes = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+    // Proyección mensual: NumConductores × MontoRenta × DíasDelMessinDomingos
+    
+    // 1. Obtener número de conductores activos
+    const conductoresActivosResult = await db('asignaciones')
+      .where('activa', true)
+      .countDistinct('conductor_id as total');
+    const numConductores = parseInt(conductoresActivosResult[0]?.total || 0);
+
+    // 2. Obtener monto de renta promedio
+    let montoRenta = 0;
+    if (numConductores > 0) {
+      const rentaResult = await db('asignaciones')
+        .where('activa', true)
+        .avg('renta_diaria as promedio');
+      montoRenta = parseFloat(rentaResult[0]?.promedio || 0);
+    }
+
+    // 3. Calcular días del mes descontando domingos
+    const fecha = new Date();
+    const ano = fecha.getFullYear();
+    const mes = fecha.getMonth();
+    const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+    
+    let domingos = 0;
+    for (let dia = 1; dia <= ultimoDia; dia++) {
+      const d = new Date(ano, mes, dia);
+      if (d.getDay() === 0) {
+        domingos++;
+      }
+    }
+    const diasHabiles = ultimoDia - domingos;
+
+    // 4. Calcular proyección: NumConductores × MontoRenta × DíasHábiles
+    const proyeccion = numConductores * montoRenta * diasHabiles;
+    
+    // Mantener proyección de póliza con método anterior
     const diaActual = new Date().getDate();
-    const diasRestantes = diasDelMes - diaActual;
-    const promedioDiario = cobradoMes / diaActual;
-    const proyeccion = cobradoMes + (promedioDiario * diasRestantes);
-    const promedioDiarioPoliza = polizaMes / diaActual;
+    const promedioDiarioPoliza = polizaMes / diaActual || 0;
+    const diasRestantes = ultimoDia - diaActual;
     const proyeccionPoliza = polizaMes + (promedioDiarioPoliza * diasRestantes);
 
     // Por método de pago
@@ -1187,14 +1218,7 @@ exports.getTopConductores = async (req, res) => {
 
 // ========== CONDUCTORES MOROSOS ==========
 exports.getConductoresMorosos = async (req, res) => {
-  console.log('🔍 Iniciando getConductoresMorosos...');
-  
   try {
-    const { dias_sin_pago = 2 } = req.query;
-    const diasSinPago = parseInt(dias_sin_pago);
-    
-    console.log('📅 Días sin pago:', diasSinPago);
-    
     const sql = `
       SELECT 
         c.id,
@@ -1202,23 +1226,31 @@ exports.getConductoresMorosos = async (req, res) => {
         c.numero_telefono,
         v.numero_vehiculo,
         v.tipo_socio,
-        MAX(pd.fecha_pago) as ultimo_pago,
-        COALESCE(CURRENT_DATE - MAX(pd.fecha_pago)::date, CURRENT_DATE - a.fecha_inicio::date) as dias_sin_pagar,
-        COALESCE((CURRENT_DATE - MAX(pd.fecha_pago)::date) * a.renta_diaria, (CURRENT_DATE - a.fecha_inicio::date) * a.renta_diaria) as deuda_estimada
+        a.id as asignacion_id,
+        a.renta_diaria,
+        a.fecha_inicio,
+        -- Calcular días que ha estado en la asignación
+        (CURRENT_DATE - a.fecha_inicio::date) as dias_transcurridos,
+        -- Calcular lo que DEBERÍA haber pagado
+        (CURRENT_DATE - a.fecha_inicio::date) * a.renta_diaria as total_debido,
+        -- Sumar todo lo que HA PAGADO confirmado
+        COALESCE(SUM(CASE WHEN pd.status = 'Confirmado' THEN pd.monto_renta_pagado ELSE 0 END), 0) as total_pagado,
+        -- DEUDA APROXIMADA = Lo que debe - Lo que pagó
+        ((CURRENT_DATE - a.fecha_inicio::date) * a.renta_diaria) - COALESCE(SUM(CASE WHEN pd.status = 'Confirmado' THEN pd.monto_renta_pagado ELSE 0 END), 0) as deuda_aproximada,
+        -- Último pago confirmado
+        MAX(CASE WHEN pd.status = 'Confirmado' THEN pd.fecha_pago ELSE NULL END) as ultimo_pago
       FROM conductores c
       INNER JOIN asignaciones a ON c.id = a.conductor_id
       INNER JOIN vehiculos v ON a.vehiculo_id = v.id
-      LEFT JOIN pagos_diarios pd ON a.id = pd.asignacion_id AND pd.status = 'Confirmado'
+      LEFT JOIN pagos_diarios pd ON a.id = pd.asignacion_id
       WHERE a.activa = true
-      GROUP BY c.id, c.nombre_conductor, c.numero_telefono, v.numero_vehiculo, v.tipo_socio, a.renta_diaria, a.fecha_inicio
-      HAVING COALESCE(CURRENT_DATE - MAX(pd.fecha_pago)::date, CURRENT_DATE - a.fecha_inicio::date) >= ${diasSinPago}
-      ORDER BY dias_sin_pagar DESC NULLS LAST
+      GROUP BY c.id, c.nombre_conductor, c.numero_telefono, v.numero_vehiculo, v.tipo_socio, a.id, a.renta_diaria, a.fecha_inicio
+      -- Mostrar SOLO conductores con DEUDA PENDIENTE (deuda > 0)
+      HAVING ((CURRENT_DATE - a.fecha_inicio::date) * a.renta_diaria) - COALESCE(SUM(CASE WHEN pd.status = 'Confirmado' THEN pd.monto_renta_pagado ELSE 0 END), 0) > 0
+      ORDER BY deuda_aproximada DESC
     `;
     
-    console.log('📊 Ejecutando SQL...');
     const result = await db.raw(sql);
-    console.log('✅ Resultados obtenidos:', result.rows.length);
-    console.log('🔍 Primer resultado:', result.rows[0]);
     
     res.json({
       success: true,
@@ -1231,17 +1263,18 @@ exports.getConductoresMorosos = async (req, res) => {
         vehiculo: row.numero_vehiculo,
         numero_vehiculo: row.numero_vehiculo,
         tipo_socio: row.tipo_socio,
-        dias_sin_pagar: parseInt(row.dias_sin_pagar || 0),
-        deuda_estimada: parseFloat(row.deuda_estimada || 0),
+        dias_transcurridos: parseInt(row.dias_transcurridos || 0),
+        total_debido: parseFloat(row.total_debido || 0),
+        total_pagado: parseFloat(row.total_pagado || 0),
+        deuda_aproximada: parseFloat(row.deuda_aproximada || 0),
+        porcentaje_pago: row.total_debido > 0 ? ((parseFloat(row.total_pagado || 0) / parseFloat(row.total_debido || 1)) * 100).toFixed(1) : '0',
         ultimo_pago: row.ultimo_pago
       })),
-      total_morosos: result.rows.length
+      total_morosos: result.rows.length,
+      nota: 'Los conductores se muestran si tienen DEUDA PENDIENTE (total_debido - total_pagado > 0), independientemente de si acaban de pagar'
     });
     
   } catch (error) {
-    console.error('❌ Error COMPLETO en getConductoresMorosos:', error.message);
-    console.error('📍 Stack:', error.stack);
-    
     res.status(500).json({
       success: false,
       error: 'Error al obtener conductores morosos',
