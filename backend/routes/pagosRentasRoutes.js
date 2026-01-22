@@ -68,6 +68,18 @@ router.put('/:id/rechazar',
   pagosRentasController.rechazarPago
 );
 
+// Editar pago
+router.put('/:id/editar',
+  requirePermission('pagos_rentas.update'),
+  pagosRentasController.editarPago
+);
+
+// Eliminar pago
+router.delete('/:id',
+  requirePermission('pagos_rentas.delete'),
+  pagosRentasController.eliminarPago
+);
+
 // ========== 🆕 NUEVAS RUTAS - LÓGICA "DOS CUBETAS" ==========
 
 // Registrar pago manual por admin

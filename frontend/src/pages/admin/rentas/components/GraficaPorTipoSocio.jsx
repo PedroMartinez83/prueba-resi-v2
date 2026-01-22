@@ -23,12 +23,20 @@ const GraficaPorTipoSocio = () => {
       
       // Datos de ejemplo si la API no existe
       const datosEjemplo = [
-        { tipo: 'SD', total: 800000, cantidad: 60, porcentaje: 65 },
-        { tipo: 'SI', total: 360000, porcentaje: 30, cantidad: 25 },
-        { tipo: 'SA', total: 60000, porcentaje: 5, cantidad: 6 }
+        { tipo_socio: 'SD', total_cobrado: 800000, total_pagos: 60, porcentaje: 65 },
+        { tipo_socio: 'SI', total_cobrado: 360000, porcentaje: 30, total_pagos: 25 },
+        { tipo_socio: 'SA', total_cobrado: 60000, porcentaje: 5, total_pagos: 6 }
       ];
       
-      setDatos(response?.datos || datosEjemplo);
+      // Convertir distribucion a formato esperado por el gráfico
+      const datosFormateados = (response?.distribucion || datosEjemplo).map(row => ({
+        tipo: row.tipo_socio,
+        total: row.total_cobrado,
+        cantidad: row.total_pagos,
+        porcentaje: row.porcentaje || ((row.total_cobrado / (response?.distribucion?.reduce((sum, r) => sum + r.total_cobrado, 0) || 1)) * 100).toFixed(1)
+      }));
+      
+      setDatos(datosFormateados);
     } catch (error) {
       console.error('Error al cargar distribución:', error);
       setDatos([]);

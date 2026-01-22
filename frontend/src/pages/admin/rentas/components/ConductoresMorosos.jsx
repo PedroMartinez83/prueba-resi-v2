@@ -82,6 +82,7 @@ const ConductoresMorosos = ({ datos = [], loading = false, limite = 5 }) => {
           const debido = conductor.total_debido || 1;
           const pagado = conductor.total_pagado || 0;
           const porcentajePago = conductor.porcentaje_pago || 0;
+          const diasAdeudados = parseInt(conductor.dias_transcurridos || 0);
           const styles = getDelayStyles(deuda, debido);
 
           return (
@@ -126,7 +127,7 @@ const ConductoresMorosos = ({ datos = [], loading = false, limite = 5 }) => {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-gray-400">Pagado</p>
+                    <p className="text-xs text-gray-400">Cumplimiento</p>
                     <p className="text-sm font-semibold text-emerald-400">
                       {parseFloat(porcentajePago).toFixed(1)}%
                     </p>
@@ -143,17 +144,23 @@ const ConductoresMorosos = ({ datos = [], loading = false, limite = 5 }) => {
               </div>
 
               {/* Detalles de deuda */}
-              <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs mb-3">
                 <div className="bg-white/5 border border-white/10 rounded p-2">
-                  <p className="text-gray-400">Total debido</p>
+                  <p className="text-gray-400">Total acumulado</p>
                   <p className="text-white font-semibold">
                     ${parseFloat(debido).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                 </div>
                 <div className="bg-white/5 border border-white/10 rounded p-2">
-                  <p className="text-gray-400">Pagado hasta hoy</p>
+                  <p className="text-gray-400">Pagado confirmado</p>
                   <p className="text-emerald-400 font-semibold">
                     ${parseFloat(pagado).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded p-2">
+                  <p className="text-gray-400">Dias adeudados</p>
+                  <p className="text-white font-semibold">
+                    {diasAdeudados.toLocaleString('es-MX')}
                   </p>
                 </div>
               </div>

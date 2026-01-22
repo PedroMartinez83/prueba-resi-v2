@@ -704,6 +704,46 @@ async asignarVehiculo(conductorId, vehiculoId, data) {
   }
 
   /**
+   * Edita un pago de renta
+   * @param {number} pagoId - ID del pago
+   * @param {Object} datos - Datos a actualizar
+   * @returns {Promise<Object>} Pago actualizado
+   */
+  async editarPagoRenta(pagoId, datos) {
+    if (!pagoId) throw new Error('ID de pago requerido');
+    
+    try {
+      const response = await this.fetchWithAuth(`/admin/pagos-rentas/${pagoId}/editar`, {
+        method: 'PUT',
+        body: JSON.stringify(datos)
+      });
+      return response;
+    } catch (error) {
+      console.error('Error al editar pago:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Elimina un pago de renta
+   * @param {number} pagoId - ID del pago
+   * @returns {Promise<Object>} Confirmación
+   */
+  async eliminarPagoRenta(pagoId) {
+    if (!pagoId) throw new Error('ID de pago requerido');
+    
+    try {
+      const response = await this.fetchWithAuth(`/admin/pagos-rentas/${pagoId}`, {
+        method: 'DELETE'
+      });
+      return response;
+    } catch (error) {
+      console.error('Error al eliminar pago:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Obtiene historial de pagos de un conductor
    * @param {number} conductorId - ID del conductor
    * @returns {Promise<Object>} Historial de pagos
@@ -1317,7 +1357,7 @@ async getHistorialVehiculo(numeroSerie) {
    */
   async getConductoresDisponibles() {
     try {
-      const data = await this.fetchWithAuth('/admin/conductores/disponibles');
+      const data = await this.fetchWithAuth('/admin/asignaciones/conductores-disponibles');
       return data;
     } catch (error) {
       console.error('Error obteniendo conductores disponibles:', error);

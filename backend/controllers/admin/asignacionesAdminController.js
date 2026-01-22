@@ -108,60 +108,52 @@ exports.subirContrato = async (req, res) => {
 // ============================================
 exports.getConductoresDisponibles = async (req, res) => {
   try {
-    // Obtener TODOS los conductores activos con su estado de asignación
-    const todosConductores = await db('conductores as c')
+    // 1. Buscamos a los "Ocupados": 
+    // Aquellos que tienen una asignación donde el campo 'activa' es explícitamente TRUE o 1
+    const ocupados = await db('asignaciones')
+      .where(function() {
+        this.where('activa', true)
+            .orWhere('activa', 1); // Por si la base de datos lo guarda como número
+      })
+      .pluck('conductor_id'); // Obtenemos solo la lista de sus IDs [2, 5, 9...]
+
+    console.log('🚫 IDs de conductores que el sistema va a ocultar por tener carro activo:', ocupados);
+
+    // 2. Traemos a los conductores disponibles:
+    // - Que su status personal sea 'Activo'
+    // - Y que su ID NO ESTÉ en la lista de los que tienen una asignación activa
+    const disponibles = await db('conductores as c')
+      .where('c.status', 'Activo')
+      .whereNotIn('c.id', ocupados) // Aquí ocurre la magia del filtro
       .select(
         'c.id',
         'c.nombre_conductor',
         'c.numero_telefono',
         'c.email',
-        'c.status',
-        'c.calificacion_promedio',
-        'c.fecha_ingreso',
-        db.raw(`
-          CASE 
-            WHEN a.id IS NOT NULL THEN true 
-            ELSE false 
-          END as tiene_asignacion
-        `),
-        'a.vehiculo_id as vehiculo_asignado_id',
-        'v.numero_vehiculo as vehiculo_asignado_numero'
+        'c.calificacion_promedio'
       )
-      .leftJoin('asignaciones as a', function() {
-        this.on('c.id', '=', 'a.conductor_id')
-            .andOn('a.activa', '=', db.raw('true'));
-      })
-      .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
-      .where('c.status', 'Activo')
-      .orderBy([
-        { column: db.raw('tiene_asignacion'), order: 'asc' }, // Disponibles primero
-        { column: 'c.nombre_conductor', order: 'asc' }
-      ]);
+      .orderBy('c.nombre_conductor', 'asc');
 
-    // Separar disponibles y ocupados
-    const disponibles = todosConductores.filter(c => !c.tiene_asignacion);
-    const ocupados = todosConductores.filter(c => c.tiene_asignacion);
-
+    // 3. Respuesta para el frontend
     res.json({
       success: true,
-      conductores: todosConductores,
-      estadisticas: {
-        total: todosConductores.length,
-        disponibles: disponibles.length,
-        ocupados: ocupados.length
-      }
+      conductores: disponibles.map(c => ({
+        id: c.id,
+        nombre: c.nombre_conductor,
+        telefono: c.numero_telefono,
+        email: c.email,
+        calificacion: parseFloat(c.calificacion_promedio || 0)
+      }))
     });
 
   } catch (error) {
-    console.error('Error en getConductoresDisponibles:', error);
+    console.error('Error filtrando conductores:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al obtener conductores',
-      error: error.message
+      message: 'Error al filtrar conductores por asignación activa'
     });
   }
 };
-
 // ============================================
 // CAMBIAR CONDUCTOR DE UN VEHÍCULO
 // ============================================

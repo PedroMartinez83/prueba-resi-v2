@@ -12,7 +12,7 @@ const {
   helmetConfig, 
   sanitizeInputs, 
   blockSuspiciousIPs, 
-  validateUserAgent 
+  validateUserAgent   
 } = require('./config/security');
 
 // Importar rutas
@@ -62,7 +62,8 @@ const shouldSkipFileUpload = (req) => {
   const skipPaths = [
     '/api/conductor/vehiculo/revision-diaria',
     '/api/conductor/siniestros/registrar',
-    '/api/conductor/pagos/registrar'
+    '/api/conductor/pagos/registrar',
+    '/api/conductor/pagos/ponerse-al-tanto'
   ];
 
   return skipPaths.some(path => fullPath.startsWith(path));

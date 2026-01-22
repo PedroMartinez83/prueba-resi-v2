@@ -80,8 +80,9 @@ const getDriverDashboard = async (req, res) => {
       .where('pagos_diarios.status', 'Confirmado')
       .first();
     
-    // Si no hay pago hoy y tiene asignación activa, agregar hoy a la deuda
-    if (!pagoHoy && conductorInfo.vehiculo_id) {
+    // Si no hay pago hoy y tiene asignación activa, agregar hoy a la deuda (excepto domingos)
+    const hoyEsDomingo = new Date(`${hoyISO}T12:00:00`).getDay() === 0;
+    if (!pagoHoy && conductorInfo.vehiculo_id && !hoyEsDomingo) {
       const asignacion = await db('asignaciones')
         .where('conductor_id', conductorInfo.conductor_id)
         .where('activa', true)

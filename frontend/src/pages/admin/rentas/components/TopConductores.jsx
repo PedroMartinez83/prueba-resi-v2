@@ -1,8 +1,29 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trophy, TrendingUp, Car } from 'lucide-react';
+import adminService from '../../../../services/adminService';
 
-// ✅ Componente "tonto" - Solo recibe y muestra datos
-const TopConductores = ({ datos = [], loading = false, limite = 5 }) => {
+// ✅ Componente que carga y muestra los datos
+const TopConductores = ({ limite = 10 }) => {
+  const [datos, setDatos] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    cargarDatos();
+  }, [limite]);
+
+  const cargarDatos = async () => {
+    try {
+      setLoading(true);
+      const response = await adminService.getTopConductores({ limite });
+      setDatos(response?.top_conductores || []);
+    } catch (error) {
+      console.error('Error al cargar top conductores:', error);
+      setDatos([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const topConductores = datos.slice(0, limite);
 
   const getMedalColor = (posicion) => {

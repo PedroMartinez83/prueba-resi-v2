@@ -3,44 +3,26 @@ import { useState, useEffect } from 'react';
 import { X, DollarSign, CreditCard, Receipt, AlertCircle, CheckCircle, User, Calendar, Shield, Wrench, Clock } from 'lucide-react';
 import api from '../../services/api';
 
-const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
-  const fechaHoy = new Date().toISOString().split('T')[0];
-  const TOLERANCIA_DIAS = 2;
-  const [formData, setFormData] = useState({
-    conductor_id: '',
-    monto_renta: '',
-    monto_extra: '',
-    destino_extra: 'poliza', // 'poliza' o 'mantenimiento'
-    metodo_pago: 'Transferencia',
-    referencia: '',
-    observaciones: '',
-    fecha_pago: fechaHoy
-  });
+const TOLERANCIA_DIAS = 2;
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [previewDivision, setPreviewDivision] = useState(null);
-  const [conductorInfo, setConductorInfo] = useState(null);
-  const [infoTolerancia, setInfoTolerancia] = useState(null);
-  const [infoToleranciaPagoActual, setInfoToleranciaPagoActual] = useState(null);
-  const [ultimoPagoConductor, setUltimoPagoConductor] = useState(null);
-  const [diaCorrespondiente, setDiaCorrespondiente] = useState(null);
-
-  // Funciones de tolerancia
+ // Funciones de tolerancia
   const obtenerFechaCorrespondiente = (fechaPago) => {
     if (!fechaPago) return null;
-    const fecha = new Date(fechaPago);
+
+    const fecha = typeof fechaPago === 'string'
+      ? new Date(`${fechaPago}T12:00:00`)
+      : new Date(fechaPago);
+
     if (Number.isNaN(fecha.getTime())) return null;
 
     // Si fuera domingo, considerar el sábado previo porque no se cobran rentas ese día
     if (fecha.getDay() === 0) {
       const ajustada = new Date(fecha);
       ajustada.setDate(ajustada.getDate() - 1);
-      ajustada.setHours(0, 0, 0, 0);
+      
       return ajustada;
     }
 
-    fecha.setHours(0, 0, 0, 0);
     return fecha;
   };
 
@@ -64,46 +46,74 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
     return dias;
   };
 
-  const obtenerInfoTolerancia = (ultimoPagoData) => {
+  const calcularDiasPagables = (inicio, fin) => {
+    if (!inicio || !fin) return 1; // Por defecto 1 día
+    
+    const dInicio = new Date(`${inicio}T12:00:00`);
+    const dFin = new Date(`${fin}T12:00:00`);
+    
+    if (dFin < dInicio) return 0;
+
+    let diasHabiles = 0;
+    let cursor = new Date(dInicio);
+
+    while (cursor <= dFin) {
+      // Si NO es domingo (0), cuenta para el pago
+      if (cursor.getDay() !== 0) {
+        diasHabiles++;
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return diasHabiles;
+  };
+
+//  LÓGICA ACTUALIZADA DE TOLERANCIA
+const obtenerInfoTolerancia = (ultimoPagoData) => {
+    // Validaciones básicas
     if (!ultimoPagoData || !ultimoPagoData.siguiente_fecha_pendiente) {
-      return {
-        fechaCorresponde: null,
-        diasHabilesTranscurridos: null,
-        diasRestantesTolerancia: null,
-        estadoTolerancia: 'Sin información'
-      };
+      return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información', fechaLimite: null };
     }
 
     const fechaCorresponde = obtenerFechaCorrespondiente(ultimoPagoData.siguiente_fecha_pendiente);
-    if (!fechaCorresponde) {
-      return {
-        fechaCorresponde: null,
-        diasHabilesTranscurridos: null,
-        diasRestantesTolerancia: null,
-        estadoTolerancia: 'Sin información'
-      };
-    }
+    if (!fechaCorresponde) return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información', fechaLimite: null };
 
-    const diasHabilesTranscurridos = contarDiasHabilesSinDomingos(fechaCorresponde, new Date());
-    const diasRestantesTolerancia = diasHabilesTranscurridos === null
-      ? null
-      : Math.max(0, TOLERANCIA_DIAS - diasHabilesTranscurridos);
+    const hoy = new Date();
 
+    // 1. CALCULAR FECHA LÍMITE (Fecha Pago + 2 días hábiles)
+    const fechaLimite = sumarDiasHabiles(fechaCorresponde.toISOString().split('T')[0], TOLERANCIA_DIAS);
+    
+    // 2. CALCULAR DÍAS RESTANTES DE VIDA (Hoy vs Límite)
+    const diasRestantes = calcularDiferenciaDiasReales(hoy, fechaLimite);
+
+    // 3. CALCULAR DÍAS TRANSCURRIDOS (Fecha Corte vs Hoy) - 🟢 CORREGIDO
+    // Si sale negativo (-15) significa que está adelantado 15 días.
+    // Si sale positivo (3) significa que ya pasaron 3 días desde que debió pagar.
+    const diasTranscurridos = calcularDiferenciaDiasReales(fechaCorresponde, hoy);
+
+    // 4. Determinar Estado
     let estadoTolerancia = 'Al corriente';
-    if (diasHabilesTranscurridos > TOLERANCIA_DIAS) {
+    
+    // Si ya pasó la fecha límite (días restantes negativos) -> Atrasado
+    if (diasRestantes < 0) {
       estadoTolerancia = 'Atrasado';
-    } else if (diasHabilesTranscurridos > 0) {
+    } 
+    // Si ya pasó la fecha de corte pero no la límite (0 a 2 días restantes) -> En tolerancia
+    else if (diasTranscurridos > 0) {
       estadoTolerancia = 'En tolerancia';
+    } 
+    // Si días transcurridos es negativo o cero -> Al corriente (Adelantado)
+    else {
+      estadoTolerancia = 'Al corriente';
     }
 
     return {
       fechaCorresponde,
-      diasHabilesTranscurridos,
-      diasRestantesTolerancia,
-      estadoTolerancia
+      diasHabilesTranscurridos: diasTranscurridos, // 🟢 AHORA SÍ DEVUELVE EL NÚMERO
+      diasRestantesTolerancia: diasRestantes,
+      estadoTolerancia,
+      fechaLimite
     };
   };
-
   const obtenerInfoToleranciaPago = (fechaPago) => {
     const fechaCorresponde = obtenerFechaCorrespondiente(fechaPago);
     if (!fechaCorresponde) {
@@ -143,6 +153,99 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
       day: 'numeric'
     });
   };
+
+  // FUNCIÓN CORREGIDA: Suma 1 día y salta domingos
+  const calcularSiguienteFechaPago = (fechaUltimoPago) => {
+    if (!fechaUltimoPago) return '';
+
+    // 1. Tomamos la fecha del último pago (ej. 31 de Enero)
+    const fecha = new Date(`${fechaUltimoPago}T12:00:00`); 
+    
+    // 2. ¡IMPORTANTE! Sumamos 1 día para ir al día que toca pagar (ej. 1 de Febrero)
+    fecha.setDate(fecha.getDate() + 1);
+
+    // 3. Ahora sí, si ese nuevo día es Domingo (0), saltamos al Lunes
+    if (fecha.getDay() === 0) {
+      fecha.setDate(fecha.getDate() + 1);
+    }
+
+    return fecha.toISOString().split('T')[0];
+  };
+
+const sumarDiasHabiles = (fechaInicio, diasASumar) => {
+    const fecha = new Date(`${fechaInicio}T12:00:00`);
+    let contador = 0;
+    while (contador < diasASumar) {
+      fecha.setDate(fecha.getDate() + 1);
+      if (fecha.getDay() !== 0) { // Si no es domingo
+        contador++;
+      }
+    }
+    return fecha;
+  };
+
+  const calcularDiferenciaDiasReales = (fechaDesde, fechaHasta) => {
+    const inicio = new Date(fechaDesde);
+    const fin = new Date(fechaHasta);
+    inicio.setHours(0,0,0,0);
+    fin.setHours(0,0,0,0);
+
+    // Si la fecha límite ya pasó (estamos atrasados), contamos hacia atrás
+    if (inicio > fin) {
+      let dias = 0;
+      const cursor = new Date(fin);
+      while (cursor < inicio) {
+        cursor.setDate(cursor.getDate() + 1);
+        if (cursor.getDay() !== 0) dias--; // Restamos días (negativo)
+      }
+      return dias;
+    }
+
+    // Si estamos a tiempo, contamos hacia adelante (positivo)
+    let dias = 0;
+    const cursor = new Date(inicio);
+    while (cursor < fin) {
+      cursor.setDate(cursor.getDate() + 1);
+      if (cursor.getDay() !== 0) dias++;
+    }
+    return dias;
+  };
+
+const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
+  const fechaHoy = new Date().toISOString().split('T')[0];
+  const TOLERANCIA_DIAS = 2;
+  const [formData, setFormData] = useState({
+    conductor_id: '',
+    monto_renta: 400,
+    monto_extra: 100,
+    destino_extra: 'poliza', // 'poliza' o 'mantenimiento'
+    metodo_pago: 'Transferencia',
+    referencia: '',
+    observaciones: '',
+    fecha_pago: fechaHoy
+  });
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [previewDivision, setPreviewDivision] = useState(null);
+  const [conductorInfo, setConductorInfo] = useState(null);
+  const [infoTolerancia, setInfoTolerancia] = useState(null);
+  const [infoToleranciaPagoActual, setInfoToleranciaPagoActual] = useState(null);
+  const [ultimoPagoConductor, setUltimoPagoConductor] = useState(null);
+  const [diaCorrespondiente, setDiaCorrespondiente] = useState(null);
+
+
+  useEffect(() => {
+      if (ultimoPagoConductor && ultimoPagoConductor.siguiente_fecha_pendiente) {
+        const siguienteFecha = calcularSiguienteFechaPago(ultimoPagoConductor.siguiente_fecha_pendiente);
+        
+        setFormData(prev => ({
+          ...prev,
+          fecha_pago: siguienteFecha,
+          fecha_fin: siguienteFecha // Inicializamos fecha fin igual que inicio
+        }));
+      }
+    }, [ultimoPagoConductor]);
 
   // Auto-llenar conductor_id cuando se recibe el prop
   useEffect(() => {
@@ -234,52 +337,36 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
     }
   }, [formData.fecha_pago, obtenerInfoToleranciaPago]);
 
-  // Actualizar día correspondiente cuando cambia la fecha
-  useEffect(() => {
-    if (formData.fecha_pago) {
-      const fechaCorresponde = obtenerFechaCorrespondiente(formData.fecha_pago);
-      setDiaCorrespondiente(fechaCorresponde);
-    }
-  }, [formData.fecha_pago]);
 
-  const handleSubmit = async (e) => {
+const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
     try {
-      const montoTotal = parseFloat(formData.monto_renta) + parseFloat(formData.monto_extra);
-
       const dataToSend = {
-        conductor_id: parseInt(formData.conductor_id),
-        monto_total: montoTotal,
-        monto_renta: parseFloat(formData.monto_renta),
-        monto_extra: parseFloat(formData.monto_extra),
-        destino_extra: formData.destino_extra, // 'poliza' o 'mantenimiento'
+        conductor_id: conductor.id,       // Se usa para buscar la asignación en el Back
+        monto_renta: formData.monto_renta,
+        monto_extra: formData.monto_extra,
+        fecha_pago: formData.fecha_pago,  // Inicio del rango
+        fecha_fin: formData.fecha_fin,    // Fin del rango
         metodo_pago: formData.metodo_pago,
-        referencia: formData.referencia || null,
-        observaciones: formData.observaciones || null,
-        fecha_pago: formData.fecha_pago || null
+        referencia: formData.referencia,
+        observaciones: formData.observaciones
       };
-
-      console.log('📤 Enviando pago:', dataToSend);
 
       const response = await api.post('/admin/pagos-rentas/registrar-manual', dataToSend);
 
-      console.log('✅ Respuesta del servidor:', response.data);
-
       if (response.data.success) {
         onSuccess && onSuccess(response.data);
-        handleClose();
+        onClose();
       }
     } catch (err) {
-      console.error('❌ Error registrando pago:', err);
-      setError(err.response?.data?.error || 'Error al registrar pago');
+      setError(err.response?.data?.error || 'Error al conectar con el servidor');
     } finally {
       setLoading(false);
     }
   };
-
   const handleClose = () => {
     setFormData({
       conductor_id: '',
@@ -301,6 +388,19 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
   };
 
   if (!isOpen) return null;
+
+   // CÁLCULOS DINÁMICOS PARA LA VISTA
+  const diasCalculados = calcularDiasPagables(formData.fecha_pago, formData.fecha_fin);
+  
+  // Usamos los valores reales del conductor o los defaults (400/100)
+  const tarifaRentaInput = parseFloat(formData.monto_renta) || 0;
+  const tarifaExtraInput = parseFloat(formData.monto_extra) || 0;
+
+
+  // Multiplicamos por los días seleccionados
+  const totalRentaCalculado = tarifaRentaInput * diasCalculados;
+  const totalExtraCalculado = tarifaExtraInput * diasCalculados;
+  const granTotalCalculado = totalRentaCalculado + totalExtraCalculado;
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -371,14 +471,18 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
                 step="0.01"
                 min="0"
                 required
-                value={formData.monto_renta}
-                onChange={(e) => setFormData({ ...formData, monto_renta: e.target.value })}
+                value={formData.monto_renta === 0 ? '' : formData.monto_renta}
+                onChange={(e) => {
+                   const val = e.target.value;
+                   setFormData(prev => ({ ...prev, monto_renta: val === '' ? 0 : val }));
+                }}
                 className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-lg font-semibold focus:ring-2 focus:ring-primary focus:border-transparent"
                 placeholder="400.00"
               />
+
             </div>
             <p className="text-gray-400 text-xs mt-1">
-              Ganancia que va para la empresa
+              Tarifa diaria x {diasCalculados} días = <span className="text-white font-bold">${(parseFloat(formData.monto_renta || 0) * diasCalculados).toLocaleString()}</span>
             </p>
           </div>
 
@@ -395,12 +499,18 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
                 step="0.01"
                 min="0"
                 required
-                value={formData.monto_extra}
-                onChange={(e) => setFormData({ ...formData, monto_extra: e.target.value })}
+                value={formData.monto_extra === 0 ? '' : formData.monto_extra}
+                onChange={(e) => {
+                   const val = e.target.value;
+                   setFormData(prev => ({ ...prev, monto_extra: val === '' ? 0 : val }));
+                }}
                 className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white text-lg font-semibold focus:ring-2 focus:ring-primary focus:border-transparent"
-                placeholder="50.00 o 100.00"
+                placeholder="100.00"
               />
             </div>
+            <p className="text-gray-400 text-xs">
+               Tarifa diaria x {diasCalculados} días = <span className="text-white font-bold">${(parseFloat(formData.monto_extra || 0) * diasCalculados).toLocaleString()}</span>
+            </p>
 
             {/* Selector de Destino */}
             <div className="grid grid-cols-2 gap-3">
@@ -449,6 +559,86 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
               </button>
             </div>
           </div>
+          
+          {/* BLOQUE DE FECHAS (RANGO) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            {/* 1. FECHA INICIO (Ya la tenías) */}
+            <div>
+              <label className="block text-white font-medium mb-2">
+                Fecha Inicio (Cubre desde) *
+              </label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="date"
+                  required
+                  value={formData.fecha_pago}
+                  min={ultimoPagoConductor?.siguiente_fecha_pendiente 
+                    ? calcularSiguienteFechaPago(ultimoPagoConductor.siguiente_fecha_pendiente)
+                    : "2024-01-01"
+                  }
+                  onChange={(e) => {
+                    const selectedDate = new Date(`${e.target.value}T12:00:00`);
+                    if (selectedDate.getDay() === 0) {
+                      setError('⛔ No se pueden seleccionar domingos en fecha inicio.');
+                      // Ajuste automático al lunes
+                      const lunes = new Date(selectedDate);
+                      lunes.setDate(selectedDate.getDate() + 1);
+                      setFormData({ 
+                        ...formData, 
+                        fecha_pago: lunes.toISOString().split('T')[0],
+                        fecha_fin: lunes.toISOString().split('T')[0] // Reseteamos fin al cambiar inicio
+                      });
+                      return;
+                    }
+                    setError(null);
+                    // Al cambiar inicio, actualizamos fin para que sea coherente
+                    setFormData({ 
+                      ...formData, 
+                      fecha_pago: e.target.value,
+                      fecha_fin: e.target.value 
+                    });
+                  }}
+                  className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* 2. FECHA FIN (NUEVO) */}
+            <div>
+              <label className="block text-white font-medium mb-2">
+                Fecha Fin (Hasta) *
+              </label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="date"
+                  required
+                  value={formData.fecha_fin || formData.fecha_pago}
+                  min={formData.fecha_pago} // No puede ser menor al inicio
+                  onChange={(e) => {
+                    const selectedDate = new Date(`${e.target.value}T12:00:00`);
+                    if (selectedDate.getDay() === 0) {
+                      alert('⛔ La fecha fin no puede ser domingo (no se cobra). Selecciona sábado o lunes.');
+                      return;
+                    }
+                    setFormData({ ...formData, fecha_fin: e.target.value });
+                  }}
+                  className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* MENSAJE DE RANGO Y DÍAS CALCULADOS */}
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-center">
+            <p className="text-blue-200 text-sm">
+              📅 Rango seleccionado: <strong>{calcularDiasPagables(formData.fecha_pago, formData.fecha_fin)} días hábiles</strong> a pagar.
+              <br/>
+              <span className="text-xs text-blue-300/70">(Los domingos intermedios no se cobran)</span>
+            </p>
+          </div>
 
           {/* Mostrar Día Correspondiente */}
           {diaCorrespondiente && (
@@ -493,23 +683,38 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Días Transcurridos */}
-                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
-                  infoTolerancia.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
-                  infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
-                  'from-red-500/10 to-red-600/10 border-red-500/30'
-                }`}>
-                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
-                    📅 Días hábiles transcurridos
+                <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+                  <p className="text-gray-400 text-sm mb-1 flex items-center gap-1">
+                    {infoTolerancia.diasHabilesTranscurridos < 0 ? (
+                      <>✨ Estado del Pago</>
+                    ) : (
+                      <>⏳ Días Transcurridos</>
+                    )}
                   </p>
-                  <p className={`text-2xl font-bold ${
-                    infoTolerancia.estadoTolerancia === 'Al corriente' ? 'text-green-400' :
-                    infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'text-yellow-400' :
-                    'text-red-400'
-                  }`}>
-                    {infoTolerancia.diasHabilesTranscurridos !== null ? infoTolerancia.diasHabilesTranscurridos : 'N/A'}
-                  </p>
-                  <p className="text-gray-400 text-xs mt-1">
-                    Desde último pago
+                  
+                  <div className="flex items-baseline gap-1">
+                    <p className={`text-2xl font-bold ${
+                      infoTolerancia.diasHabilesTranscurridos <= 0 ? 'text-blue-400' : 'text-white'
+                    }`}>
+                      {/* LÓGICA VISUAL: */}
+                      {infoTolerancia.diasHabilesTranscurridos < 0 
+                        ? `+${Math.abs(infoTolerancia.diasHabilesTranscurridos)}` // Muestra "+15" en vez de "-15"
+                        : infoTolerancia.diasHabilesTranscurridos // Muestra "3" normal
+                      }
+                    </p>
+                    
+                    {/* Subtexto dinámico */}
+                    <span className="text-xs text-gray-400 font-medium">
+                       {infoTolerancia.diasHabilesTranscurridos < 0 
+                        ? 'días a favor' 
+                        : infoTolerancia.diasHabilesTranscurridos === 1 ? 'día transcurrido' : 'días transcurridos'}
+                    </span>
+                  </div>
+
+                  <p className="text-gray-500 text-[10px] mt-1">
+                    {infoTolerancia.diasHabilesTranscurridos < 0 
+                      ? 'Conductor adelantado (Pago Seguro)' 
+                      : 'Desde el ultimo pago'}
                   </p>
                 </div>
 
@@ -558,85 +763,53 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
             </div>
           )}
 
-          {/* Preview de División */}
-          {previewDivision && (
-            <div className="glass border-2 border-primary/30 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Receipt className="w-5 h-5 text-primary" />
-                  <h3 className="font-bold text-white">Sistema "Dos Cubetas"</h3>
-                </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  previewDivision.destino_extra === 'poliza'
-                    ? 'bg-purple-500/20 text-purple-400'
-                    : 'bg-blue-500/20 text-blue-400'
-                }`}>
-                  {previewDivision.destino_extra === 'poliza' ? '🛡️ PÓLIZA' : '🔧 MANTENIMIENTO'}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {/* Para Renta (Empresa) */}
-                <div className="bg-gradient-to-br from-green-500/10 to-green-600/10 border border-green-500/30 rounded-lg p-4">
-                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
-                    💼 Renta (Empresa)
-                  </p>
-                  <p className="text-2xl font-bold text-green-400">
-                    ${previewDivision.para_renta.toFixed(2)}
-                  </p>
-                  <p className="text-gray-400 text-xs mt-1">
-                    {previewDivision.porcentaje_renta}% del total
-                  </p>
-                </div>
-
-                {/* Para Extra (Conductor) */}
-                <div className={`bg-gradient-to-br rounded-lg p-4 border ${
-                  previewDivision.destino_extra === 'poliza'
-                    ? 'from-purple-500/10 to-purple-600/10 border-purple-500/30'
-                    : 'from-blue-500/10 to-blue-600/10 border-blue-500/30'
-                }`}>
-                  <p className="text-gray-300 text-sm mb-1 flex items-center gap-1">
-                    {previewDivision.destino_extra === 'poliza' ? '🛡️ Póliza' : '🔧 Mantenimiento'}
-                  </p>
-                  <p className={`text-2xl font-bold ${
-                    previewDivision.destino_extra === 'poliza' ? 'text-purple-400' : 'text-blue-400'
-                  }`}>
-                    ${previewDivision.para_extra.toFixed(2)}
-                  </p>
-                  <p className="text-gray-400 text-xs mt-1">
-                    {previewDivision.porcentaje_extra}% del total
-                  </p>
+          {/* Sistema "Dos Cubetas" DINÁMICO */}
+          <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+            <h3 className="text-gray-400 text-xs uppercase tracking-wider font-bold mb-3 flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-blue-400"></div>
+              Sistema "Dos Cubetas" ({diasCalculados} {diasCalculados === 1 ? 'día' : 'días'})
+            </h3>
+            
+            <div className="grid grid-cols-2 gap-4">
+              {/* Cubeta 1: RENTA */} 
+              <div className="relative group">
+                <div className="absolute inset-0 bg-blue-500/10 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                <div className="relative bg-gradient-to-br from-blue-500/10 to-blue-600/5 border border-blue-500/20 p-3 rounded-lg text-center">
+                  <div className="text-blue-400 text-xs font-bold mb-1">RENTA</div> 
+                  <div className="text-xl font-bold text-white tracking-tight">
+                    ${totalRentaCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[10px] text-blue-300/60 mt-1">
+                    (${tarifaRentaInput} x {diasCalculados} días)
+                  </div>
                 </div>
               </div>
 
-              {/* Total */}
-              <div className="mt-4 bg-primary/10 border border-primary/30 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-gray-300 text-sm font-medium">Monto Total a Pagar</p>
-                  <p className="text-2xl font-bold text-primary">
-                    ${previewDivision.total.toFixed(2)} MXN
-                  </p>
+              {/* Cubeta 2: PÓLIZA */}
+              <div className="relative group">
+                <div className="absolute inset-0 bg-purple-500/10 blur-xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                <div className="relative bg-gradient-to-br from-purple-500/10 to-purple-600/5 border border-purple-500/20 p-3 rounded-lg text-center">
+                  <div className="text-purple-400 text-xs font-bold mb-1">
+                    {formData.destino_extra === 'mantenimiento' ? 'MANTENIMIENTO' : 'PÓLIZA'} (Total)
+                  </div>
+                  <div className="text-xl font-bold text-white tracking-tight">
+                    ${totalExtraCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[10px] text-purple-300/60 mt-1">
+                    (${tarifaExtraInput} x {diasCalculados} días)
+                  </div>
                 </div>
-              </div>
-
-              {/* Info según destino */}
-              <div className={`mt-3 rounded-lg p-3 border ${
-                previewDivision.destino_extra === 'poliza'
-                  ? 'bg-purple-500/10 border-purple-500/30'
-                  : 'bg-blue-500/10 border-blue-500/30'
-              }`}>
-                <p className={`text-sm flex items-center gap-2 ${
-                  previewDivision.destino_extra === 'poliza' ? 'text-purple-400' : 'text-blue-400'
-                }`}>
-                  <CheckCircle className="w-4 h-4" />
-                  {previewDivision.destino_extra === 'poliza'
-                    ? `Se registrarán $${previewDivision.para_extra.toFixed(2)} como prima de seguro (límite global $50,000)`
-                    : `Se sumarán $${previewDivision.para_extra.toFixed(2)} al ahorro de mantenimiento del conductor`
-                  }
-                </p>
               </div>
             </div>
-          )}
+
+            {/* Total Combinado */}
+              <div className="mt-3 pt-3 border-t border-white/10 flex justify-between items-center px-2">
+              <span className="text-gray-400 text-xs">Total a Pagar:</span>
+              <span className="text-lg font-bold text-emerald-400">
+                ${granTotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          </div>
 
           {/* Información de Tolerancia del Pago Actual */}
           {infoToleranciaPagoActual && (
@@ -732,41 +905,8 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
               </select>
             </div>
           </div>
-          
-          {/* Fecha de Pago */}
-          <div>
-            <label className="block text-white font-medium mb-2">
-              Fecha que cubre *
-            </label>
-            <div className="relative">
-              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="date"
-                required
-                value={formData.fecha_pago}
-                onChange={(e) => {
-                  const selectedDate = new Date(e.target.value);
-                  // Prevenir selección de domingos
-                  if (selectedDate.getDay() === 0) {
-                    setError('No se pueden seleccionar domingos. Los pagos se registran de lunes a sábado.');
-                    // Mantener la fecha anterior o seleccionar el sábado anterior
-                    const saturdayBefore = new Date(selectedDate);
-                    saturdayBefore.setDate(selectedDate.getDate() - 1);
-                    setFormData({ ...formData, fecha_pago: saturdayBefore.toISOString().split('T')[0] });
-                    return;
-                  }
-                  setError(null);
-                  setFormData({ ...formData, fecha_pago: e.target.value });
-                }}
-                min={new Date().toISOString().split('T')[0]} // No permitir fechas pasadas
-                className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent"
-              />
-            </div>
 
-            <p className="text-gray-400 text-xs mt-2">
-              💡 Solo se permiten fechas de lunes a sábado
-            </p>
-          </div>
+
            {/* Referencia de Pago */}
           {['Transferencia', 'Tarjeta'].includes(formData.metodo_pago) && (
             <div>

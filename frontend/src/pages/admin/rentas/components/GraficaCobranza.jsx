@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LineChart,
   Line,
@@ -9,9 +9,29 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
+import adminService from '../../../../services/adminService';
 
 // ✅ COMPONENTE CON "DOS CUBETAS"
-const GraficaCobranza = ({ datos = [], loading = false }) => {
+const GraficaCobranza = ({ dias = 7 }) => {
+  const [datos, setDatos] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    cargarDatos();
+  }, [dias]);
+
+  const cargarDatos = async () => {
+    try {
+      setLoading(true);
+      const response = await adminService.getGraficaDiaria({ dias });
+      setDatos(response?.datos || []);
+    } catch (error) {
+      console.error('Error al cargar gráfica diaria:', error);
+      setDatos([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const CustomTooltip = ({ active, payload }) => {
     if (active && payload && payload.length) {

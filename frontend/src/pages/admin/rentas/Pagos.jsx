@@ -148,6 +148,22 @@ const Rentas = () => {
     setShowModal(true);
   };
 
+  const handleEliminarPago = async (pagoId) => {
+    if (!window.confirm('¿Estás seguro de que deseas eliminar este pago? Esta acción no se puede deshacer.')) return;
+    
+    try {
+      setLoadingAction(true);
+      await adminService.eliminarPagoRenta(pagoId);
+      await cargarDatos();
+      alert('Pago eliminado exitosamente');
+    } catch (error) {
+      console.error('Error eliminando pago:', error);
+      alert('Error al eliminar el pago');
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
   const handleViewRenta = (renta) => {
     setSelectedRenta(renta);
     setModalType('view');
@@ -812,11 +828,21 @@ const Rentas = () => {
                                   onClick={() => handleEditRenta(renta)}
                                   className="p-2 bg-yellow-500/20 text-yellow-400 rounded hover:bg-yellow-500/30 transition-colors"
                                   title="Editar"
+                                  disabled={loadingAction}
                                 >
                                   <Edit className="w-4 h-4" />
                                 </button>
                               </>
                             )}
+
+                            <button
+                              onClick={() => handleEliminarPago(renta.id)}
+                              className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
+                              title="Eliminar"
+                              disabled={loadingAction}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
 
                             {renta.status === 'Pendiente' && (
                               <button
@@ -1015,22 +1041,149 @@ const ModalFormulario = ({ type, renta, opciones, onClose, onSuccess }) => {
   const [selectedConductor, setSelectedConductor] = useState(null);
   const [loadingConductor, setLoadingConductor] = useState(false);
   const [busquedaConductor, setBusquedaConductor] = useState('');
+  const [loadingSave, setLoadingSave] = useState(false);
+  const [formData, setFormData] = useState({
+    monto_renta_pagado: '',
+    monto_poliza_pagado: '',
+    metodo_pago: '',
+    observaciones: ''
+  });
+
+  // Inicializar datos cuando es edición
+  useEffect(() => {
+    if (type === 'edit' && renta) {
+      setFormData({
+        monto_renta_pagado: renta.monto_renta_pagado || '',
+        monto_poliza_pagado: renta.monto_poliza_pagado || '',
+        metodo_pago: renta.metodo_pago || '',
+        observaciones: renta.observaciones || ''
+      });
+    }
+  }, [type, renta]);
+
+  const handleSaveEdit = async () => {
+    if (!formData.monto_renta_pagado || !formData.monto_poliza_pagado || !formData.metodo_pago) {
+      alert('Por favor completa todos los campos obligatorios');
+      return;
+    }
+
+    try {
+      setLoadingSave(true);
+      await adminService.editarPagoRenta(renta.id, {
+        monto_renta_pagado: parseFloat(formData.monto_renta_pagado),
+        monto_poliza_pagado: parseFloat(formData.monto_poliza_pagado),
+        metodo_pago: formData.metodo_pago,
+        observaciones: formData.observaciones
+      });
+      onSuccess();
+      onClose();
+    } catch (error) {
+      console.error('Error guardando pago:', error);
+      alert('Error al guardar los cambios');
+    } finally {
+      setLoadingSave(false);
+    }
+  };
 
   if (type === 'edit') {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose}></div>
-        <div className="relative bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">Editar Pago</h2>
-          <p className="text-gray-600 mb-6">
-            La funcionalidad de editar pagos estará disponible próximamente.
-          </p>
-          <button
-            onClick={onClose}
-            className="w-full px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary/80"
-          >
-            Cerrar
-          </button>
+        <div className="relative bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl shadow-xl max-w-md w-full p-6 border border-primary/30">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-white">Editar Pago</h2>
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-white font-medium mb-2">Conductor</label>
+              <input
+                type="text"
+                value={renta?.nombre_conductor || ''}
+                disabled
+                className="w-full px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white opacity-60"
+              />
+            </div>
+
+            <div>
+              <label className="block text-white font-medium mb-2">Vehículo</label>
+              <input
+                type="text"
+                value={renta?.numero_vehiculo || ''}
+                disabled
+                className="w-full px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white opacity-60"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-white font-medium mb-2">Monto Renta *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.monto_renta_pagado}
+                  onChange={(e) => setFormData({ ...formData, monto_renta_pagado: e.target.value })}
+                  className="w-full px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-white font-medium mb-2">Monto Póliza *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={formData.monto_poliza_pagado}
+                  onChange={(e) => setFormData({ ...formData, monto_poliza_pagado: e.target.value })}
+                  className="w-full px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-white font-medium mb-2">Método de Pago *</label>
+              <select
+                value={formData.metodo_pago}
+                onChange={(e) => setFormData({ ...formData, metodo_pago: e.target.value })}
+                className="w-full px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary"
+              >
+                <option value="" className="bg-gray-800">Seleccionar método...</option>
+                {opciones?.metodos_pago?.map(metodo => (
+                  <option key={metodo} value={metodo} className="bg-gray-800">{metodo}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-white font-medium mb-2">Observaciones</label>
+              <textarea
+                value={formData.observaciones}
+                onChange={(e) => setFormData({ ...formData, observaciones: e.target.value })}
+                className="w-full px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary resize-none"
+                rows="3"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <button
+                onClick={onClose}
+                className="flex-1 px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={loadingSave}
+                className="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 transition-colors disabled:opacity-50"
+              >
+                {loadingSave ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
