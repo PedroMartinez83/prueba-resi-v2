@@ -13,7 +13,9 @@ import {
   ArrowLeft,
   RefreshCw,
   FileText,
-  AlertTriangle
+  AlertTriangle,
+  Trash2,
+  MessageSquareX
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
@@ -632,6 +634,18 @@ const handleFechaInicioChange = (valor) => {
                       ) : (
                         <span className="text-gray-500 text-sm">Sin comprobante</span>
                       )}
+
+                      <div className="flex justify gap-2">
+                        {pago.status === 'Eliminado' && (
+    <button
+      onClick={() => alert(`⛔ RAZÓN DE LA ELIMINACIÓN:\n\n${pago.observaciones || 'Sin motivo especificado'}`)}
+      className="p-2 rounded-lg bg-gray-600/20 text-gray-400 hover:bg-gray-600/30 transition-colors"
+      title="Ver motivo de eliminación"
+    >
+      <MessageSquareX size={18} />
+    </button>
+  )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -653,6 +667,7 @@ const EstadoBadge = ({ estado }) => {
     'Pendiente': { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: Clock },
     'Vencida': { bg: 'bg-red-500/20', text: 'text-red-400', icon: X },
     'Rechazado': { bg: 'bg-red-500/20', text: 'text-red-400', icon: X },
+    'Eliminado': { bg: 'bg-gray-500/20', text: 'text-gray-400', icon: Trash2 },
   };
   
   const ESTADO = config[estado] || config.Pendiente;

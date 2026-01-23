@@ -302,14 +302,30 @@ const getSolicitudesConPaginacion = async (filters = {}, pagination = { page: 1,
 };
 
 /**
- * Busca una solicitud por teléfono
+ * Busca una solicitud por teléfono, email o CURP
  * @param {string} telefono - Número de teléfono
+ * @param {string|null} email - Email opcional
+ * @param {string|null} curp - CURP opcional
  * @returns {Object|null} Solicitud encontrada o null
  */
-const findSolicitudByContacto = async (telefono) => {
+const findSolicitudByContacto = async (telefono, email = null, curp = null) => {
   try {
+    if (!telefono && !email && !curp) {
+      return null;
+    }
+
     const record = await db(TABLES.SOLICITUDES_CONDUCTOR)
-      .where('telefono', telefono)
+      .where(function() {
+        if (telefono) {
+          this.where('telefono', telefono);
+        }
+        if (email) {
+          this.orWhere('email', email);
+        }
+        if (curp) {
+          this.orWhere('curp', curp);
+        }
+      })
       .first();
     
     return formatRecord(record);
@@ -421,10 +437,36 @@ const migrarSolicitudAConductor = async (solicitudId, adminId, datosAdicionales 
       throw new Error('Esta solicitud ya fue migrada a conductor');
     }
 
+    // Validar que no exista ya un conductor con estos datos
+    const emailSolicitud = solicitud.email ? solicitud.email.toLowerCase().trim() : null;
+    const curpSolicitud = solicitud.curp ? solicitud.curp.toUpperCase().trim() : null;
+    const ineSolicitud = solicitud.numero_de_ine_ife ? solicitud.numero_de_ine_ife.trim() : null;
+
+    const conductorExistente = await trx(TABLES.CONDUCTORES)
+      .where(function() {
+        if (solicitud.telefono) {
+          this.where('numero_telefono', solicitud.telefono);
+        }
+        if (emailSolicitud) {
+          this.orWhere('email', emailSolicitud);
+        }
+        if (curpSolicitud) {
+          this.orWhere('curp', curpSolicitud);
+        }
+        if (ineSolicitud) {
+          this.orWhere('numero_de_ine_ife', ineSolicitud);
+        }
+      })
+      .first();
+
+    if (conductorExistente) {
+      throw new Error(`Ya existe un conductor registrado con estos datos (ID: ${conductorExistente.id}, status: ${conductorExistente.status || 'Desconocido'}).`);
+    }
+
     // 2️⃣ Preparar y validar datos para el USUARIO
     console.log('Validando datos para crear usuario...');
     
-    const emailUsuario = (solicitud.email || `${solicitud.telefono}@driver.automanager.com`).toLowerCase().trim();
+    const emailUsuario = (emailSolicitud || `${solicitud.telefono}@driver.automanager.com`).toLowerCase().trim();
     const usuarioAirtableId = `CONDUCTOR_MIGRADO_${solicitud.id}`;
 
     // Verificar que el email no exista YA en la tabla USUARIOS

@@ -56,20 +56,26 @@ class AdminService {
       });
 
       // Manejar respuestas no exitosas
-      if (!response.ok) {
+    if (!response.ok) {
         if (response.status === 401) {
-          // Token expirado o inválido
           localStorage.removeItem('token');
           localStorage.removeItem('user');
           window.location.href = '/login';
           throw new Error('Sesión expirada');
         }
         
-        const error = await response.json().catch(() => ({
-          message: `Error ${response.status}: ${response.statusText}`
-        }));
+        // 🟢 MEJORA: Intentamos leer el JSON del error
+        let errorData = {};
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          // Si no es JSON (ej. error 500 de nginx), dejamos el objeto vacío
+        }
+
+        // Buscamos el mensaje en 'message', 'error' o usamos el status text por defecto
+        const mensajeFinal = errorData.message || errorData.error || `Error ${response.status}: ${response.statusText}`;
         
-        throw new Error(error.message || 'Error en la petición');
+        throw new Error(mensajeFinal);
       }
 
       // Manejar respuestas vacías (204 No Content)
@@ -466,6 +472,27 @@ async asignarVehiculo(conductorId, vehiculoId, data) {
   });
   return response;
 }
+
+async desasignarVehiculo(conductorId) {
+  const response = await this.fetchWithAuth(`/admin/conductores/${conductorId}/desasignar-vehiculo`, {
+    method: 'DELETE'
+  });
+  return response;
+}
+
+async cambiarStatusConductor(conductorId, status, motivo = null) {
+  const response = await this.fetchWithAuth(`/admin/conductores/${conductorId}/status`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      status,
+      motivo
+    })
+  });
+  return response;
+}
   /**
    * Obtiene un conductor por ID
    * @param {string|number} id - ID del conductor
@@ -729,19 +756,21 @@ async asignarVehiculo(conductorId, vehiculoId, data) {
    * @param {number} pagoId - ID del pago
    * @returns {Promise<Object>} Confirmación
    */
-  async eliminarPagoRenta(pagoId) {
-    if (!pagoId) throw new Error('ID de pago requerido');
-    
-    try {
-      const response = await this.fetchWithAuth(`/admin/pagos-rentas/${pagoId}`, {
-        method: 'DELETE'
-      });
-      return response;
-    } catch (error) {
-      console.error('Error al eliminar pago:', error);
-      throw error;
-    }
+async eliminarPagoRenta(id, motivo) {
+  try {
+    const data = await this.fetchWithAuth(`/admin/pagos-rentas/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json' // Importante para enviar JSON
+      },
+      // Enviamos el objeto con la propiedad "motivo"
+      body: JSON.stringify({ motivo: motivo }) 
+    });
+    return data;
+  } catch (error) {
+    throw error;
   }
+}
 
   /**
    * Obtiene historial de pagos de un conductor
@@ -1621,6 +1650,17 @@ async getPolizasSeguro() {
       throw error;
     }
   }
+
+  async verificarPagosPendientes(conductorId) {
+    try {
+      const data = await this.fetchWithAuth(`/admin/pagos-rentas/verificar-pendientes/${conductorId}`);
+      return data;
+    } catch (error) {
+      console.error('Error al verificar pendientes:', error);
+      return { existe: false }; // En caso de error, dejamos pasar por defecto
+    }
+  }
+  
 } // ← Cierre de la clase
 
 // Exportar instancia única (Singleton)

@@ -148,22 +148,41 @@ const Rentas = () => {
     setShowModal(true);
   };
 
-  const handleEliminarPago = async (pagoId) => {
-    if (!window.confirm('¿Estás seguro de que deseas eliminar este pago? Esta acción no se puede deshacer.')) return;
-    
+  const handleEliminarPago = async (id) => {
+    // 1. Buscamos el pago completo para saber su status
+    const pago = rentas.find(r => r.id === id);
+    if (!pago) return;
+
+    // 2. Validación inicial
+    if (!window.confirm('¿Estás seguro de que deseas eliminar este registro?')) return;
+
+    let motivoBaja = '';
+
+    // 🟢 3. SI ESTÁ CONFIRMADO, OBLIGAMOS A DAR UN MOTIVO
+    if (pago.status === 'Confirmado') {
+      motivoBaja = window.prompt("⚠️ Este pago ya fue aprobado. Escribe la razón de la eliminación:");
+      
+      // Si da cancelar o lo deja vacío, detenemos todo
+      if (motivoBaja === null || motivoBaja.trim() === '') {
+        return alert("❌ Cancelado: Debes escribir un motivo para eliminar un pago confirmado.");
+      }
+    }
+
     try {
       setLoadingAction(true);
-      await adminService.eliminarPagoRenta(pagoId);
-      await cargarDatos();
-      alert('Pago eliminado exitosamente');
+      // Enviamos el ID y el Motivo (si existe)
+      await adminService.eliminarPagoRenta(id, motivoBaja);
+      
+      alert('✅ Pago eliminado correctamente');
+      cargarDatos(); // Recargamos la tabla
+
     } catch (error) {
-      console.error('Error eliminando pago:', error);
-      alert('Error al eliminar el pago');
+      alert(error.message);
+      console.error('Error eliminando:', error);
     } finally {
       setLoadingAction(false);
     }
   };
-
   const handleViewRenta = (renta) => {
     setSelectedRenta(renta);
     setModalType('view');
@@ -185,15 +204,23 @@ const Rentas = () => {
     }
   };
 
-  const handleValidarPago = async (pagoId) => {
+const handleValidarPago = async (pagoId) => {
     if (!window.confirm('¿Confirmar que este pago fue recibido?')) return;
     
+    // 1. Buscamos el pago actual en tu estado para rescatar sus notas viejas
+    const pagoActual = rentas.find(p => p.id === pagoId);
+    const observacionesViejas = pagoActual?.observaciones || '';
+
     try {
       setLoadingAction(true);
+      
       await adminService.validarPagoRenta(pagoId, {
-        observaciones: 'Validado manualmente por administrador'
+        // 2. Aquí decidimos qué enviar:
+        observaciones: observacionesViejas
       });
+
       await cargarDatos();
+      // Usamos un toast o alert simple
       alert('Pago validado exitosamente');
     } catch (error) {
       console.error('Error validando pago:', error);
@@ -392,6 +419,9 @@ const Rentas = () => {
 
   // 🆕 Filtro de búsqueda mejorado (incluye búsqueda por vehículo)
   const rentasFiltradas = rentas.filter(renta => {
+    // Si el status es 'Eliminado', lo sacamos de la lista inmediatamente
+    if (renta.status === 'Eliminado') return false;
+
     // Filtro por búsqueda general
     if (filtros.busqueda) {
       const busqueda = filtros.busqueda.toLowerCase();
@@ -703,6 +733,7 @@ const Rentas = () => {
                     const fechaCorresponde = obtenerFechaCorrespondiente(renta.fecha_pago);
                     const fechaParaMostrar = fechaCorresponde || renta.fecha_pago;
                     const rangoObservaciones = formatRangoObservaciones(renta.observaciones);
+                    const puedeBorrar = renta.status === 'Confirmado' || renta.status === 'Rechazado';
 
                     return (
                       <tr 
@@ -834,15 +865,18 @@ const Rentas = () => {
                                 </button>
                               </>
                             )}
-
-                            <button
-                              onClick={() => handleEliminarPago(renta.id)}
-                              className="p-2 bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 transition-colors"
-                              title="Eliminar"
-                              disabled={loadingAction}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                                    <button
+                                      onClick={() => handleEliminarPago(renta.id)}
+                                      className={`p-2 rounded transition-colors ${
+                                        puedeBorrar 
+                                          ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' 
+                                          : 'bg-gray-500/10 text-gray-500 cursor-not-allowed opacity-50'
+                                      }`}
+                                      title={puedeBorrar ? "Eliminar registro" : "Solo se pueden borrar pagos Confirmados o Rechazados"}
+                                      disabled={loadingAction || !puedeBorrar}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
 
                             {renta.status === 'Pendiente' && (
                               <button
@@ -1190,52 +1224,70 @@ const ModalFormulario = ({ type, renta, opciones, onClose, onSuccess }) => {
   }
 
   const handleConductorChange = async (conductorId) => {
-  if (!conductorId) {
-    setSelectedConductor(null);
-    return;
-  }
+      // 1. Si el usuario borra la selección manualmente
+      if (!conductorId) {
+        setSelectedConductor(null);
+        return;
+      }
 
-  try {
-    setLoadingConductor(true);
-    console.log('🔍 Cargando datos del conductor:', conductorId);
-    
-    // 🆕 Traer los datos COMPLETOS del conductor desde el backend
-    const response = await adminService.getConductorById(conductorId);
-    const conductorCompleto = response.conductor;
-    
-    console.log('✅ Datos del conductor obtenidos:', conductorCompleto);
-    
-    // Extraer datos de la asignación activa (si existe)
-    const asignacionActiva = conductorCompleto.asignaciones?.find(a => a.activa === true);
-    
-    if (!asignacionActiva) {
-      alert('Este conductor no tiene una asignación activa. No puede registrar pagos.');
-      setSelectedConductor(null);
-      return;
-    }
-    
-    // 🎯 Usar valores REALES de la asignación
-    setSelectedConductor({
-      id: conductorCompleto.id,
-      nombre_conductor: conductorCompleto.nombre_conductor,
-      numero_vehiculo: asignacionActiva.numero_vehiculo || 'N/A',
-      renta_diaria: parseFloat(asignacionActiva.renta_diaria || 400),
-      abono_poliza_mantenimiento: parseFloat(asignacionActiva.abono_poliza_mantenimiento || 100)
-    });
-    
-    console.log('💰 Datos de pago configurados:', {
-      renta_diaria: asignacionActiva.renta_diaria,
-      abono_poliza: asignacionActiva.abono_poliza_mantenimiento
-    });
-    
-  } catch (error) {
-    console.error('❌ Error cargando conductor:', error);
-    alert('Error al cargar los datos del conductor. Por favor, intenta de nuevo.');
-    setSelectedConductor(null);
-  } finally {
-    setLoadingConductor(false);
-  }
-};
+      // 🟢 2. VALIDACIÓN ESTRICTA (BLOQUEO)
+      try {
+        const chequeo = await adminService.verificarPagosPendientes(conductorId);
+        
+        if (chequeo.existe) {
+          // 🛑 AQUI CAMBIAMOS LA LÓGICA:
+          // En lugar de confirm(), usamos alert() y cortamos el flujo.
+          
+          alert(
+            `⛔ ACCIÓN DENEGADA\n\n` +
+            `Este conductor ya tiene un pago PENDIENTE de autorización por $${chequeo.pago.monto_total} (Fecha: ${new Date(chequeo.pago.fecha_pago).toLocaleDateString()}).\n\n` +
+            `>> No puedes crear un pago manual nuevo.\n` +
+            `>> Primero debes Validar o Rechazar el pago que ya envió el conductor.`
+          );
+
+          // 3. "Lo regresamos para atrás": Limpiamos la selección
+          setSelectedConductor(null); 
+          
+          // Detenemos la función aquí. No se carga nada más.
+          return; 
+        }
+      } catch (error) {
+        console.error('⚠️ Error verificando historial:', error);
+        // Si falla la conexión, decidimos si dejarlo pasar o bloquearlo. 
+        // Por seguridad, mejor dejamos pasar solo si es error de red, pero aquí lo dejamos simple.
+      }
+
+      // 4. Carga normal de datos (Solo llega aquí si NO debe nada)
+      try {
+        setLoadingConductor(true);
+        
+        const response = await adminService.getConductorById(conductorId);
+        const conductorCompleto = response.conductor;
+        
+        const asignacionActiva = conductorCompleto.asignaciones?.find(a => a.activa === true);
+        
+        if (!asignacionActiva) {
+          alert('Este conductor no tiene una asignación activa. No puede registrar pagos.');
+          setSelectedConductor(null);
+          return;
+        }
+        
+        setSelectedConductor({
+          id: conductorCompleto.id,
+          nombre_conductor: conductorCompleto.nombre_conductor,
+          numero_vehiculo: asignacionActiva.numero_vehiculo || 'N/A',
+          renta_diaria: parseFloat(asignacionActiva.renta_diaria || 400),
+          abono_poliza_mantenimiento: parseFloat(asignacionActiva.abono_poliza_mantenimiento || 100)
+        });
+        
+      } catch (error) {
+        console.error('❌ Error cargando conductor:', error);
+        alert('Error al cargar los datos del conductor.');
+        setSelectedConductor(null);
+      } finally {
+        setLoadingConductor(false);
+      }
+    };
 
   // Filtrar conductores por búsqueda
   const conductoresFiltrados = opciones?.conductores?.filter(conductor => {
@@ -1289,6 +1341,7 @@ const ModalFormulario = ({ type, renta, opciones, onClose, onSuccess }) => {
                   onChange={(e) => handleConductorChange(e.target.value)}
                   className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary"
                   disabled={loadingConductor}
+                  value={selectedConductor?.id || ''}
                 >
                   <option value="" className="bg-gray-800">Seleccione un conductor...</option>
                   {conductoresFiltrados.map(conductor => (

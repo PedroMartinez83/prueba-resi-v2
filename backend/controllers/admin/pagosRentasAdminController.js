@@ -432,116 +432,113 @@ exports.getGraficaDiaria = async (req, res) => {
   }
 };
 
-// ========== VALIDAR PAGO EN EFECTIVO ==========
+// ========== VALIDAR PAGO EN EFECTIVO (VERSIÓN DEBUG) ==========
 exports.validarPago = async (req, res) => {
+  console.log(`🔍 Iniciando validación de pago ${req.params.id}...`);
   const trx = await db.transaction();
 
   try {
     const { id } = req.params;
     const { observaciones } = req.body;
+    
+    // Verificación de seguridad del usuario
+    const usuarioActual = req.user || { id: 0, email: 'sistema@admin.com', nombre: 'Sistema' };
+    console.log('👤 Usuario realizando acción:', usuarioActual.email);
 
-    await auditService.setUserContext(trx, req.user);
+    // Intentamos configurar auditoría (si falla, no detenemos el proceso crítico)
+    try {
+      if (auditService && auditService.setUserContext) {
+        await auditService.setUserContext(trx, usuarioActual);
+      }
+    } catch (auditErr) {
+      console.warn('⚠️ Advertencia: No se pudo configurar contexto de auditoría', auditErr.message);
+    }
 
-    // 1. Obtener el pago y sus relaciones
-    const pago = await trx('pagos_diarios')
-      .where('id', id)
-      .first();
+    // 1. Obtener el pago
+    const pago = await trx('pagos_diarios').where('id', id).first();
 
     if (!pago) {
-      await trx.rollback();
-      return res.status(404).json({ success: false, error: 'Pago no encontrado' });
+      throw new Error('Pago no encontrado en la base de datos');
     }
 
     if (pago.status !== 'Pendiente') {
-      await trx.rollback();
-      return res.status(400).json({ success: false, error: 'Solo se pueden validar pagos pendientes' });
+      throw new Error(`El pago no está pendiente (Estado actual: ${pago.status})`);
     }
 
-    // 2. Obtener la asignación para saber qué vehículo es
-    const asignacion = await trx('asignaciones')
-      .where('id', pago.asignacion_id)
-      .first();
+    // 2. Obtener Asignación y Vehículo
+    const asignacion = await trx('asignaciones').where('id', pago.asignacion_id).first();
+    if (!asignacion) throw new Error('Asignación no encontrada');
 
-    if (!asignacion) {
-      await trx.rollback();
-      return res.status(404).json({ success: false, error: 'Asignación no encontrada' });
-    }
+    const vehiculo = await trx('vehiculos').where('id', asignacion.vehiculo_id).first();
+    if (!vehiculo) throw new Error('Vehículo no encontrado');
 
-    // 3. Obtener datos actuales del vehículo
-    const vehiculo = await trx('vehiculos')
-      .where('id', asignacion.vehiculo_id)
-      .first();
-
-    if (!vehiculo) {
-      await trx.rollback();
-      return res.status(404).json({ success: false, error: 'Vehículo no encontrado' });
-    }
-
-    // 4. CALCULAR NUEVOS VALORES PARA LA CORRIDA DEL VEHÍCULO
-    // Usamos monto_total (Renta + Póliza) según tu indicación
+    // 3. Cálculos financieros (Protegidos contra nulos)
     const montoAbonar = parseFloat(pago.monto_total || 0);
-    
-    // Valores actuales (o 0 si es nulo)
     const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
     const pagadoActual = parseFloat(vehiculo.total_pagado_corrida || 0);
 
-    // Nuevos valores
     const nuevoPagado = pagadoActual + montoAbonar;
-    const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoPagado); // Evitar negativos
+    const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoPagado);
     
-    // Calcular porcentaje (Evitar división por cero)
     let nuevoPorcentaje = 0;
     if (totalCorrida > 0) {
       nuevoPorcentaje = (nuevoPagado / totalCorrida) * 100;
     }
 
-    console.log(`🚗 Actualizando Vehículo ${vehiculo.numero_vehiculo}:`);
-    console.log(`   Abono: $${montoAbonar}`);
-    console.log(`   Pagado: $${pagadoActual} -> $${nuevoPagado}`);
-    console.log(`   Pendiente: $${nuevoSaldoPendiente}`);
-    console.log(`   Avance: ${nuevoPorcentaje.toFixed(2)}%`);
+    console.log(`💰 Actualizando finanzas: ${vehiculo.numero_vehiculo} | Abono: ${montoAbonar} | Nuevo %: ${nuevoPorcentaje.toFixed(2)}`);
 
-    // 5. ACTUALIZAR VEHÍCULO
+    // 4. ACTUALIZAR VEHÍCULO
     await trx('vehiculos')
       .where('id', vehiculo.id)
       .update({
         total_pagado_corrida: nuevoPagado,
         saldo_pendiente_corrida: nuevoSaldoPendiente,
-        porcentaje_pagado: nuevoPorcentaje, // numeric(5,2) usualmente
+        porcentaje_pagado: nuevoPorcentaje, // PostgreSQL maneja float a numeric
         updated_at: new Date()
       });
 
-    // 6. CONFIRMAR EL PAGO
+    // 5. CONFIRMAR EL PAGO
+    // ⚠️ NOTA: Si 'registrado_por' no existe en tu tabla, esto dará error.
+    // Usamos un objeto dinámico para prevenirlo si es necesario, pero aquí asumimos que existe.
+    const datosUpdate = {
+      status: 'Confirmado',
+      observaciones: observaciones || pago.observaciones,
+      updated_at: new Date()
+    };
+    
+    // Solo intentamos guardar el email si tenemos el dato
+    if (usuarioActual.email) {
+      datosUpdate.registrado_por = usuarioActual.email;
+    }
+
     const [pagoActualizado] = await trx('pagos_diarios')
       .where('id', id)
-      .update({
-        status: 'Confirmado',
-        observaciones: observaciones || pago.observaciones,
-        registrado_por: req.user.email,
-        updated_at: new Date()
-      })
+      .update(datosUpdate)
       .returning('*');
 
-    // 7. Auditoría
-    await auditService.logCriticalChange({
-      usuario_id: req.user.id,
-      tipo_cambio: 'validacion_pago_renta',
-      descripcion: `Pago validado ($${montoAbonar}) - Avance auto: ${nuevoPorcentaje.toFixed(2)}%`,
-      datos_sensibles: {
-        pago_id: id,
-        vehiculo_id: vehiculo.id,
-        monto_abonado: montoAbonar,
-        nuevo_total_pagado: nuevoPagado,
-        nuevo_saldo_pendiente: nuevoSaldoPendiente
-      },
-      ip_address: auditService.getClientIp(req)
-    });
+    // 6. Auditoría final
+    try {
+      await auditService.logCriticalChange({
+        usuario_id: usuarioActual.id,
+        tipo_cambio: 'validacion_pago_renta',
+        descripcion: `Pago validado ($${montoAbonar}) - Avance auto: ${nuevoPorcentaje.toFixed(2)}%`,
+        datos_sensibles: {
+          pago_id: id,
+          vehiculo_id: vehiculo.id,
+          monto_abonado: montoAbonar
+        },
+        ip_address: req.ip || '0.0.0.0'
+      });
+    } catch (logErr) {
+      console.warn('⚠️ Error guardando log de auditoría (no crítico):', logErr.message);
+    }
 
     await trx.commit();
+    console.log('✅ Pago validado exitosamente');
 
     res.json({
       success: true,
-      message: 'Pago validado y corrida del vehículo actualizada.',
+      message: 'Pago validado correctamente.',
       pago: pagoActualizado,
       avance_vehiculo: {
         total_pagado: nuevoPagado,
@@ -552,21 +549,14 @@ exports.validarPago = async (req, res) => {
 
   } catch (error) {
     await trx.rollback();
-    console.error('Error validando pago:', error);
+    console.error('❌ ERROR FATAL EN VALIDAR PAGO:', error); // <--- Mira esto en tu terminal negra
     
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'error',
-      mensaje: `Error validando pago: ${error.message}`,
-      stack_trace: error.stack,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
-    });
-
+    // Respondemos con el error real para que lo veas en el frontend (solo para debug)
     res.status(500).json({
       success: false,
-      error: 'Error al validar pago'
+      message: 'Error interno al validar pago',
+      error: error.message, 
+      details: error.stack // Opcional: ver dónde tronó
     });
   }
 };
@@ -1291,79 +1281,116 @@ exports.editarPago = async (req, res) => {
 
 // ========== ELIMINAR PAGO DE RENTA ==========
 exports.eliminarPago = async (req, res) => {
-  const trx = await db.transaction();
+  const { id } = req.params;
+  const { motivo } = req.body;
 
   try {
-    const { id } = req.params;
+    console.log(`🗑️ Eliminando pago ID: ${id}. Motivo: ${motivo || 'No especificado'}`);
 
-    await auditService.setUserContext(trx, req.user);
+    await db.transaction(async (trx) => {
+      // 1. Buscamos el pago (igual que antes)
+      const pago = await trx('pagos_diarios as p')
+        .leftJoin('asignaciones as a', 'p.asignacion_id', 'a.id')
+        .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
+        .where('p.id', id)
+        .select('p.*', 'v.id as vehiculo_id', 'v.total_pagado_corrida', 'v.total_corrida')
+        .first();
 
-    const pago = await trx('pagos_diarios')
-      .where('id', id)
-      .first();
+      if (!pago) throw new Error('El pago no existe');
 
-    if (!pago) {
-      await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'Pago no encontrado'
-      });
-    }
+      // 🟢 NUEVA REGLA DE CONTINUIDAD
+      // Si el pago es "Confirmado", validamos que sea EL ÚLTIMO de la fila
+      if (pago.status === 'Confirmado') {
+        
+        // Buscamos cuál es el pago confirmado más reciente de esta asignación
+        const ultimoConfirmado = await trx('pagos_diarios')
+          .where('asignacion_id', pago.asignacion_id)
+          .where('status', 'Confirmado')
+          .orderBy('id', 'desc') // Ordenamos por ID (el último insertado)
+          .first();
 
-    // Permitir eliminar pagos en cualquier estado: Pendiente, Confirmado, Rechazado
-    const estadosPermitidos = ['Pendiente', 'Confirmado', 'Rechazado'];
-    if (!estadosPermitidos.includes(pago.status)) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: `No se puede eliminar un pago con estado ${pago.status}`
-      });
-    }
+        // Si existe un pago posterior, bloqueamos la acción
+        if (ultimoConfirmado && ultimoConfirmado.id !== pago.id) {
+          throw new Error(
+            `⛔ Solo puedes eliminar el último pago confirmado de este conductor (ID: ${ultimoConfirmado.id}).`
+          );
+        }
 
-    await trx('pagos_diarios')
-      .where('id', id)
-      .delete();
+        console.log('✅ Es el último pago. Procediendo a revertir saldo...');
 
-    await auditService.logCriticalChange({
-      usuario_id: req.user.id,
-      tipo_cambio: 'eliminacion_pago_renta',
-      descripcion: `Pago eliminado - Estado: ${pago.status}, Renta: $${pago.monto_renta_pagado}, Póliza: $${pago.monto_poliza_pagado}`,
-      datos_sensibles: {
-        pago_id: id,
-        monto_renta: pago.monto_renta_pagado,
-        monto_poliza: pago.monto_poliza_pagado,
-        monto_total: pago.monto_total,
-        metodo_pago: pago.metodo_pago,
-        fecha_pago: pago.fecha_pago,
-        status_anterior: pago.status
-      },
-      ip_address: auditService.getClientIp(req)
+        // ... (Aquí sigue tu lógica de reversión de saldo que ya teníamos) ...
+        const nuevoTotalPagado = Math.max(0, parseFloat(pago.total_pagado_corrida || 0) - parseFloat(pago.monto_total || 0));
+        const nuevoSaldoPendiente = Math.max(0, parseFloat(pago.total_corrida || 0) - nuevoTotalPagado);
+        let nuevoPorcentaje = 0;
+        if (pago.total_corrida > 0) nuevoPorcentaje = (nuevoTotalPagado / parseFloat(pago.total_corrida)) * 100;
+
+        await trx('vehiculos')
+          .where('id', pago.vehiculo_id)
+          .update({
+            total_pagado_corrida: nuevoTotalPagado,
+            saldo_pendiente_corrida: nuevoSaldoPendiente,
+            porcentaje_pagado: nuevoPorcentaje,
+            updated_at: new Date()
+          });
+      }
+
+
+      const textoEliminacion = motivo ? `[Pago Eliminado: ${motivo}]` : '[Pago Eliminado sin motivo especificado]';
+
+      // Concatenar observaciones antiguas con el motivo de eliminación
+      const nuevasObservaciones = [pago.observaciones, textoEliminacion]
+        .filter(Boolean)
+        .join('. ');
+
+      // 3. Borrado Lógico (Siempre permitido para Rechazados o el último Confirmado)
+      await trx('pagos_diarios')
+        .where('id', id)
+        .update({
+          status: 'Eliminado',
+          updated_at: new Date(),
+          observaciones: `${nuevasObservaciones} - Eliminado por admin el ${new Date().toLocaleDateString()}`
+        });
     });
 
-    await trx.commit();
 
-    res.json({
-      success: true,
-      message: 'Pago eliminado exitosamente'
-    });
+    res.json({ success: true, message: 'Registro eliminado y justificado correctamente.' });
 
   } catch (error) {
-    await trx.rollback();
-
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'error',
-      mensaje: `Error eliminando pago: ${error.message}`,
-      stack_trace: error.stack,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
+    console.error('❌ Error en eliminarPago:', error);
+    // Usamos status 400 para errores de lógica de negocio (validaciones)
+    res.status(400).json({ 
+      success: false, 
+      message: error.message // Enviamos el mensaje claro al frontend
     });
+  }
+};
 
-    res.status(500).json({
-      success: false,
-      error: 'Error al eliminar pago'
-    });
+// ========== VERIFICAR PAGOS PENDIENTES ANTES DE CREAR NUEVO ==========
+exports.verificarPagosPendientes = async (req, res) => {
+  const { conductorId } = req.params;
+
+  try {
+    // Buscamos si existe ALGÚN pago con estatus 'Pendiente' para este conductor
+    const pagoPendiente = await db('pagos_diarios')
+      .join('asignaciones', 'pagos_diarios.asignacion_id', 'asignaciones.id')
+      .where('asignaciones.conductor_id', conductorId)
+      .where('pagos_diarios.status', 'Pendiente')
+      .select('pagos_diarios.id', 'pagos_diarios.fecha_pago', 'pagos_diarios.monto_total')
+      .first();
+
+    if (pagoPendiente) {
+      return res.json({ 
+        existe: true, 
+        mensaje: `⚠️ ATENCIÓN: Este conductor ya tiene un pago PENDIENTE de autorización por $${pagoPendiente.monto_total} (Fecha: ${new Date(pagoPendiente.fecha_pago).toLocaleDateString()}). \n\n¿Seguro que quieres crear otro manual?`,
+        pago: pagoPendiente
+      });
+    }
+
+    return res.json({ existe: false });
+
+  } catch (error) {
+    console.error('Error verificando pendientes:', error);
+    res.status(500).json({ error: 'Error al verificar pagos pendientes' });
   }
 };
 

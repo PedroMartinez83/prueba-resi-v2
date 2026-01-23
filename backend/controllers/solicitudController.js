@@ -1,5 +1,6 @@
 // backend/controllers/solicitudController.js
 const { 
+  db,
   create,
   getById,
   update,
@@ -96,14 +97,43 @@ const url_ine_reverso = req.files?.ine_reverso?.path || null;
       });
     }
 
-    // Verificar duplicados por teléfono o CURP
-    const solicitudExistente = await findSolicitudByContacto(telefonoLimpio, email);
+    const emailNormalizado = email ? email.trim().toLowerCase() : null;
+    const curpNormalizada = curp ? curp.toUpperCase().trim() : null;
+
+    // Verificar duplicados por teléfono, email o CURP en solicitudes
+    const solicitudExistente = await findSolicitudByContacto(telefonoLimpio, emailNormalizado, curpNormalizada);
     if (solicitudExistente) {
       return res.status(409).json({
         success: false,
-        message: 'Ya existe una solicitud con este teléfono o email',
+        message: 'Ya existe una solicitud con este teléfono, email o CURP',
         solicitud_id: solicitudExistente.id,
         estatus: solicitudExistente.estatus_solicitud
+      });
+    }
+
+    // Verificar si ya existe un conductor registrado con estos datos
+    const conductorExistente = await db('conductores')
+      .where(function() {
+        this.where('numero_telefono', telefonoLimpio);
+        if (emailNormalizado) {
+          this.orWhere('email', emailNormalizado);
+        }
+        if (curpNormalizada) {
+          this.orWhere('curp', curpNormalizada);
+        }
+      })
+      .first();
+
+    if (conductorExistente) {
+      const statusActual = conductorExistente.status || 'Desconocido';
+      const esAprobado = ['Aprobado', 'Activo'].includes(statusActual);
+      return res.status(409).json({
+        success: false,
+        message: esAprobado
+          ? 'Ya eres conductor aprobado y no puedes generar otra solicitud'
+          : 'Ya existe un conductor registrado con estos datos',
+        status: statusActual,
+        conductor_id: conductorExistente.id
       });
     }
 
@@ -154,11 +184,11 @@ const url_ine_reverso = req.files?.ine_reverso?.path || null;
       // Contacto
       nombre_completo: nombre_completo.trim(),
       telefono: telefonoLimpio,
-      email: email ? email.trim().toLowerCase() : null,
+      email: emailNormalizado,
       
       // Personal
       fecha_nacimiento: fechaNac,
-      curp: curp.toUpperCase().trim(),
+      curp: curpNormalizada,
       domicilio: domicilio.trim(),
       estado_civil: estado_civil || 'Soltero',
       tiene_responsabilidad_familiar: tiene_responsabilidad_familiar === 'true' || tiene_responsabilidad_familiar === true,

@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { requirePermission } = require('../middleware/roleMiddleware');
 
+
 // Controllers
 const pagosRentasController = require('../controllers/admin/pagosRentasAdminController');
 
@@ -98,6 +99,18 @@ router.get('/conductor/:conductorId/saldo-poliza',
 router.get('/',
   requirePermission('pagos_rentas.view'),
   pagosRentasController.getPagosRentas
+);
+
+
+console.log('--- DEBUGGING CONTROLLER ---');
+console.log('Tipo de dato:', typeof pagosRentasController);
+console.log('Llaves exportadas:', Object.keys(pagosRentasController));
+console.log('¿Existe verificar?:', !!pagosRentasController.verificarPagosPendientes);
+console.log('----------------------------');
+
+router.get('/verificar-pendientes/:conductorId', 
+  requirePermission('pagos_rentas.view'), // Usamos el permiso estándar
+  pagosRentasController.verificarPagosPendientes
 );
 
 module.exports = router;

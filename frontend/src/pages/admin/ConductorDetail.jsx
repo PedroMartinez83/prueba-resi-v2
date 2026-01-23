@@ -24,11 +24,12 @@ const ConductorDetail = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('general');
-  const [editMode, setEditMode] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [statusSeleccionado, setStatusSeleccionado] = useState('');
+  const [statusUpdating, setStatusUpdating] = useState(false);
 const [uploadingFile, setUploadingFile] = useState(false);
 const [selectedDocType, setSelectedDocType] = useState('');
 const [selectedFile, setSelectedFile] = useState(null);
@@ -104,6 +105,7 @@ const [fechaInicio, setFechaInicio] = useState(new Date().toISOString().split('T
         };
         
         setConductor(conductorData);
+        setStatusSeleccionado(response.conductor.status || 'Pendiente');
       } else {
         setError('No se pudo cargar la información del conductor');
       }
@@ -194,7 +196,7 @@ const fetchVehiculosDisponibles = async () => {
   }
 };
 
-const handleAsignarVehiculo = async () => {
+  const handleAsignarVehiculo = async () => {
   if (!selectedVehiculo) {
     alert('Por favor selecciona un vehículo');
     return;
@@ -252,6 +254,50 @@ const handleAsignarVehiculo = async () => {
     } catch (error) {
       console.error('Error al crear acceso:', error);
       alert(`Error al crear la cuenta: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCambiarStatus = async () => {
+    if (!statusSeleccionado) return;
+
+    try {
+      setStatusUpdating(true);
+      const response = await adminService.cambiarStatusConductor(id, statusSeleccionado);
+
+      if (response.success) {
+        toast.success(`Estado actualizado a ${statusSeleccionado}`);
+        await fetchConductor();
+      } else {
+        toast.error(response?.error || 'No se pudo actualizar el estado');
+      }
+    } catch (error) {
+      console.error('Error cambiando status:', error);
+      toast.error(error?.message || 'Error al cambiar estado');
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
+
+  const handleDesasignarVehiculo = async () => {
+    if (!window.confirm(`¿Desasignar el vehículo actual de ${conductor?.nombre_completo}?`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await adminService.desasignarVehiculo(id);
+
+      if (response.success) {
+        toast.success('Vehículo desasignado exitosamente');
+        await fetchConductor();
+      } else {
+        toast.error(response?.error || 'Error al desasignar vehículo');
+      }
+    } catch (error) {
+      console.error('Error al desasignar vehículo:', error);
+      toast.error(error?.message || 'Error al desasignar vehículo');
     } finally {
       setLoading(false);
     }
@@ -406,9 +452,33 @@ const handleAsignarVehiculo = async () => {
               >
                 <RefreshCw className="w-5 h-5" />
               </button>
+
+              <div className="hidden lg:flex items-center gap-3 px-3 py-2 rounded-2xl backdrop-blur-xl bg-white/10 border border-white/20">
+                <span className="text-[10px] uppercase tracking-wider text-gray-400">Estado</span>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10">
+                  <span className={`w-2.5 h-2.5 rounded-full ${getStatusColor(statusSeleccionado)}`}></span>
+                  <select
+                    value={statusSeleccionado}
+                    onChange={(e) => setStatusSeleccionado(e.target.value)}
+                    className="bg-transparent text-white text-sm font-semibold focus:outline-none"
+                  >
+                    <option value="Pendiente" className="bg-gray-800">Pendiente</option>
+                    <option value="Aprobado" className="bg-gray-800">Aprobado</option>
+                    <option value="Rechazado" className="bg-gray-800">Rechazado</option>
+                    <option value="Suspendido" className="bg-gray-800">Suspendido</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleCambiarStatus}
+                  disabled={statusUpdating}
+                  className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500/80 to-blue-600/80 text-white shadow-lg hover:from-cyan-500 hover:to-blue-600 transition-all disabled:opacity-50"
+                >
+                  {statusUpdating ? 'Actualizando...' : 'Actualizar'}
+                </button>
+              </div>
               
               <button
-                onClick={() => setEditMode(!editMode)}
+                onClick={() => setShowEditModal(true)}
                 className="p-3 rounded-xl backdrop-blur-xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/30 transition-all"
               >
                 <Edit className="w-5 h-5" />
@@ -445,6 +515,40 @@ const handleAsignarVehiculo = async () => {
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* Cambio rápido de estado (mobile) */}
+      <div className="lg:hidden backdrop-blur-xl bg-white/10 rounded-2xl border border-white/20 p-4 mb-6">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-gray-300">Cambiar estado del conductor</div>
+            <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(statusSeleccionado)} text-white/90`}>
+              {statusSeleccionado}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+              <span className={`w-2.5 h-2.5 rounded-full ${getStatusColor(statusSeleccionado)}`}></span>
+              <select
+                value={statusSeleccionado}
+                onChange={(e) => setStatusSeleccionado(e.target.value)}
+                className="w-full bg-transparent text-white focus:outline-none"
+              >
+                <option value="Pendiente" className="bg-gray-800">Pendiente</option>
+                <option value="Aprobado" className="bg-gray-800">Aprobado</option>
+                <option value="Rechazado" className="bg-gray-800">Rechazado</option>
+                <option value="Suspendido" className="bg-gray-800">Suspendido</option>
+              </select>
+            </div>
+            <button
+              onClick={handleCambiarStatus}
+              disabled={statusUpdating}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500/80 to-blue-600/80 text-white shadow-lg hover:from-cyan-500 hover:to-blue-600 transition-all disabled:opacity-50"
+            >
+              {statusUpdating ? 'Actualizando...' : 'Actualizar'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -858,6 +962,16 @@ const handleAsignarVehiculo = async () => {
                       <p className="text-gray-400 text-sm">Número Económico</p>
                       <p className="text-white font-semibold">{conductor.vehiculo.numero_economico}</p>
                     </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      onClick={handleDesasignarVehiculo}
+                      disabled={loading}
+                      className="px-6 py-2 bg-red-500/20 border border-red-500/30 text-red-300 rounded-xl hover:bg-red-500/30 transition-all disabled:opacity-50"
+                    >
+                      Desasignar Vehículo
+                    </button>
                   </div>
                 </div>
               ) : (

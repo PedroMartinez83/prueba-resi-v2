@@ -40,7 +40,8 @@ const ensureConductorEmail = (data = {}, fallback = {}) => {
 };
 
 // ========== MAPEO DE CAMPOS ==========
-const mapearCamposConductor = (data) => {
+const mapearCamposConductor = (data, options = {}) => {
+  const { allowNull = false } = options;
   // ... (Tu código de mapeo sin cambios)
   const mapeo = {
     'NombreConductor': 'nombre_conductor',
@@ -96,9 +97,13 @@ const mapearCamposConductor = (data) => {
   const resultado = {};
   for (const [key, value] of Object.entries(data)) {
     const campoPostgres = mapeo[key] || key.toLowerCase();
-    if (value !== '' && value !== null && value !== undefined) {
-      resultado[campoPostgres] = value;
+    if (value === '' || value === null || value === undefined) {
+      if (allowNull && value !== undefined) {
+        resultado[campoPostgres] = null;
+      }
+      continue;
     }
+    resultado[campoPostgres] = value;
   }
   return resultado;
 };
@@ -212,6 +217,9 @@ exports.getConductores = async (req, res) => {
         'a.abono_poliza_mantenimiento',
         'a.fecha_inicio as fecha_asignacion'
       )
+      .where(function() {
+        this.whereNull('c.status').orWhere('c.status', '<>', 'Eliminado');
+      })
       .orderBy('c.nombre_conductor');
     
     if (conductores.length === 0) {
@@ -652,9 +660,12 @@ exports.updateConductor = async (req, res) => {
     }
 
     const datosEntrada = {
-      ...req.body,
-      email: ensureConductorEmail(req.body, conductorAnterior)
+      ...req.body
     };
+    
+    if (!Object.prototype.hasOwnProperty.call(req.body, 'email')) {
+      datosEntrada.email = ensureConductorEmail(req.body, conductorAnterior);
+    }
     
     // Validar datos con Joi (parcial para actualización)
     const { error, value } = validateConductor(datosEntrada, true);
@@ -667,7 +678,33 @@ exports.updateConductor = async (req, res) => {
       });
     }
     
-    const datosPostgres = mapearCamposConductor(value);
+    const datosPostgres = mapearCamposConductor(value, { allowNull: true });
+
+    // Normalizar chat_id_telegram: permitir limpiar a null y evitar duplicados
+    if (Object.prototype.hasOwnProperty.call(datosPostgres, 'chat_id_telegram')) {
+      const rawChatId = datosPostgres.chat_id_telegram;
+      if (typeof rawChatId === 'string') {
+        const normalized = rawChatId.trim();
+        if (normalized === '' || normalized.toLowerCase() === 'null') {
+          datosPostgres.chat_id_telegram = null;
+        } else {
+          datosPostgres.chat_id_telegram = normalized;
+        }
+      } else if (rawChatId === '') {
+        datosPostgres.chat_id_telegram = null;
+      }
+
+      if (datosPostgres.chat_id_telegram) {
+        const chatIdDuplicado = await trx('conductores')
+          .where('id', '!=', id)
+          .where('chat_id_telegram', datosPostgres.chat_id_telegram)
+          .first();
+
+        if (chatIdDuplicado) {
+          datosPostgres.chat_id_telegram = null;
+        }
+      }
+    }
     
     // Verificar duplicados (excepto el conductor actual)
     if (datosPostgres.email || datosPostgres.numero_telefono || 
@@ -777,6 +814,32 @@ exports.deleteConductor = async (req, res) => {
     
     // Establecer contexto de usuario
     await auditService.setUserContext(trx, req.user);
+
+    // Obtener datos del conductor y validar estado
+    const conductor = await trx(TABLES.CONDUCTORES)
+      .where('id', id)
+      .first();
+    
+    if (!conductor) {
+      await trx.rollback();
+      return res.status(404).json({
+        success: false,
+        error: 'Conductor no encontrado'
+      });
+    }
+    
+    const statusNormalizado = (conductor.status || '').toString().trim().toLowerCase();
+    const estadosPermitidos = new Set(['inactivo', 'rechazado', 'suspendido']);
+    
+    if (!estadosPermitidos.has(statusNormalizado)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'Solo se puede eliminar un conductor en estado Inactivo, Rechazado o Suspendido',
+        status_actual: conductor.status || null,
+        status_trabajo_actual: conductor.status_trabajo || null
+      });
+    }
     
     // Verificar relaciones antes de eliminar
     const [asignaciones, rentas, siniestros] = await Promise.all([
@@ -816,19 +879,6 @@ exports.deleteConductor = async (req, res) => {
       });
     }
     
-    // Obtener datos antes de eliminar
-    const conductor = await trx(TABLES.CONDUCTORES)
-      .where('id', id)
-      .first();
-    
-    if (!conductor) {
-      await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'Conductor no encontrado'
-      });
-    }
-    
     // Desactivar asignaciones históricas
     await trx('asignaciones')
       .where('conductor_id', id)
@@ -838,10 +888,14 @@ exports.deleteConductor = async (req, res) => {
         updated_at: new Date() 
       });
     
-    // Eliminar conductor
+    // Borrado lÃ³gico del conductor
     await trx(TABLES.CONDUCTORES)
       .where('id', id)
-      .delete();
+      .update({
+        status: 'Eliminado',
+        status_trabajo: 'inactivo',
+        updated_at: new Date()
+      });
     
     // Si tiene usuario asociado, desactivarlo
     if (conductor.usuario_id) {
@@ -857,7 +911,7 @@ exports.deleteConductor = async (req, res) => {
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'eliminacion_conductor',
-      descripcion: `Conductor ${conductor.nombre_conductor} eliminado del sistema`,
+      descripcion: `Conductor ${conductor.nombre_conductor} eliminado lÃ³gicamente del sistema`,
       datos_sensibles: conductor,
       ip_address: auditService.getClientIp(req),
       requiere_revision: true
@@ -867,7 +921,7 @@ exports.deleteConductor = async (req, res) => {
     
     res.json({
       success: true,
-      message: 'Conductor eliminado exitosamente'
+      message: 'Conductor eliminado lÃ³gicamente exitosamente'
     });
     
   } catch (error) {

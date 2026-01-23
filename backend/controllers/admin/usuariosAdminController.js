@@ -333,6 +333,9 @@ exports.updateUsuario = async (req, res) => {
   try {
     const { id } = req.params;
     const { nombre_completo, rol, estado_cuenta } = req.body;
+    const hasNombreCompleto = Object.prototype.hasOwnProperty.call(req.body, 'nombre_completo');
+    const hasRol = Object.prototype.hasOwnProperty.call(req.body, 'rol');
+    const hasEstadoCuenta = Object.prototype.hasOwnProperty.call(req.body, 'estado_cuenta');
 
     // Verificar que no se edite a sí mismo
     if (parseInt(id) === req.user.id) {
@@ -375,17 +378,18 @@ exports.updateUsuario = async (req, res) => {
 
     // Si el usuario es super_admin, puede cambiar todo
     if (req.user.rol === 'super_admin') {
-      if (nombre_completo) {
-        updateData.nombre_completo = nombre_completo;
-        updateData.name = nombre_completo; // Actualizar ambos campos
+      if (hasNombreCompleto) {
+        const nombreFinal = nombre_completo?.toString().trim();
+        updateData.nombre_completo = nombreFinal || null;
+        updateData.name = nombreFinal || null; // Actualizar ambos campos
       }
-      if (rol) {
+      if (hasRol && rol) {
         updateData.rol = rol;
       }
     }
 
     // Ambos roles pueden cambiar el estado
-    if (estado_cuenta) {
+    if (hasEstadoCuenta && estado_cuenta) {
       updateData.estado_cuenta = estado_cuenta;
       updateData.estado = estado_cuenta; // Actualizar ambos campos
     }
