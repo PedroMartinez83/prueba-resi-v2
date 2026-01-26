@@ -12,7 +12,7 @@ const {
   helmetConfig, 
   sanitizeInputs, 
   blockSuspiciousIPs, 
-  validateUserAgent   
+  validateUserAgent 
 } = require('./config/security');
 
 // Importar rutas
@@ -62,8 +62,7 @@ const shouldSkipFileUpload = (req) => {
   const skipPaths = [
     '/api/conductor/vehiculo/revision-diaria',
     '/api/conductor/siniestros/registrar',
-    '/api/conductor/pagos/registrar',
-    '/api/conductor/pagos/ponerse-al-tanto'
+    '/api/conductor/pagos/registrar'
   ];
 
   return skipPaths.some(path => fullPath.startsWith(path));
@@ -97,9 +96,10 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
         'https://driverautomanager.com',
         'https://automanager.vercel.app',
         'https://automanager-back.vercel.app',
+        'http://18.221.148.23:4173',
         ...vercelOrigins
       ]
-    : ['http://localhost:3000', 'http://localhost:5173'];
+    : ['http://localhost:3000', 'http://localhost:5173','http://18.221.148.23:4173',];
 
 // Permitir orígenes desde la red local en entornos de desarrollo
 const isLocalNetworkOrigin = (origin) => {
@@ -162,7 +162,35 @@ const corsOptions = {
   optionsSuccessStatus: 200
 };
 
-app.use(cors(corsOptions));
+app.use(cors({
+  origin: function (origin, callback) {
+    // 1. Permitir peticiones sin origen (como Postman o Server-to-Server)
+    if (!origin) return callback(null, true);
+
+    // 2. TU IP PÚBLICA (Agrégala aquí explícitamente)
+    const allowedIPs = [
+      'http://18.221.148.23:4173', 
+      'http://18.221.148.23:3000',
+      'http://localhost:5173'
+    ];
+
+    // 3. Verificar si el origen está en tus IPs o en la lista general
+    // (Imprimimos en consola para que veas quién intenta entrar)
+    console.log('🔍 CORS Check - Origen entrante:', origin);
+
+    if (allowedIPs.includes(origin) || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('⛔ CORS Bloqueó a:', origin);
+      // TRUCO DE EMERGENCIA: Descomenta la siguiente línea si sigue fallando para dejar pasar a TODOS:
+      // callback(null, true); 
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+}));
 app.options('*', cors(corsOptions));
 
 // ===== STRIPE WEBHOOK (antes del body parser) =====

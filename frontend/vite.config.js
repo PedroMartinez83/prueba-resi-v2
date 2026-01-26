@@ -10,6 +10,10 @@ export default defineConfig({
     },
     extensions: ['.js', '.jsx', '.ts', '.tsx']
   },
+  preview:{
+    host: true,
+    port: 4173,
+  },
   server: {
     port: 5173,
     proxy: {

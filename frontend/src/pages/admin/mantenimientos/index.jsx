@@ -15,10 +15,7 @@ import {
   Edit,
   Eye,
   Wallet,
-  Table,
-  XCircle,
-  Info,
-  X
+  Table
 } from 'lucide-react';
 import { API_BASE_URL } from '@/services/api';
 
@@ -32,7 +29,6 @@ const MantenimientosDashboard = () => {
   const [serviciosPreventivos, setServiciosPreventivos] = useState(null);
   const [cargandoServicios, setCargandoServicios] = useState(false);
   const [errorServicios, setErrorServicios] = useState('');
-  const [modalDetalle, setModalDetalle] = useState({ open: false, data: null });
 
   useEffect(() => {
     cargarDatos();
@@ -205,42 +201,6 @@ const MantenimientosDashboard = () => {
     }
   };
 
-  // Confirmar cita directamente
-  const handleConfirmar = async (mantenimientoId, e) => {
-    e.stopPropagation(); // Evitar que abra el detalle del card si existe ese evento
-    
-    if (!window.confirm('¿Deseas aprobar esta cita y pasarla a estado "Programado"?')) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const token = localStorage.getItem('token');
-      
-      const response = await fetch(`${API_BASE_URL}/admin/mantenimientos/${mantenimientoId}/confirmar`, {
-        method: 'PUT',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        alert('✅ Cita confirmada exitosamente');
-        await cargarDatos(); // Recargar para limpiar la alerta
-      } else {
-        alert('❌ Error: ' + data.message);
-      }
-    } catch (error) {
-      console.error('Error al confirmar:', error);
-      alert('❌ Error de conexión al confirmar la cita');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // 🎯 MEJORA 2: Funciones para acciones en alertas
   const handleReprogramar = (mantenimientoId, e) => {
     e.stopPropagation();
@@ -251,47 +211,6 @@ const MantenimientosDashboard = () => {
     e.stopPropagation();
     navigate(`/admin/vehiculos/${vehiculoId}`);
   };
-
-  // FUNCIÓN PARA CANCELAR
-  const handleCancelar = async (mantenimientoId, e) => {
-    e.stopPropagation();
-    if (!window.confirm('¿Estás seguro de que deseas CANCELAR esta cita de mantenimiento?')) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/admin/mantenimientos/${mantenimientoId}/cancelar`, {
-        method: 'PUT',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        alert('✅ Cita cancelada correctamente');
-        await cargarDatos(); // Recargar el dashboard
-      } else {
-        alert('❌ Error: ' + data.message);
-      }
-    } catch (error) {
-      console.error('Error al cancelar:', error);
-      alert('❌ Error de conexión');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // FUNCIÓN PARA ABRIR MODAL INFO
-  const handleVerInfo = (item, e) => {
-    e.stopPropagation();
-    setModalDetalle({ open: true, data: item });
-  };
-
 
   if (loading) {
     return (
@@ -306,11 +225,11 @@ const MantenimientosDashboard = () => {
   // 🎯 MEJORA 3: Agrupar métricas por prioridad
   const alertMetrics = [
     {
-      title: 'Vencidos/Cancelados',
+      title: 'Vencidos',
       value: stats.vencidos || 0,
       icon: AlertTriangle,
       color: 'red',
-      description: 'Requieren atención o historial',
+      description: 'Pasaron fecha programada',
       urgent: stats.vencidos > 0,
       filterKey: 'vencidos'
     },
@@ -457,65 +376,6 @@ const MantenimientosDashboard = () => {
             </tbody>
           </table>
         </div>
-      </div>
-    );
-  };
-
-  // FUNCIÓN AUXILIAR PARA RENDERIZAR BOTONES SEGÚN EL ESTADO
-const renderAcciones = (item, esSeccionVencidos) => {
-    // CAMBIO: Usamos 'px-3' fijos y quitamos el grid para que el botón se ajuste al texto
-    const btnBase = "px-11 py-3 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-2 border shadow-sm whitespace-nowrap";
-    
-    return (
-      // CAMBIO: Usamos 'flex flex-wrap' en lugar de 'grid'
-      // 'justify-start' alineará los botones a la izquierda. Usa 'justify-center' si los quieres centrados.
-      <div className="flex flex-wrap gap-2 mt-3">
-        
-        {/* 1. BOTÓN INFO */}
-        <button
-          onClick={(e) => handleVerInfo(item, e)}
-          className={`${btnBase} bg-slate-700/50 hover:bg-slate-700 text-slate-200 border-slate-600`}
-        >
-          <Info className="w-3.5 h-3.5" />
-          Info
-        </button>
-
-        {/* 2. BOTÓN REPROGRAMAR */}
-        <button
-          onClick={(e) => handleReprogramar(item.id, e)}
-          className={`${btnBase} bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30`}
-        >
-          <Calendar className="w-3.5 h-3.5" />
-          Reprogramar
-        </button>
-
-        {/* 3. BOTÓN CANCELAR */}
-        <button
-          onClick={(e) => handleCancelar(item.id, e)}
-          className={`${btnBase} bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30`}
-        >
-          <XCircle className="w-3.5 h-3.5" />
-          Cancelar
-        </button>
-
-        {/* 4. BOTÓN CONFIRMAR o VER AUTO */}
-        {!esSeccionVencidos && item.estado === 'Pendiente' ? (
-          <button
-            onClick={(e) => handleConfirmar(item.id, e)}
-            className={`${btnBase} bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/30`}
-          >
-            <CheckCircle className="w-3.5 h-3.5" />
-            Aceptar
-          </button>
-        ) : (
-           <button
-            onClick={(e) => handleVerVehiculo(item.vehiculo_id, e)}
-            className={`${btnBase} bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/30`}
-          >
-            <Car className="w-3.5 h-3.5" />
-            Ver Auto
-          </button>
-        )}
       </div>
     );
   };
@@ -687,10 +547,9 @@ const renderAcciones = (item, esSeccionVencidos) => {
                             VENCIDO
                           </span>
                           <span className="text-red-400 text-sm font-semibold">
-                            {Math.floor(item.dias_vencido)} día(s) de retraso
+                            {item.dias_vencido} día(s) de retraso
                           </span>
                         </div>
-                        
                         <p className="text-white font-semibold mb-1">
                           {item.numero_vehiculo} - {item.marca} {item.modelo}
                         </p>
@@ -703,7 +562,6 @@ const renderAcciones = (item, esSeccionVencidos) => {
                           </p>
                         )}
                       </div>
-
                       <div className="text-right">
                         <p className="text-gray-400 text-xs">Programado:</p>
                         <p className="text-white text-sm">
@@ -712,8 +570,23 @@ const renderAcciones = (item, esSeccionVencidos) => {
                       </div>
                     </div>
                     
-                    {/* Botones de acción estándar */}
-                    {renderAcciones(item, true)} 
+                    {/* 🎯 BOTONES DE ACCIÓN */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={(e) => handleReprogramar(item.id, e)}
+                        className="flex-1 px-3 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-400 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 border border-yellow-500/30"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        Reprogramar
+                      </button>
+                      <button
+                        onClick={(e) => handleVerVehiculo(item.vehiculo_id, e)}
+                        className="flex-1 px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 border border-blue-500/30"
+                      >
+                        <Car className="w-4 h-4" />
+                        Ver Vehículo
+                      </button>
+                    </div>
                   </div>
                 ))}
 
@@ -754,8 +627,21 @@ const renderAcciones = (item, esSeccionVencidos) => {
                     </div>
                     
                     {/* 🎯 BOTONES DE ACCIÓN */}
-                    <div className="p-4">
-                        {renderAcciones(item, false)}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={(e) => handleVerVehiculo(item.vehiculo_id, e)}
+                        className="flex-1 px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 border border-blue-500/30"
+                      >
+                        <Car className="w-4 h-4" />
+                        Ver Vehículo
+                      </button>
+                      <button
+                        onClick={(e) => handleReprogramar(item.id, e)}
+                        className="flex-1 px-3 py-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 border border-green-500/30"
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        Confirmar
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -925,114 +811,6 @@ const renderAcciones = (item, esSeccionVencidos) => {
         )}
 
       </div>
-
-      {/* 🟢 MODAL DE INFORMACIÓN DETALLADA */}
-        {modalDetalle.open && modalDetalle.data && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-slate-900 w-full max-w-2xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-              
-              {/* Header del Modal */}
-              <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6 flex justify-between items-center border-b border-white/10">
-                <div>
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                    <Info className="w-5 h-5 text-blue-400" />
-                    Detalle de Cita #{String(modalDetalle.data.folio_servicio || '0').padStart(4, '0')}
-                  </h2>
-                  <p className="text-gray-400 text-sm mt-1">
-                    Estado: <span className="text-white font-medium">{modalDetalle.data.estado}</span>
-                  </p>
-                </div>
-                <button
-                  onClick={() => setModalDetalle({ open: false, data: null })}
-                  className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                >
-                  <X className="w-6 h-6 text-gray-400" />
-                </button>
-              </div>
-
-              {/* Contenido del Modal */}
-              <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-                
-                {/* Info Vehículo */}
-                <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Vehículo</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-xs text-gray-500">Unidad</p>
-                      <p className="text-white font-medium text-lg">{modalDetalle.data.numero_vehiculo}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Modelo</p>
-                      <p className="text-white">{modalDetalle.data.marca} {modalDetalle.data.modelo}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Placa</p>
-                      <p className="text-white bg-black/30 px-2 py-1 rounded inline-block font-mono text-sm">
-                        {modalDetalle.data.placa}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Info Servicio */}
-                <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                  <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Servicio Programado</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-2">
-                      <p className="text-xs text-gray-500">Tipo de Servicio</p>
-                      <p className="text-blue-400 font-medium text-lg">{modalDetalle.data.tipo_servicio}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Fecha Programada</p>
-                      <p className="text-white flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-gray-400" />
-                        {new Date(modalDetalle.data.fecha_programada).toLocaleDateString('es-MX', {
-                          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-                        })}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Hora</p>
-                      <p className="text-white flex items-center gap-2">
-                         <Clock className="w-4 h-4 text-gray-400" />
-                         {new Date(modalDetalle.data.fecha_programada).toLocaleTimeString('es-MX', {
-                           hour: '2-digit', minute: '2-digit'
-                         })}
-                      </p>
-                    </div>
-                     <div>
-                      <p className="text-xs text-gray-500">Taller Asignado</p>
-                      <p className="text-white">{modalDetalle.data.taller || 'No especificado'}</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Info Conductor */}
-                {modalDetalle.data.nombre_conductor && (
-                  <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                    <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Conductor</h3>
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-white font-medium">{modalDetalle.data.nombre_conductor}</p>
-                        <p className="text-gray-400 text-sm">{modalDetalle.data.numero_telefono || 'Sin teléfono'}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer Modal */}
-              <div className="p-4 border-t border-white/10 bg-white/5 flex justify-end">
-                <button
-                  onClick={() => setModalDetalle({ open: false, data: null })}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors"
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
     </div>
   );
 };

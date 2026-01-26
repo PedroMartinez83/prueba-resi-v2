@@ -38,6 +38,7 @@ const Toast = ({ message, type = 'success', onClose }) => {
 const Vehiculos = () => {
   const [vehiculos, setVehiculos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [textoBusqueda, setTextoBusqueda] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterEstado, setFilterEstado] = useState('todos');
   const [showDrawer, setShowDrawer] = useState(false);
@@ -54,6 +55,7 @@ const Vehiculos = () => {
     inversion: false
   });
   const [pendienteAbrirDrawer, setPendienteAbrirDrawer] = useState(false);
+  
   
   // Estados para inversiones
   const [showCalculadora, setShowCalculadora] = useState(false);
@@ -226,6 +228,19 @@ const Vehiculos = () => {
       console.error('Error al cargar opciones:', error);
     } finally {
       setCargandoOpciones(false);
+    }
+  };
+
+  // FUNCIÓN PARA EJECUTAR LA BÚSQUEDA
+  const realizarBusqueda = () => {
+    setSearchTerm(textoBusqueda); // Pasamos el texto temporal al filtro real
+    setCurrentPage(1); // Regresamos a la primera página
+  };
+
+  // DETECTAR ENTER
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      realizarBusqueda();
     }
   };
 
@@ -669,17 +684,36 @@ const Vehiculos = () => {
       />
 
       {/* Search Bar */}
-      <div className="glass rounded-lg p-3 sm:p-4 border border-primary/20">
+<div className="glass rounded-lg p-3 sm:p-4 border border-primary/20">
         <div className="flex flex-col md:flex-row gap-3 sm:gap-4">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder="Buscar por número, marca, modelo o placa..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-dark/50 border border-primary/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-            />
+          
+          {/* 🟢 BARRA DE BÚSQUEDA MANUAL */}
+          <div className="flex-1 flex gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Buscar por número, marca, modelo o placa..."
+                
+                // 1. Usamos el estado temporal
+                value={textoBusqueda} 
+                onChange={(e) => setTextoBusqueda(e.target.value)}
+                
+                // 2. Detectamos el Enter
+                onKeyDown={handleKeyDown} 
+                
+                className="w-full pl-10 pr-4 py-2 bg-dark/50 border border-primary/20 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+              />
+            </div>
+
+            {/* 3. Botón de Buscar */}
+            <button
+              onClick={realizarBusqueda}
+              className="px-4 py-2 bg-primary/20 text-primary border border-primary/30 rounded-lg hover:bg-primary/30 transition-colors flex items-center gap-2 font-medium"
+            >
+              <Search className="w-4 h-4" />
+              <span className="hidden sm:inline">Buscar</span>
+            </button>
           </div>
           
           <div className="flex gap-2">

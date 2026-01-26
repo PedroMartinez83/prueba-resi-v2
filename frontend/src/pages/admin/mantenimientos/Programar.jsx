@@ -175,19 +175,14 @@ const cargarDatosDesdeSiniestro = (state) => {
     if (!formData.fecha_programada) {
       newErrors.fecha_programada = 'Debes seleccionar una fecha';
     } else {
-      const fechaSeleccionada = new Date(`${formData.fecha_programada}T12:00:00`);
+      const fechaSeleccionada = new Date(formData.fecha_programada);
       const hoy = new Date();
       hoy.setHours(0, 0, 0, 0);
-// Comparamos contra el inicio del día seleccionado
-      const fechaComparacion = new Date(`${formData.fecha_programada}T00:00:00`);
-
-      if (fechaComparacion < hoy) {
+      if (fechaSeleccionada < hoy) {
         newErrors.fecha_programada = 'La fecha no puede ser anterior a hoy';
       }
-      
-      // 🟢 Modificamos para permitir Sábados (6) si así lo deseas, y bloquear solo Domingos (0)
-      if (fechaSeleccionada.getDay() === 0) {
-        newErrors.fecha_programada = 'No se pueden agendar mantenimientos los domingos';
+      if (fechaSeleccionada.getDay() === 0 || fechaSeleccionada.getDay() === 6) {
+        newErrors.fecha_programada = 'Solo se pueden agendar mantenimientos de lunes a viernes';
       }
     }
     if (!formData.hora_programada) {
@@ -242,15 +237,15 @@ const cargarDatosDesdeSiniestro = (state) => {
 
       const data = await response.json();
 
-if (data.success) {
+      if (data.success) {
         if (desdeSiniestro) {
           alert(
-            '✅ Solicitud registrada (Pendiente)\n\n' + // Cambiado
+            '✅ Mantenimiento programado exitosamente\n\n' +
             `🔧 Folio: #${data.mantenimiento.folio_servicio}\n` +
             `📋 Vinculado con Siniestro #${siniestroInfo.folio}`
           );
         } else {
-          alert('✅ Solicitud de mantenimiento creada. Estado: Pendiente de aprobación.');
+          alert('✅ Mantenimiento programado exitosamente');
         }
         navigate('/admin/mantenimientos');
       } else {
@@ -264,13 +259,10 @@ if (data.success) {
     }
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const [year, month, day] = dateString.split('-');
-    const fecha = new Date(year, month - 1, day);
-    return fecha.toLocaleDateString('es-MX', {
-      weekday: 'long', // Agregamos el día de la semana para que verifiques visualmente
-      day: 'numeric',
+  const formatDate = (date) => {
+    if (!date) return '-';
+    return new Date(date).toLocaleDateString('es-MX', {
+      day: '2-digit',
       month: 'long',
       year: 'numeric'
     });

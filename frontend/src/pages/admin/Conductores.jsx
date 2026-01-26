@@ -323,6 +323,7 @@ const Conductores = () => {
   const [showModal, setShowModal] = useState(false);
   const [conductorEdit, setConductorEdit] = useState(null);
   const [vistaActual, setVistaActual] = useState('grid'); // 'grid' o 'list'
+  const [textoBusqueda, setTextoBusqueda] = useState('');
   
   // Filtros y búsqueda
   const [filtros, setFiltros] = useState({
@@ -387,6 +388,20 @@ const Conductores = () => {
     setEstadisticas(stats);
   };
 
+  // FUNCIONES PARA EJECUTAR LA BÚSQUEDA
+  const realizarBusqueda = () => {
+    setFiltros(prev => ({
+      ...prev,
+      busqueda: textoBusqueda // Pasamos el texto temporal al filtro real
+    }));
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      realizarBusqueda();
+    }
+  };
+  
   // Filtrado de conductores
   const conductoresFiltrados = conductores.filter(conductor => {
     const busqueda = filtros.busqueda.toLowerCase();
@@ -549,16 +564,33 @@ const Conductores = () => {
         {/* Filtros */}
         <div className="bg-black/40 backdrop-blur-xl rounded-lg p-4 border border-white/10">
           <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            <div className="md:col-span-2 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <input
-                type="text"
-                placeholder="Buscar por nombre, teléfono o email..."
-                className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all"
-                value={filtros.busqueda}
-                onChange={(e) => setFiltros({...filtros, busqueda: e.target.value})}
-              />
-            </div>
+<div className="md:col-span-2 flex gap-2">
+  <div className="relative flex-1">
+    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+    <input
+      type="text"
+      placeholder="Buscar por nombre, teléfono o email..."
+      
+      // 1. Usamos el estado temporal
+      value={textoBusqueda}
+      onChange={(e) => setTextoBusqueda(e.target.value)}
+      
+      // 2. Detectamos el Enter
+      onKeyDown={handleKeyDown}
+      
+      className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all"
+    />
+  </div>
+
+  {/* 3. Botón de Buscar */}
+  <button
+    onClick={realizarBusqueda}
+    className="px-4 py-2.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-lg hover:bg-cyan-500/20 transition-all flex items-center gap-2 font-medium"
+  >
+    <Search className="w-5 h-5" />
+    <span className="hidden xl:inline">Buscar</span>
+  </button>
+</div>
             
             <select
               className="px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all"
@@ -592,7 +624,7 @@ const Conductores = () => {
               <span className="text-sm">Con vehículo</span>
             </label>
             
-            <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+            <label className="flex items-center gap- text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
                 checked={filtros.conBot}

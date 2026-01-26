@@ -125,7 +125,10 @@ const schedules = {
   ]
 };
 
-const normalizeModelo = (modelo = '') => modelo.toLowerCase().trim();
+const normalizeModelo = (modelo = '') => {
+  if (modelo === null || modelo === undefined) return '';
+  return modelo.toString().toLowerCase().trim();
+};
 
 const getScheduleForModel = (modelo) => {
   const normalized = normalizeModelo(modelo);

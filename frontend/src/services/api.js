@@ -3,6 +3,9 @@ import axios from 'axios';
 
 // Configuración base de Axios con detección de entorno y soporte para variables de entorno
 export const getApiBaseUrl = () => {
+  if (window.location.hostname === '18.221.148.23') {
+    return 'http://18.221.148.23:3001/api';
+  }
   const envUrl = import.meta.env?.VITE_API_URL;
   if (envUrl) return envUrl;
 

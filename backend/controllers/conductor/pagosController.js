@@ -28,14 +28,16 @@ const getPolizaDiaria = (value) => {
   return Math.max(parsed, DEFAULT_POLIZA_DIARIA);
 };
 
-const MIN_FECHA_PENDIENTES = '2024-01-01';
+const MIN_FECHA_PENDIENTES = '2026-01-01';
 
 const getFechaInicioCobro = (fechaAsignacion) => {
   const fechaAsignacionString = toDateString(fechaAsignacion);
   if (!fechaAsignacionString) {
     return null;
   }
-  return fechaAsignacionString;
+  return fechaAsignacionString < MIN_FECHA_PENDIENTES
+    ? MIN_FECHA_PENDIENTES
+    : fechaAsignacionString;
 };
 
 const formatDisplayDate = (value) => {
@@ -83,93 +85,63 @@ const getNextExpectedDate = (startDate, paidDates) => {
   return expected;
 };
 
-const buildPendientesData = async (trx, conductorId, fechaInicioSolicitada = null, fechaFinSolicitada = null) => {
+const buildPendientesData = async (trx, conductorId) => {
   const asignacion = await trx('asignaciones')
     .where({ conductor_id: conductorId, activa: true })
     .first();
 
   if (!asignacion) {
-    return { error: { status: 404, message: 'No tienes vehículo asignado' } };
+    return {
+      error: {
+        status: 404,
+        message: 'No tienes vehículo asignado'
+      }
+    };
   }
 
   const fechaInicioAsignacion = getFechaInicioCobro(asignacion.fecha_inicio);
-  const fechaCorte = toDateString(new Date()); // Hoy
+  const fechaCorte = toDateString(new Date());
 
-  if (!fechaInicioAsignacion) {
-    return { error: { status: 400, message: 'Error con la fecha de asignación.' } };
+  if (!fechaInicioAsignacion || !fechaCorte) {
+    return {
+      error: {
+        status: 400,
+        message: 'No se pudo determinar el rango de fechas pendiente'
+      }
+    };
   }
 
-  // 1. Obtenemos TODOS los pagos previos para encontrar el último
   const pagosRegistrados = await trx('pagos_diarios')
     .where({ asignacion_id: asignacion.id })
     .whereIn('status', ['Confirmado', 'Pendiente'])
-    .select('fecha_pago', 'observaciones');
+    .select('fecha_pago');
 
-  const fechasPagadas = new Set();
-  let ultimaFechaPagada = null; // Variable para rastrear el último pago real
+  const fechasPagadas = new Set(
+    pagosRegistrados
+      .map((pago) => toDateString(pago.fecha_pago))
+      .filter(Boolean)
+  );
 
-  // 2. Procesamos pagos para encontrar el más reciente
-  pagosRegistrados.forEach(pago => {
-    // A. Fecha directa
-    if (pago.fecha_pago) {
-      const fPago = toDateString(pago.fecha_pago);
-      fechasPagadas.add(fPago);
-      
-      // Actualizamos el último pago si esta fecha es mayor
-      if (!ultimaFechaPagada || fPago > ultimaFechaPagada) {
-        ultimaFechaPagada = fPago;
-      }
-    }
+  const siguienteFechaPendiente = getNextExpectedDate(
+    fechaInicioAsignacion,
+    fechasPagadas
+  );
 
-    // B. Rangos en observaciones "Rango: YYYY-MM-DD > YYYY-MM-DD"
-    if (pago.observaciones) {
-      const match = pago.observaciones.match(/Rango: (\d{4}-\d{2}-\d{2}) > (\d{4}-\d{2}-\d{2})/);
-      if (match) {
-        let cursor = match[1];
-        const fin = match[2];
-        
-        // Actualizamos último pago con el fin del rango
-        if (!ultimaFechaPagada || fin > ultimaFechaPagada) {
-          ultimaFechaPagada = fin;
-        }
-
-        while (cursor <= fin) {
-          fechasPagadas.add(cursor);
-          cursor = addDaysToDate(cursor, 1);
-        }
-      }
-    }
-  });
-
-  // 3. DEFINIR EL INICIO DEL CÁLCULO (Aquí estaba el problema de los 100 días)
-  let fechaCursor;
-
-  if (fechaInicioSolicitada) {
-    // Si el usuario pidió una fecha específica, la respetamos
-    fechaCursor = fechaInicioSolicitada;
-  } else if (ultimaFechaPagada) {
-    // 🟢 CORRECCIÓN: Si no hay fecha solicitada, empezamos UN DÍA DESPUÉS del último pago
-    // Esto evita que el sistema te cobre deudas viejas de meses anteriores
-    fechaCursor = addDaysToDate(ultimaFechaPagada, 1);
-    
-    // Validación de seguridad: no podemos empezar antes de la asignación
-    if (fechaCursor < fechaInicioAsignacion) fechaCursor = fechaInicioAsignacion;
-  } else {
-    // Si es virgen (nunca ha pagado), empezamos desde que le dieron el carro
-    fechaCursor = fechaInicioAsignacion;
+  if (siguienteFechaPendiente > fechaCorte) {
+    return {
+      asignacion,
+      fechaInicioAsignacion,
+      fechaCorte,
+      siguienteFechaPendiente,
+      fechasPendientes: []
+    };
   }
 
-  // Límite final (Hoy o lo que pida el usuario)
-  const fechaLimite = fechaFinSolicitada ? fechaFinSolicitada : fechaCorte;
-
   const fechasPendientes = [];
+  let fechaCursor = siguienteFechaPendiente;
 
-  // 4. Calculamos la deuda (Saltando domingos)
-  while (fechaCursor <= fechaLimite) {
-    const diaSemana = new Date(`${fechaCursor}T12:00:00`).getDay();
-    
-    // Si NO es domingo Y NO está pagado
-    if (diaSemana !== 0 && !fechasPagadas.has(fechaCursor)) {
+  while (fechaCursor <= fechaCorte) {
+    if (!fechasPagadas.has(fechaCursor)) {
       fechasPendientes.push(fechaCursor);
     }
     fechaCursor = addDaysToDate(fechaCursor, 1);
@@ -177,6 +149,9 @@ const buildPendientesData = async (trx, conductorId, fechaInicioSolicitada = nul
 
   return {
     asignacion,
+    fechaInicioAsignacion,
+    fechaCorte,
+    siguienteFechaPendiente,
     fechasPendientes
   };
 };
@@ -200,18 +175,16 @@ const uploadToCloudinary = (fileBuffer, options) => {
 const getMisPagos = async (req, res) => {
   try {
     const conductorId = req.user.conductorId;
-    const limit = parseInt(req.query.limit) || 1000;
+    const limit = parseInt(req.query.limit) || 50;
 
     const pagos = await db('pagos_diarios as pd')
       .join('asignaciones as a', 'pd.asignacion_id', 'a.id')
       .where('a.conductor_id', conductorId)
-      /*
       .where((builder) => {
         builder
           .whereRaw('pd.fecha_pago >= CURRENT_DATE - INTERVAL \'30 days\'')
           .orWhere('pd.status', 'Pendiente');
       })
-     */
       .orderBy('pd.fecha_pago', 'desc')
       .limit(limit)
       .select(
@@ -264,8 +237,7 @@ const getResumenCuenta = async (req, res) => {
         'a.renta_diaria',
         'a.abono_poliza_mantenimiento',
         'v.total_corrida',
-        'v.plazo_corrida',
-        'v.porcentaje_pagado'
+        'v.plazo_corrida'
       )
       .first();
 
@@ -319,7 +291,6 @@ const getResumenCuenta = async (req, res) => {
       total_pendiente: totalPendienteValue,
       total_plan: totalPlan || (totalPagadoValue + totalPendienteValue),
       plazo_corrida: asignacionActiva?.plazo_corrida ? parseInt(asignacionActiva.plazo_corrida) : null,
-      porcentaje_pagado: parseFloat(asignacionActiva?.porcentaje_pagado || 0),
       total_pagos_realizados: parseInt(totalPagosRealizados?.count || 0),
       renta_diaria: parseFloat(asignacionActiva?.renta_diaria || 400),
       abono_poliza_mantenimiento: getPolizaDiaria(asignacionActiva?.abono_poliza_mantenimiento),
@@ -364,48 +335,60 @@ const registrarPagoDiario = async (req, res) => {
       });
     }
 
-    // Validación: Bloquear si hay pago pendiente
-    const pagoPendiente = await db('pagos_diarios')
-      .where({ asignacion_id: asignacion.id, status: 'Pendiente' })
-      .first();
+    const fechaInicioSolicitada = toDateString(fecha_inicio || fecha_pago || new Date());
+    const fechaFinSolicitada = toDateString(fecha_fin || fechaInicioSolicitada);
+    const fechaInicioAsignacion = getFechaInicioCobro(asignacion.fecha_inicio);
+    const fechaCorte = toDateString(new Date());
+    const fechaInicioAsignacionDisplay = formatDisplayDate(fechaInicioAsignacion);
+    const fechaCorteDisplay = formatDisplayDate(fechaCorte);
 
-    if (pagoPendiente) {
+    if (!fechaInicioSolicitada || !fechaFinSolicitada || !fechaInicioAsignacion) {
       return res.status(400).json({
         success: false,
-        message: '⚠️ Tienes un pago en revisión pendiente. Debes esperar a que sea aprobado.'
+        message: 'La fecha de pago o la fecha de inicio de asignación no es válida'
       });
     }
 
-    const fechaInicioSolicitada = toDateString(fecha_inicio || fecha_pago || new Date());
-    const fechaFinSolicitada = toDateString(fecha_fin || fechaInicioSolicitada);
-    const fechaInicioAsignacion = toDateString(asignacion.fecha_inicio);
-    const fechaCorte = toDateString(new Date());
+    if (fechaInicioSolicitada < fechaInicioAsignacion) {
+      return res.status(400).json({
+        success: false,
+        message: `La fecha de inicio no puede ser anterior al inicio de tu asignación (${fechaInicioAsignacionDisplay}).`
+      });
+    }
 
-    // Validaciones de fechas
-    if (!fechaInicioSolicitada || !fechaFinSolicitada) return res.status(400).json({ message: 'Fechas inválidas' });
-    if (fechaInicioSolicitada < fechaInicioAsignacion) return res.status(400).json({ message: 'La fecha es anterior a tu asignación.' });
-    if (fechaFinSolicitada < fechaInicioSolicitada) return res.status(400).json({ message: 'Rango de fechas inválido.' });
-    // if (fechaFinSolicitada > fechaCorte) return res.status(400).json({ message: 'No puedes registrar pagos futuros.' });
+    if (fechaFinSolicitada < fechaInicioSolicitada) {
+      return res.status(400).json({
+        success: false,
+        message: 'La fecha de fin no puede ser anterior a la fecha de inicio.'
+      });
+    }
 
-    // Verificar pagos previos
+    if (fechaFinSolicitada > fechaCorte) {
+      return res.status(400).json({
+        success: false,
+        message: `La fecha de fin no puede ser posterior al día de hoy (${fechaCorteDisplay}).`
+      });
+    }
+
     const pagosRegistrados = await db('pagos_diarios')
       .where({ asignacion_id: asignacion.id })
       .whereIn('status', ['Confirmado', 'Pendiente'])
       .select('fecha_pago');
 
-    const fechasPagadas = new Set(pagosRegistrados.map((p) => toDateString(p.fecha_pago)).filter(Boolean));
+    const fechasPagadas = new Set(
+      pagosRegistrados
+        .map((pago) => toDateString(pago.fecha_pago))
+        .filter(Boolean)
+    );
 
     const fechasPendientes = [];
     const totalDiasSeleccionados = [];
     let fechaCursor = fechaInicioSolicitada;
 
     while (fechaCursor <= fechaFinSolicitada) {
-      const diaSemana = new Date(`${fechaCursor}T12:00:00`).getDay();
-      if (diaSemana !== 0) { // Ignorar domingos
-        totalDiasSeleccionados.push(fechaCursor);
-        if (!fechasPagadas.has(fechaCursor)) {
-          fechasPendientes.push(fechaCursor);
-        }
+      totalDiasSeleccionados.push(fechaCursor);
+      if (!fechasPagadas.has(fechaCursor)) {
+        fechasPendientes.push(fechaCursor);
       }
       fechaCursor = addDaysToDate(fechaCursor, 1);
     }
@@ -413,7 +396,7 @@ const registrarPagoDiario = async (req, res) => {
     if (fechasPendientes.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Los días seleccionados ya están pagados o son inhábiles (domingos).'
+        message: 'Todos los días seleccionados ya cuentan con un pago registrado.'
       });
     }
 
@@ -421,34 +404,27 @@ const registrarPagoDiario = async (req, res) => {
     const result = await uploadToCloudinary(req.file.buffer, {
       resource_type: 'image',
       folder: `comprobantes_pago/${conductorId}`,
-      transformation: [{ width: 1200, crop: 'limit', quality: 'auto' }]
+      transformation: [
+        { width: 1200, crop: 'limit', quality: 'auto' }
+      ]
     });
 
-    // Cálculos
     const rentaDiaria = parseFloat(asignacion.renta_diaria || 400);
     const polizaDiaria = getPolizaDiaria(asignacion.abono_poliza_mantenimiento);
     const montoRenta = rentaDiaria * fechasPendientes.length;
     const montoPoliza = polizaDiaria * fechasPendientes.length;
     const montoTotal = montoRenta + montoPoliza;
+    const diasOmitidos = totalDiasSeleccionados.length - fechasPendientes.length;
+    const observacionesRango = `Rango ${fechaInicioSolicitada} a ${fechaFinSolicitada} (${fechasPendientes.length} día${fechasPendientes.length !== 1 ? 's' : ''}${diasOmitidos > 0 ? `, ${diasOmitidos} omitido${diasOmitidos !== 1 ? 's' : ''}` : ''})`;
+    const observaciones = notas ? `${notas} | ${observacionesRango}` : observacionesRango;
 
-    // Preparar observaciones
-    const fechaInicioRango = fechasPendientes[0];
-    const fechaFinRango = fechasPendientes[fechasPendientes.length - 1];
-    
-    // Etiqueta para detectar rangos en el futuro
-    const etiquetaRango = `[Rango: ${fechaInicioRango} > ${fechaFinRango}]`;
-    const observaciones = notas
-      ? `${notas} | Pago Manual (${fechasPendientes.length} días) ${etiquetaRango}`
-      : `Pago del ${fechaInicioRango} al ${fechaFinRango} (${fechasPendientes.length} días) ${etiquetaRango}`;
-
-    // 🟢 CORRECCIÓN PRINCIPAL: Usamos 'db' y definimos 'nuevoPago'
     const [nuevoPago] = await db('pagos_diarios')
       .insert({
         asignacion_id: asignacion.id,
         monto_total: montoTotal,
         monto_renta_pagado: montoRenta,
         monto_poliza_pagado: montoPoliza,
-        fecha_pago: fechaFinRango,
+        fecha_pago: fechaFinSolicitada,
         metodo_pago: 'Transferencia',
         comprobante_url: result.secure_url,
         observaciones,
@@ -456,14 +432,18 @@ const registrarPagoDiario = async (req, res) => {
         created_at: db.fn.now(),
         updated_at: db.fn.now()
       })
-      .returning('*'); // Importante para devolver el objeto creado
+      .returning('*');
 
     res.status(201).json({
       success: true,
       message: 'Pago registrado correctamente. Pendiente de aprobación.',
-      pago: nuevoPago, // Ahora sí existe esta variable
+      pago: nuevoPago,
       total_dias: fechasPendientes.length,
       total_monto: montoTotal,
+      total_monto_renta: montoRenta,
+      total_monto_poliza: montoPoliza,
+      renta_diaria: rentaDiaria,
+      poliza_diaria: polizaDiaria,
       fecha_inicio: fechaInicioSolicitada,
       fecha_fin: fechaFinSolicitada
     });
@@ -486,84 +466,95 @@ const registrarPagoMultiple = async (req, res) => {
 
   try {
     const conductorId = req.user.conductorId;
-    // Recibimos las fechas del frontend para respetar lo que el usuario seleccionó
-    const { notas, fecha_inicio, fecha_fin } = req.body; 
+    const { notas } = req.body;
 
     if (!req.file) {
       await trx.rollback();
-      return res.status(400).json({ success: false, message: 'El comprobante es obligatorio' });
+      return res.status(400).json({
+        success: false,
+        message: 'El comprobante de pago es obligatorio'
+      });
     }
 
-    // 1. Calculamos pendientes SOLO dentro del rango solicitado
-    const pendientesData = await buildPendientesData(trx, conductorId, fecha_inicio, fecha_fin);
+    const pendientesData = await buildPendientesData(trx, conductorId);
 
     if (pendientesData.error) {
       await trx.rollback();
-      return res.status(pendientesData.error.status).json({ success: false, message: pendientesData.error.message });
+      return res.status(pendientesData.error.status).json({
+        success: false,
+        message: pendientesData.error.message
+      });
     }
 
-    const { fechasPendientes, asignacion } = pendientesData;
+    const { fechasPendientes } = pendientesData;
 
     if (fechasPendientes.length === 0) {
       await trx.rollback();
-      return res.status(400).json({ success: false, message: 'El rango seleccionado ya está pagado o son días inhábiles.' });
+      return res.status(400).json({
+        success: false,
+        message: 'No tienes adeudos pendientes por regularizar.'
+      });
     }
 
-    // 2. Calculamos totales
+    const { asignacion } = pendientesData;
     const rentaDiaria = parseFloat(asignacion.renta_diaria || 400);
     const polizaDiaria = getPolizaDiaria(asignacion.abono_poliza_mantenimiento);
-    
-    const totalRenta = rentaDiaria * fechasPendientes.length;
-    const totalPoliza = polizaDiaria * fechasPendientes.length;
-    const totalMonto = totalRenta + totalPoliza;
+    const montoDiarioTotal = rentaDiaria + polizaDiaria;
 
-    // 3. Subir imagen
+    console.log('Subiendo comprobante de pago múltiple...');
     const result = await uploadToCloudinary(req.file.buffer, {
       resource_type: 'image',
       folder: `comprobantes_pago/${conductorId}`,
-      transformation: [{ width: 1200, crop: 'limit', quality: 'auto' }]
+      transformation: [
+        { width: 1200, crop: 'limit', quality: 'auto' }
+      ]
     });
 
-    // 4. Crear UN SOLO registro con la etiqueta mágica
-    const inicioReal = fechasPendientes[0];
-    const finReal = fechasPendientes[fechasPendientes.length - 1];
-
-    // Esta etiqueta "Rango: X > Y" es la que leerá buildPendientesData en el futuro
-    const etiquetaRango = `[Rango: ${inicioReal} > ${finReal}]`;
-    
     const observaciones = notas
-      ? `${notas} | Regularización (${fechasPendientes.length} días) ${etiquetaRango}`
-      : `Ponerse al tanto (${fechasPendientes.length} días) ${etiquetaRango}`;
+      ? `${notas} (Pago múltiple)`
+      : 'Pago múltiple para ponerse al tanto';
 
-    await trx('pagos_diarios').insert({
+    const registros = fechasPendientes.map((fecha) => ({
       asignacion_id: asignacion.id,
-      monto_total: totalMonto,
-      monto_renta_pagado: totalRenta,
-      monto_poliza_pagado: totalPoliza,
-      fecha_pago: finReal, // Fecha referencia (fin del periodo)
+      monto_total: montoDiarioTotal,
+      monto_renta_pagado: rentaDiaria,
+      monto_poliza_pagado: polizaDiaria,
+      fecha_pago: fecha,
       metodo_pago: 'Transferencia',
       comprobante_url: result.secure_url,
-      observaciones, // AQUÍ VA LA ETIQUETA
+      observaciones,
       status: 'Pendiente',
       created_at: trx.fn.now(),
       updated_at: trx.fn.now()
-    });
+    }));
+
+    await trx('pagos_diarios').insert(registros);
 
     await trx.commit();
 
     res.status(201).json({
       success: true,
-      message: `Solicitud enviada correctamente (${fechasPendientes.length} días en 1 registro).`,
+      message: `Se registraron ${fechasPendientes.length} pagos pendientes en una sola transacción.`,
       total_dias: fechasPendientes.length,
-      total_monto: totalMonto
+      total_monto: montoDiarioTotal * fechasPendientes.length,
+      total_monto_renta: rentaDiaria * fechasPendientes.length,
+      total_monto_poliza: polizaDiaria * fechasPendientes.length,
+      renta_diaria: rentaDiaria,
+      poliza_diaria: polizaDiaria,
+      fechas_registradas: fechasPendientes
     });
 
   } catch (error) {
     await trx.rollback();
     console.error('Error en registrarPagoMultiple:', error);
-    res.status(500).json({ success: false, message: 'Error al procesar', error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Error al registrar pagos pendientes',
+      error: error.message
+    });
   }
 };
+
 // =====================================================
 // OBTENER RESUMEN PARA PONERSE AL TANTO
 // =====================================================

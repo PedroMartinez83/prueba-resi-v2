@@ -31,7 +31,17 @@ const getDriverDashboard = async (req, res) => {
   try {
     // 1. OBTENER CONDUCTOR Y VEHÍCULO
     // req.user.id es el ID de la tabla 'usuarios' (del middleware)
-    const conductorInfo = await db('conductores as c')
+    const usuarioId = req.user?.id;
+    const conductorIdFromToken = req.user?.conductorId;
+
+    if (!usuarioId && !conductorIdFromToken) {
+      return res.status(401).json({
+        success: false,
+        message: 'Usuario no autenticado o sin identificador valido.'
+      });
+    }
+
+    let conductorInfoQuery = db('conductores as c')
       .leftJoin('asignaciones as a', function() {
         this.on('c.id', '=', 'a.conductor_id').andOn('a.activa', '=', db.raw('true'))
       })
@@ -48,9 +58,47 @@ const getDriverDashboard = async (req, res) => {
         // Usamos el nombre real 'proximo_mantenimiento' y lo renombramos a 'proximo_mantenimiento_km'
         'v.proximo_mantenimiento as proximo_mantenimiento_km' 
         // --- 👆 FIN DE LA CORRECCIÓN 👆 ---
-      )
-      .where('c.usuario_id', req.user.id) // Vinculado al usuario que inició sesión
-      .first();
+      );
+
+    // Preferir conductorId del token si existe; fallback a usuario_id
+    if (conductorIdFromToken) {
+      conductorInfoQuery = conductorInfoQuery.where('c.id', conductorIdFromToken);
+    } else {
+      conductorInfoQuery = conductorInfoQuery.where('c.usuario_id', usuarioId);
+    }
+
+    let conductorInfo = await conductorInfoQuery.first();
+
+    // Fallback: si no encontramos por usuario_id pero tenemos email, buscar y vincular
+    if (!conductorInfo && usuarioId) {
+      const emailRaw = req.user?.email || req.user?.name || '';
+      const emailNormalized = emailRaw.toString().trim().toLowerCase();
+
+      if (!emailNormalized) {
+        return res.status(404).json({
+          success: false,
+          message: 'Perfil de conductor no encontrado. Contacta a un administrador para que active tu cuenta.'
+        });
+      }
+
+      const conductorByEmail = await db('conductores')
+        .where('email', emailNormalized)
+        .first();
+
+      if (conductorByEmail) {
+        await db('conductores')
+          .where('id', conductorByEmail.id)
+          .update({
+            usuario_id: usuarioId,
+            updated_at: new Date()
+          });
+
+        conductorInfo = await conductorInfoQuery
+          .clearWhere()
+          .where('c.id', conductorByEmail.id)
+          .first();
+      }
+    }
 
     if (!conductorInfo) {
       return res.status(404).json({ 
@@ -65,34 +113,8 @@ const getDriverDashboard = async (req, res) => {
       .whereIn('estado', ['Pendiente', 'Vencida'])
       .select('monto_total');
 
-    let rentas_pendientes = rentas.length;
-    let monto_deuda_total = rentas.reduce((sum, r) => sum + parseFloat(r.monto_total || 0), 0);
-    
-    // Obtener fecha de hoy en formato ISO (YYYY-MM-DD)
-    const hoyDate = new Date();
-    const hoyISO = hoyDate.toISOString().split('T')[0];
-    
-    // Verificar si hay pago hoy
-    const pagoHoy = await db('pagos_diarios')
-      .join('asignaciones', 'pagos_diarios.asignacion_id', 'asignaciones.id')
-      .where('asignaciones.conductor_id', conductorInfo.conductor_id)
-      .where('pagos_diarios.fecha_pago', hoyISO)
-      .where('pagos_diarios.status', 'Confirmado')
-      .first();
-    
-    // Si no hay pago hoy y tiene asignación activa, agregar hoy a la deuda (excepto domingos)
-    const hoyEsDomingo = new Date(`${hoyISO}T12:00:00`).getDay() === 0;
-    if (!pagoHoy && conductorInfo.vehiculo_id && !hoyEsDomingo) {
-      const asignacion = await db('asignaciones')
-        .where('conductor_id', conductorInfo.conductor_id)
-        .where('activa', true)
-        .first();
-        
-      if (asignacion) {
-        monto_deuda_total += parseFloat(asignacion.renta_diaria || 0);
-        rentas_pendientes += 1;
-      }
-    }
+    const rentas_pendientes = rentas.length;
+    const monto_deuda_total = rentas.reduce((sum, r) => sum + parseFloat(r.monto_total || 0), 0);
     
     // Lógica de tolerancia (Asumiendo 2 días)
     const dias_de_tolerancia_restantes = Math.max(0, 2 - rentas_pendientes);
@@ -138,8 +160,10 @@ const getDriverDashboard = async (req, res) => {
       : null;
 
     // 3.1 Verificar estado de la revisión diaria (reinicia cada día a las 00:00)
-    const inicioHoy = new Date(hoyDate);
+    const hoy = new Date();
+    const inicioHoy = new Date(hoy);
     inicioHoy.setHours(0, 0, 0, 0);
+    const hoyISO = inicioHoy.toISOString().split('T')[0];
 
     const revisionHoy = await db('revisiones_diarias')
       .where({ conductor_id: conductorInfo.conductor_id })

@@ -183,10 +183,4 @@ router.get('/estadisticas',
   getEstadisticasGenerales
 );
 
-// ========== SINCRONIZACIÓN DE RENTAS ==========
-router.post('/sync/rentas',
-  requirePermission('rentas.sync'),
-  require('../controllers/adminController').syncRentasFromAirtable
-);
-
 module.exports = router;

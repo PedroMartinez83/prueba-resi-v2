@@ -10,7 +10,7 @@ const DEFAULT_JWT_EXPIRE = process.env.JWT_EXPIRE || '1d';
 
 const buildUserPayload = (user, conductorId) => ({
   id: user.id,
-  email: user.name || user.email,
+  email: user.email || user.name,
   name: user.nombre_completo,
   rol: user.rol || 'conductor',
   numeroVehiculo: user.numero_vehiculo,
@@ -97,7 +97,7 @@ const token = signAuthToken(user, conductorId);
   token,
   user: {
     id: user.id,
-    email: user.name || user.email,
+    email: user.email || user.name,
     name: user.nombre_completo,
     rol: user.rol || 'conductor',
     numeroVehiculo: user.numero_vehiculo,

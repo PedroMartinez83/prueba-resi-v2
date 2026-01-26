@@ -38,6 +38,8 @@ const Rentas = () => {
   const [opciones, setOpciones] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState(false);
+  const [textoBusqueda, setTextoBusqueda] = useState('');
+
   
   // Estados de filtros
   const [filtros, setFiltros] = useState({
@@ -47,8 +49,7 @@ const Rentas = () => {
     metodo_pago: '',
     fecha_desde: '',
     fecha_hasta: '',
-    busqueda: '',
-    busqueda_vehiculo: '' // 🆕 Nuevo filtro de búsqueda por vehículo
+    busqueda: ''
   });
   
   // Estados de modales
@@ -122,7 +123,24 @@ const Rentas = () => {
     setCurrentPage(1);
   };
 
+  // 🆕 Función para ejecutar la búsqueda (Botón o Enter)
+const realizarBusqueda = () => {
+  setFiltros(prev => ({
+    ...prev,
+    busqueda: textoBusqueda // Pasamos el texto local al filtro real
+  }));
+  setCurrentPage(1); // Reseteamos a la página 1
+};
+
+// 🆕 Manejador de tecla Enter
+const handleKeyDown = (e) => {
+  if (e.key === 'Enter') {
+    realizarBusqueda();
+  }
+};
+
   const limpiarFiltros = () => {
+    setTextoBusqueda('');
     setFiltros({
       status: '',
       conductor_id: '',
@@ -130,8 +148,7 @@ const Rentas = () => {
       metodo_pago: '',
       fecha_desde: '',
       fecha_hasta: '',
-      busqueda: '',
-      busqueda_vehiculo: ''
+      busqueda: ''
     });
     setCurrentPage(1);
   };
@@ -417,31 +434,23 @@ const handleValidarPago = async (pagoId) => {
     });
   };
 
-  // 🆕 Filtro de búsqueda mejorado (incluye búsqueda por vehículo)
-  const rentasFiltradas = rentas.filter(renta => {
-    // Si el status es 'Eliminado', lo sacamos de la lista inmediatamente
-    if (renta.status === 'Eliminado') return false;
+  // 🆕 Filtro de búsqueda mejorado
+const rentasFiltradas = rentas.filter(renta => {
+  if (renta.status === 'Eliminado') return false;
 
-    // Filtro por búsqueda general
-    if (filtros.busqueda) {
-      const busqueda = filtros.busqueda.toLowerCase();
-      const coincide = (
-        renta.nombre_conductor?.toLowerCase().includes(busqueda) ||
-        renta.numero_vehiculo?.toLowerCase().includes(busqueda) ||
-        renta.id?.toString().includes(busqueda)
-      );
-      if (!coincide) return false;
-    }
-    
-    // 🆕 Filtro específico por vehículo
-    if (filtros.busqueda_vehiculo) {
-      const busquedaVehiculo = filtros.busqueda_vehiculo.toLowerCase();
-      const coincideVehiculo = renta.numero_vehiculo?.toLowerCase().includes(busquedaVehiculo);
-      if (!coincideVehiculo) return false;
-    }
-    
-    return true;
-  });
+  // Usamos filtros.busqueda (el valor confirmado al dar Enter)
+  if (filtros.busqueda) {
+    const termino = filtros.busqueda.toLowerCase();
+    const coincide = (
+      renta.nombre_conductor?.toLowerCase().includes(termino) ||
+      renta.numero_vehiculo?.toLowerCase().includes(termino) ||
+      renta.id?.toString().includes(termino)
+    );
+    if (!coincide) return false;
+  }
+  
+  return true;
+});
 
   // 🆕 Filtrar conductores para el dropdown
   const conductoresFiltrados = opciones?.conductores?.filter(conductor => {
@@ -580,32 +589,27 @@ const handleValidarPago = async (pagoId) => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Búsqueda rápida */}
-          <div className="lg:col-span-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Buscar por conductor, vehículo o folio..."
-                value={filtros.busqueda}
-                onChange={(e) => handleFiltroChange('busqueda', e.target.value)}
-                className="w-full pl-10 pr-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary"
-              />
+            <div className="lg:col-span-2 flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar por conductor, vehículo o folio..."
+                  value={textoBusqueda} // Usamos el estado local
+                  onChange={(e) => setTextoBusqueda(e.target.value)} // Solo actualiza visualmente
+                  onKeyDown={handleKeyDown} // Detecta el Enter
+                  className="w-full pl-10 pr-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              
+              <button
+                onClick={realizarBusqueda}
+                className="px-4 py-2 bg-primary/20 text-primary border border-primary/30 rounded-lg hover:bg-primary/30 transition-colors flex items-center gap-2 font-medium"
+              >
+                <Search className="w-4 h-4" />
+                Buscar
+              </button>
             </div>
-          </div>
-
-          {/* 🆕 Búsqueda específica por vehículo */}
-          <div>
-            <div className="relative">
-              <Car className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Filtrar por vehículo..."
-                value={filtros.busqueda_vehiculo}
-                onChange={(e) => handleFiltroChange('busqueda_vehiculo', e.target.value)}
-                className="w-full pl-10 pr-3 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
-          </div>
 
           {/* Estado */}
           <select

@@ -124,7 +124,7 @@ const Reportes = () => {
       const pagos = response.pagos;
       
       if (!pagos || pagos.length === 0) {
-        alert('No hay datos para el período seleccionado');
+        alert('No hay datos para el periodo seleccionado');
         return;
       }
 
@@ -133,12 +133,12 @@ const Reportes = () => {
         Folio: String(pago.id).padStart(6, '0'),
         Fecha: new Date(pago.fecha_pago).toLocaleDateString('es-MX'),
         Conductor: pago.nombre_conductor,
-        Vehículo: pago.numero_vehiculo,
+        Vehiculo: pago.numero_vehiculo,
         'Tipo Socio': pago.tipo_socio,
         'Renta Pagada': parseFloat(pago.monto_renta_pagado || 0),
-        'Póliza Pagada': parseFloat(pago.monto_poliza_pagado || 0),
+        'Poliza Pagada': parseFloat(pago.monto_poliza_pagado || 0),
         Total: parseFloat(pago.monto_total),
-        Método: pago.metodo_pago,
+        Metodo: pago.metodo_pago,
         Estado: pago.status,
         Observaciones: pago.observaciones || ''
       }));
@@ -148,12 +148,12 @@ const Reportes = () => {
         Folio: '',
         Fecha: '',
         Conductor: '',
-        Vehículo: '',
+        Vehiculo: '',
         'Tipo Socio': 'TOTAL:',
         'Renta Pagada': datos.reduce((sum, p) => sum + p['Renta Pagada'], 0),
-        'Póliza Pagada': datos.reduce((sum, p) => sum + p['Póliza Pagada'], 0),
+        'Poliza Pagada': datos.reduce((sum, p) => sum + p['Poliza Pagada'], 0),
         Total: datos.reduce((sum, p) => sum + p.Total, 0),
-        Método: '',
+        Metodo: '',
         Estado: '',
         Observaciones: ''
       };
@@ -168,12 +168,12 @@ const Reportes = () => {
         { wch: 10 }, // Folio
         { wch: 12 }, // Fecha
         { wch: 30 }, // Conductor
-        { wch: 12 }, // Vehículo
+        { wch: 12 }, // Vehiculo
         { wch: 12 }, // Tipo Socio
         { wch: 12 }, // Renta
-        { wch: 12 }, // Póliza
+        { wch: 12 }, // Poliza
         { wch: 12 }, // Total
-        { wch: 14 }, // Método
+        { wch: 14 }, // Metodo
         { wch: 12 }, // Estado
         { wch: 30 }  // Observaciones
       ];
@@ -193,7 +193,7 @@ const Reportes = () => {
       
     } catch (error) {
       console.error('Error al generar reporte:', error);
-      alert('❌ Error al generar el reporte. Verifica tu conexión.');
+      alert('❌ Error al generar el reporte. Verifica tu conexion.');
     } finally {
       setGenerando(false);
     }
@@ -236,7 +236,7 @@ const Reportes = () => {
       const pagos = response.pagos;
       
       if (!pagos || pagos.length === 0) {
-        alert('No hay datos para el período seleccionado');
+        alert('No hay datos para el periodo seleccionado');
         setGenerando(false);
         return;
       }
@@ -256,13 +256,13 @@ const Reportes = () => {
     {
       id: 'diario',
       titulo: 'Reporte Diario',
-      descripcion: 'Pagos de un día específico',
+      descripcion: 'Pagos de un dia especifico',
       icono: Calendar,
       color: 'from-blue-500 to-indigo-500'
     },
     {
       id: 'periodo',
-      titulo: 'Reporte por Período',
+      titulo: 'Reporte por Periodo',
       descripcion: 'Rango de fechas personalizado',
       icono: FileBarChart,
       color: 'from-purple-500 to-pink-500'
@@ -276,6 +276,130 @@ const Reportes = () => {
     }
   ];
 
+  const normalizeDateString = (value) => {
+    if (!value) return null;
+    const trimmed = value.toString().trim();
+
+    const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) return trimmed;
+
+    const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (slashMatch) {
+      let year = slashMatch[3];
+      if (year.length === 2) {
+        year = String(2000 + parseInt(year, 10)).padStart(4, '0');
+      }
+      const month = slashMatch[2].padStart(2, '0');
+      const day = slashMatch[1].padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    return trimmed;
+  };
+
+  const parseRangeFromText = (text = '') => {
+    if (!text) return null;
+
+    const patterns = [
+      /Rango:\s*(\d{4}-\d{2}-\d{2})\s*>\s*(\d{4}-\d{2}-\d{2})/i,
+      /Rango[:\s]+(\d{4}-\d{2}-\d{2})\s*a\s*(\d{4}-\d{2}-\d{2})/i,
+      /Pago del\s*(\d{4}-\d{2}-\d{2})\s*al\s*(\d{4}-\d{2}-\d{2})/i,
+      /Rango[:\s]+(\d{1,2}\/\d{1,2}\/\d{2,4})\s*a\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+      /Pago del\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*al\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+      /Del\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*al\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        return {
+          inicio: normalizeDateString(match[1]),
+          fin: normalizeDateString(match[2])
+        };
+      }
+    }
+
+    return null;
+  };
+
+  const calcularDiasHabiles = (inicio, fin) => {
+    if (!inicio || !fin) return 1;
+    const dInicio = new Date(`${inicio}T12:00:00`);
+    const dFin = new Date(`${fin}T12:00:00`);
+    if (Number.isNaN(dInicio.getTime()) || Number.isNaN(dFin.getTime())) return 1;
+    if (dFin < dInicio) return 0;
+
+    let dias = 0;
+    const cursor = new Date(dInicio);
+    while (cursor <= dFin) {
+      if (cursor.getDay() !== 0) dias++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return dias;
+  };
+
+  const formatDateLabel = (value) => {
+    if (!value) return '';
+
+    let date;
+    if (value instanceof Date) {
+      date = value;
+    } else if (typeof value === 'string') {
+      const trimmed = value.trim();
+      const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+      if (slashMatch) {
+        let year = slashMatch[3];
+        if (year.length === 2) {
+          year = String(2000 + parseInt(year, 10)).padStart(4, '0');
+        }
+        const month = slashMatch[2].padStart(2, '0');
+        const day = slashMatch[1].padStart(2, '0');
+        date = new Date(`${year}-${month}-${day}T12:00:00Z`);
+      } else if (trimmed.length <= 10 && /\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+        date = new Date(`${trimmed}T12:00:00Z`);
+      } else {
+        date = new Date(trimmed);
+      }
+    } else {
+      date = new Date(value);
+    }
+
+    if (Number.isNaN(date.getTime())) return String(value);
+
+    return new Intl.DateTimeFormat('es-MX', {
+      day: 'numeric',
+      month: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC'
+    }).format(date);
+  };
+
+  const getDiasCubiertosLabel = (pago) => {
+    if (!pago) return '-';
+
+    const range =
+      (pago.fecha_inicio && pago.fecha_fin
+        ? { inicio: pago.fecha_inicio, fin: pago.fecha_fin }
+        : null) ||
+      (pago.rango_inicio && pago.rango_fin
+        ? { inicio: pago.rango_inicio, fin: pago.rango_fin }
+        : null) ||
+      parseRangeFromText(pago.observaciones || '');
+
+    if (!range) {
+      return formatDateLabel(pago.fecha_pago) || '-';
+    }
+
+    const inicioLabel = formatDateLabel(range.inicio);
+    const finLabel = formatDateLabel(range.fin);
+    const rangoLabel = inicioLabel && finLabel && inicioLabel !== finLabel
+      ? `${inicioLabel} a ${finLabel}`
+      : (inicioLabel || finLabel);
+
+    return rangoLabel || '-';
+  };
+
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -285,7 +409,7 @@ const Reportes = () => {
           <p className="text-gray-400">Genera y descarga reportes personalizados</p>
         </div>
         
-        {/* Navegación */}
+        {/* Navegacion */}
         <div className="flex gap-2">
           <NavButton
             icon={Home}
@@ -305,7 +429,7 @@ const Reportes = () => {
           />
           <NavButton
             icon={TrendingUp}
-            label="Estadísticas"
+            label="Estadisticas"
             onClick={() => navegarA('estadisticas')}
           />
         </div>
@@ -336,9 +460,9 @@ const Reportes = () => {
         ))}
       </div>
 
-      {/* Configuración de Reporte */}
+      {/* Configuracion de Reporte */}
       <div className="glass border border-white/10 rounded-2xl p-6">
-        <h2 className="text-xl font-bold text-white mb-4">Configuración</h2>
+        <h2 className="text-xl font-bold text-white mb-4">Configuracion</h2>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           {filtros.tipo === 'diario' && (
@@ -508,12 +632,11 @@ const Reportes = () => {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-white/10">
-                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Fecha</th>
+                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Fecha de pago</th>
+                  <th className="text-left py-3 px-4 text-gray-400 font-medium">D?as cubiertos</th>
                   <th className="text-left py-3 px-4 text-gray-400 font-medium">Conductor</th>
-                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Vehículo</th>
-                  <th className="text-right py-3 px-4 text-gray-400 font-medium">💼 Renta</th>
-                  <th className="text-right py-3 px-4 text-gray-400 font-medium">🛡️ Póliza</th>
-                  <th className="text-right py-3 px-4 text-gray-400 font-medium">Total</th>
+                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Veh?culo</th>
+                  <th className="text-right py-3 px-4 text-gray-400 font-medium">Total pagado</th>
                   <th className="text-left py-3 px-4 text-gray-400 font-medium">Estado</th>
                 </tr>
               </thead>
@@ -523,14 +646,9 @@ const Reportes = () => {
                     <td className="py-3 px-4 text-white">
                       {new Date(pago.fecha_pago).toLocaleDateString('es-MX')}
                     </td>
+                    <td className="py-3 px-4 text-white">{getDiasCubiertosLabel(pago)}</td>
                     <td className="py-3 px-4 text-white">{pago.nombre_conductor}</td>
                     <td className="py-3 px-4 text-white">{pago.numero_vehiculo}</td>
-                    <td className="py-3 px-4 text-emerald-400 text-right font-medium">
-                      ${parseFloat(pago.monto_renta_pagado || 0).toFixed(2)}
-                    </td>
-                    <td className="py-3 px-4 text-purple-400 text-right font-medium">
-                      ${parseFloat(pago.monto_poliza_pagado || 0).toFixed(2)}
-                    </td>
                     <td className="py-3 px-4 text-white text-right font-bold">
                       ${parseFloat(pago.monto_total).toFixed(2)}
                     </td>
@@ -549,11 +667,10 @@ const Reportes = () => {
             </table>
             <div className="mt-4 flex items-center justify-between">
               <p className="text-gray-400 text-sm">
-                Mostrando primeros 10 registros. El reporte completo contendrá todos los datos.
+                Mostrando primeros 10 registros. El reporte completo contendra todos los datos.
               </p>
-              <div className="flex gap-4 text-sm">
-                <span className="text-emerald-400">💼 Renta = Ganancia Empresa</span>
-                <span className="text-purple-400">🛡️ Póliza = Ahorro Conductor</span>
+              <div className="text-sm text-gray-400">
+                D?as cubiertos considera rangos registrados (domingos excluidos).
               </div>
             </div>
           </div>
