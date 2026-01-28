@@ -56,14 +56,21 @@ exports.getMantenimientos = async (req, res) => {
       .leftJoin('conductores as c', 'a.conductor_id', 'c.id');
 
     // Aplicar filtros
-    if (estado) {
+if (estado) {
       const normalizedEstado = estado.toLowerCase();
 
       if (normalizedEstado === 'vencido') {
+        // 🟢 CORRECCIÓN: Coincidir con la lógica del Dashboard (Vencidos Reales OR Cancelados)
         query = query.where(function() {
-          this.where('m.estado', '!=', 'Completado')
-              .andWhere('m.fecha_programada', '<', db.raw('NOW()'));
+          this.where(function() {
+            // Caso 1: Vencidos reales (Pasados de fecha y NO cancelados ni completados)
+            this.where('m.fecha_programada', '<', db.raw('NOW()'))
+                .andWhereNot('m.estado', 'Completado')
+                .andWhereNot('m.estado', 'Cancelado');
+          })
+          .orWhere('m.estado', 'Cancelado'); // Caso 2: Incluir TODOS los Cancelados (sin importar fecha)
         });
+        
       } else if (normalizedEstado === 'urgente') {
         query = query.where(function() {
           this.where('m.estado', '!=', 'Completado')
@@ -73,7 +80,7 @@ exports.getMantenimientos = async (req, res) => {
               ]);
         });
       } else {
-        query = query.where('m.estado', estado);
+        query = query.whereRaw('LOWER(m.estado) = ?', [normalizedEstado]);  
       }
     }
 
@@ -116,14 +123,20 @@ exports.getMantenimientos = async (req, res) => {
       .leftJoin('conductores as c', 'a.conductor_id', 'c.id');
 
     // Aplicar los mismos filtros al count
-    if (estado) {
+if (estado) {
       const normalizedEstado = estado.toLowerCase();
 
       if (normalizedEstado === 'vencido') {
+        // 🟢 CORRECCIÓN: Misma lógica para el paginador
         totalCountQuery.where(function() {
-          this.where('m.estado', '!=', 'Completado')
-              .andWhere('m.fecha_programada', '<', db.raw('NOW()'));
+          this.where(function() {
+            this.where('m.fecha_programada', '<', db.raw('NOW()'))
+                .andWhereNot('m.estado', 'Completado')
+                .andWhereNot('m.estado', 'Cancelado');
+          })
+          .orWhere('m.estado', 'Cancelado');
         });
+
       } else if (normalizedEstado === 'urgente') {
         totalCountQuery.where(function() {
           this.where('m.estado', '!=', 'Completado')
@@ -198,11 +211,14 @@ exports.getEstadisticas = async (req, res) => {
     // 1. Totales básicos
     const totalesResult = await db('mantenimientos')
       .select(
-        db.raw("COUNT(*) FILTER (WHERE estado != 'Completado') as programados"),
+        db.raw("COUNT(*) FILTER (WHERE estado = 'Programado') as programados"),
         db.raw("COUNT(*) FILTER (WHERE estado = 'Completado' AND DATE_TRUNC('month', fecha_realizada) = DATE_TRUNC('month', CURRENT_DATE)) as completados_mes"),
-        db.raw("COUNT(*) FILTER (WHERE fecha_programada < NOW() AND estado != 'Completado') as vencidos"),
-        db.raw("COUNT(*) FILTER (WHERE fecha_programada BETWEEN NOW() AND NOW() + INTERVAL '7 days' AND estado != 'Completado') as urgentes"),
-        db.raw("COUNT(*) FILTER (WHERE status = 'En progreso') as en_proceso"),
+        db.raw(`COUNT(*) FILTER (
+          WHERE (fecha_programada < NOW() AND estado NOT IN ('Completado', 'Cancelado')) 
+          OR estado = 'Cancelado'
+        ) as vencidos`),
+        db.raw("COUNT(*) FILTER (WHERE fecha_programada BETWEEN NOW() AND NOW() + INTERVAL '7 days' AND estado NOT IN ('Completado', 'Cancelado')) as urgentes"),
+        db.raw("COUNT(*) FILTER (WHERE estado = 'En proceso') as en_proceso"),
         db.raw("COALESCE(SUM(costo_total) FILTER (WHERE DATE_TRUNC('month', fecha_realizada) = DATE_TRUNC('month', CURRENT_DATE)), 0) as costo_total_mes"),
         db.raw("COALESCE(AVG(costo_total) FILTER (WHERE estado = 'Completado'), 0) as promedio_costo")
       )
@@ -292,25 +308,24 @@ exports.getEstadisticas = async (req, res) => {
 exports.getAlertas = async (req, res) => {
   try {
     // Mantenimientos vencidos
-    const vencidos = await db('mantenimientos as m')
+const vencidos = await db('mantenimientos as m')
       .select(
         'm.*',
-        'v.numero_vehiculo',
-        'v.marca',
-        'v.modelo',
-        'v.placa',
-        'c.nombre_conductor',
-        'c.numero_telefono',
+        'v.numero_vehiculo', 'v.marca', 'v.modelo', 'v.placa',
+        'c.nombre_conductor', 'c.numero_telefono',
         db.raw('DATE_PART(\'day\', NOW() - m.fecha_programada) as dias_vencido')
       )
       .join('vehiculos as v', 'm.vehiculo_id', 'v.id')
       .leftJoin('asignaciones as a', function() {
-        this.on('v.id', '=', 'a.vehiculo_id')
-            .andOn('a.activa', '=', db.raw('true'));
+        this.on('v.id', '=', 'a.vehiculo_id').andOn('a.activa', '=', db.raw('true'));
       })
       .leftJoin('conductores as c', 'a.conductor_id', 'c.id')
+      
+      // ⬇️ FILTROS ESTRICTOS
       .where('m.fecha_programada', '<', db.raw('NOW()'))
       .whereNot('m.estado', 'Completado')
+      .whereNot('m.estado', 'Cancelado') // <--- ESTO LIMPIA LA LISTA
+      
       .orderBy('m.fecha_programada', 'asc');
 
     // Próximos 7 días
@@ -333,6 +348,7 @@ exports.getAlertas = async (req, res) => {
       .leftJoin('conductores as c', 'a.conductor_id', 'c.id')
       .whereBetween('m.fecha_programada', [db.raw('NOW()'), db.raw("NOW() + INTERVAL '7 days'")])
       .whereNot('m.estado', 'Completado')
+      .whereNot('m.estado', 'Cancelado')
       .orderBy('m.fecha_programada', 'asc');
 
     // Próximos 30 días
@@ -563,8 +579,8 @@ exports.createMantenimiento = async (req, res) => {
     }
 
     // Construir fecha y hora completa
-    const fechaHoraProgramada = new Date(`${fecha_programada}T${hora_programada}:00`);
-    if (isNaN(fechaHoraProgramada.getTime())) {
+      const fechaHoraProgramada = new Date(`${fecha_programada}T${hora_programada}:00`);    
+      if (isNaN(fechaHoraProgramada.getTime())) {
       return res.status(400).json({
         success: false,
         message: 'Fecha u hora inválida'
@@ -572,11 +588,14 @@ exports.createMantenimiento = async (req, res) => {
     }
 
     // Validar horario laboral (9:00 a 19:00) y solo lunes a viernes
-    const diaSemana = fechaHoraProgramada.getDay();
-    if (diaSemana === 0 || diaSemana === 6) {
+const fechaCheckDia = new Date(`${fecha_programada}T12:00:00`);
+    const diaSemana = fechaCheckDia.getDay();
+
+    // 2. Bloquear SOLO Domingo (0). Permitir Lunes (1) a Sábado (6)
+    if (diaSemana === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Solo se puede agendar mantenimientos de lunes a viernes'
+        message: 'No se pueden agendar mantenimientos los domingos. Horario disponible: Lunes a Sábado.'
       });
     }
 
@@ -631,7 +650,7 @@ exports.createMantenimiento = async (req, res) => {
         fecha_programada: fechaHoraProgramada,
         kilometraje_servicio: kilometraje_servicio || vehiculo.kilometraje_actual,
         proximo_servicio_km: proximo_servicio_km || (kilometraje_servicio || vehiculo.kilometraje_actual) + 5000,
-        estado: 'Programado',
+        estado: 'Pendiente',
         status: 'Todo',
         taller,
         observaciones,
@@ -1032,7 +1051,7 @@ exports.getOpciones = async (req, res) => {
         vehiculos,
         tipos_servicio: tiposServicio,
         talleres,
-        estados: ['Programado', 'En proceso', 'Completado', 'Cancelado', 'Reprogramado']
+        estados: ['Pendiente','Programado', 'En proceso', 'Completado', 'Cancelado', 'Reprogramado']
       }
     });
 
@@ -1160,7 +1179,7 @@ exports.getReporteFrecuencia = async (req, res) => {
         db.raw(`COALESCE(SUM(CASE WHEN estado = 'Completado' THEN costo_total ELSE 0 END), 0) as costo_total`),
         db.raw(`COUNT(CASE WHEN estado = 'Completado' THEN 1 END) as completados`),
         db.raw(`COUNT(CASE WHEN estado = 'Programado' THEN 1 END) as pendientes`),
-        db.raw(`COUNT(CASE WHEN estado = 'En proceso' THEN 1 END) as en_proceso`)
+        db.raw(`COUNT(CASE WHEN estado = 'En proceso' THE N 1 END) as en_proceso`)
       )
       .groupBy(db.raw(`TO_CHAR(fecha_programada, 'YYYY-MM')`))
       .orderBy(db.raw(`TO_CHAR(fecha_programada, 'YYYY-MM')`), 'desc')
@@ -1625,5 +1644,122 @@ exports.getMantenimientosPendientesDistribucion = async (req, res) => {
       message: 'Error al obtener mantenimientos pendientes',
       error: error.message
     });
+  }
+};
+
+// ============================================
+// CONFIRMAR MANTENIMIENTO (Pendiente -> Programado)
+// ============================================
+
+exports.confirmarMantenimiento = async (req, res) => {
+  const trx = await db.transaction();
+  try {
+    const { id } = req.params;
+
+    // Buscar el mantenimiento
+    const mantenimiento = await trx('mantenimientos').where('id', id).first();
+
+    if (!mantenimiento) {
+      await trx.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'Mantenimiento no encontrado'
+      });
+    }
+
+    // Verificar que esté pendiente
+    if (mantenimiento.estado !== 'Pendiente') {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `No se puede confirmar un mantenimiento con estado: ${mantenimiento.estado}`
+      });
+    }
+
+    // Validar conflicto de horario 
+    // Verifica si ya hay otro Programado/En proceso en ese horario exacto
+    const fechaHora = new Date(mantenimiento.fecha_programada);
+    const traslape = await trx('mantenimientos')
+      .whereNot('estado', 'Completado')
+      .whereNot('estado', 'Cancelado')
+      .whereNot('id', id)
+      .andWhere('fecha_programada', fechaHora)
+      .first();
+
+    if (traslape) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'El horario ya fue ocupado por otro mantenimiento confirmado.'
+      });
+    }
+
+    // Actualizar estado
+    await trx('mantenimientos')
+      .where('id', id)
+      .update({
+        estado: 'Programado',
+        updated_at: db.fn.now()
+      });
+
+    await trx.commit();
+
+    res.json({
+      success: true,
+      message: 'Cita aprobada y programada exitosamente'
+    });
+
+  } catch (error) {
+    await trx.rollback();
+    console.error('Error confirmando mantenimiento:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al confirmar la cita',
+      error: error.message
+    });
+  }
+};
+
+// ============================================
+// CANCELAR MANTENIMIENTO
+// ============================================
+exports.cancelarMantenimiento = async (req, res) => {
+  const trx = await db.transaction();
+  try {
+    const { id } = req.params;
+
+    // Buscar el mantenimiento
+    const mantenimiento = await trx('mantenimientos').where('id', id).first();
+
+    if (!mantenimiento) {
+      await trx.rollback();
+      return res.status(404).json({ success: false, message: 'Mantenimiento no encontrado' });
+    }
+
+    // Validar que no esté completado
+    if (mantenimiento.estado === 'Completado') {
+      await trx.rollback();
+      return res.status(400).json({ success: false, message: 'No se puede cancelar un mantenimiento completado' });
+    }
+
+    // Actualizar estado a Cancelado
+    await trx('mantenimientos')
+      .where('id', id)
+      .update({
+        estado: 'Cancelado',
+        updated_at: db.fn.now()
+      });
+
+    await trx.commit();
+
+    res.json({
+      success: true,
+      message: 'Mantenimiento cancelado exitosamente'
+    });
+
+  } catch (error) {
+    await trx.rollback();
+    console.error('Error cancelando mantenimiento:', error);
+    res.status(500).json({ success: false, message: 'Error al cancelar', error: error.message });
   }
 };

@@ -1,3 +1,4 @@
+//el viernes queda
 // backend/services/airtableService.js
 const Airtable = require('airtable');
 

@@ -113,8 +113,34 @@ const getDriverDashboard = async (req, res) => {
       .whereIn('estado', ['Pendiente', 'Vencida'])
       .select('monto_total');
 
-    const rentas_pendientes = rentas.length;
-    const monto_deuda_total = rentas.reduce((sum, r) => sum + parseFloat(r.monto_total || 0), 0);
+    let rentas_pendientes = rentas.length;
+    let monto_deuda_total = rentas.reduce((sum, r) => sum + parseFloat(r.monto_total || 0), 0);
+    
+    // Obtener fecha de hoy en formato ISO (YYYY-MM-DD)
+    const hoyDate = new Date();
+    const hoyISO = hoyDate.toISOString().split('T')[0];
+    
+    // Verificar si hay pago hoy
+    const pagoHoy = await db('pagos_diarios')
+      .join('asignaciones', 'pagos_diarios.asignacion_id', 'asignaciones.id')
+      .where('asignaciones.conductor_id', conductorInfo.conductor_id)
+      .where('pagos_diarios.fecha_pago', hoyISO)
+      .where('pagos_diarios.status', 'Confirmado')
+      .first();
+    
+    // Si no hay pago hoy y tiene asignación activa, agregar hoy a la deuda (excepto domingos)
+    const hoyEsDomingo = new Date(`${hoyISO}T12:00:00`).getDay() === 0;
+    if (!pagoHoy && conductorInfo.vehiculo_id && !hoyEsDomingo) {
+      const asignacion = await db('asignaciones')
+        .where('conductor_id', conductorInfo.conductor_id)
+        .where('activa', true)
+        .first();
+        
+      if (asignacion) {
+        monto_deuda_total += parseFloat(asignacion.renta_diaria || 0);
+        rentas_pendientes += 1;
+      }
+    }
     
     // Lógica de tolerancia (Asumiendo 2 días)
     const dias_de_tolerancia_restantes = Math.max(0, 2 - rentas_pendientes);
@@ -160,10 +186,8 @@ const getDriverDashboard = async (req, res) => {
       : null;
 
     // 3.1 Verificar estado de la revisión diaria (reinicia cada día a las 00:00)
-    const hoy = new Date();
-    const inicioHoy = new Date(hoy);
+    const inicioHoy = new Date(hoyDate);
     inicioHoy.setHours(0, 0, 0, 0);
-    const hoyISO = inicioHoy.toISOString().split('T')[0];
 
     const revisionHoy = await db('revisiones_diarias')
       .where({ conductor_id: conductorInfo.conductor_id })

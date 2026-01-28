@@ -6,7 +6,7 @@ require('dotenv').config();
 
 const app = express();
 
-// Importar configuración de seguridad
+// Importar configuración de seguridad, asies
 const { 
   rateLimiters, 
   helmetConfig, 
@@ -62,7 +62,8 @@ const shouldSkipFileUpload = (req) => {
   const skipPaths = [
     '/api/conductor/vehiculo/revision-diaria',
     '/api/conductor/siniestros/registrar',
-    '/api/conductor/pagos/registrar'
+    '/api/conductor/pagos/registrar',
+    '/api/conductor/pagos/ponerse-al-tanto'
   ];
 
   return skipPaths.some(path => fullPath.startsWith(path));
@@ -74,7 +75,7 @@ const isMultipartRequest = (req) => {
   return contentType.includes('multipart/form-data');
 };
 
-// ===== SEGURIDAD: HEADERS Y CONFIGURACIÓN INICIAL =====
+// ===== SEGURIDAD: HEADERS Y CONFIGURACIÓN INICIAL a =====
 app.use(helmetConfig);
 app.use(compression());
 app.disable('x-powered-by');

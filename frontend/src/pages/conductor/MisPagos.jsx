@@ -25,6 +25,64 @@ const formatCurrency = (amount) => {
     currency: 'MXN'
   }).format(amount || 0);
 };
+// FUNCIÓN AUXILIAR: Calcular siguiente día hábil sin contar domingos
+const getSiguienteDiaHabil = (fechaStr) => {
+  // 1. Si no hay fecha, devolvemos hoy
+  if (!fechaStr) return new Date().toISOString().split('T')[0];
+
+  try {
+    // 2. LIMPIEZA: Tomamos solo la parte "YYYY-MM-DD" por si viene con hora
+    const fechaLimpia = typeof fechaStr === 'string' ? fechaStr.split('T')[0] : fechaStr;
+
+    // 3. Creamos la fecha a mediodía para evitar problemas de zona horaria
+    const fecha = new Date(`${fechaLimpia}T12:00:00`);
+
+    // 4. Validación de seguridad: Si la fecha es inválida, devolvemos hoy
+    if (isNaN(fecha.getTime())) {
+      console.warn("Fecha inválida recibida:", fechaStr);
+      return new Date().toISOString().split('T')[0];
+    }
+
+    // 5. Lógica de sumar días
+    fecha.setDate(fecha.getDate() + 1);
+
+    // 6. Si cae en Domingo (0), saltar al Lunes
+    if (fecha.getDay() === 0) {
+      fecha.setDate(fecha.getDate() + 1);
+    }
+
+    return fecha.toISOString().split('T')[0];
+    
+  } catch (error) {
+    console.error("Error calculando fecha:", error);
+    return new Date().toISOString().split('T')[0];
+  }
+};
+
+// Cuenta los días pero IGNORA los domingos
+const calcularDiasSinDomingos = (inicio, fin) => {
+  if (!inicio || !fin) return 0;
+
+  const fechaInicio = new Date(`${inicio}T12:00:00`);
+  const fechaFin = new Date(`${fin}T12:00:00`);
+  
+  if (fechaFin < fechaInicio) return 0;
+
+  let diasHabiles = 0;
+  let fechaActual = new Date(fechaInicio);
+
+  // Recorremos desde el inicio hasta el fin
+  while (fechaActual <= fechaFin) {
+    // Si el día actual NO es Domingo (0), lo contamos
+    if (fechaActual.getDay() !== 0) {
+      diasHabiles++;
+    }
+    // Pasamos al siguiente día
+    fechaActual.setDate(fechaActual.getDate() + 1);
+  }
+
+  return diasHabiles;
+};
 
 const MisPagos = () => {
   const navigate = useNavigate();
@@ -47,6 +105,8 @@ const MisPagos = () => {
   const rentaDiaria = resumen?.renta_diaria || 400;
   const polizaDiaria = resumen?.abono_poliza_mantenimiento ?? 100;
   const totalDiario = rentaDiaria + polizaDiaria;
+  const diasReales = calcularDiasSinDomingos(fechaInicio, fechaFin);
+  const diasSeleccionados = diasReales;
   const calcularDiasSeleccionados = (inicio, fin) => {
     const fechaInicioLocal = new Date(`${inicio}T00:00:00`);
     const fechaFinLocal = new Date(`${fin}T00:00:00`);
@@ -56,13 +116,50 @@ const MisPagos = () => {
     const diferencia = Math.floor((fechaFinLocal - fechaInicioLocal) / (1000 * 60 * 60 * 24));
     return Math.max(1, diferencia + 1);
   };
-  const diasSeleccionados = calcularDiasSeleccionados(fechaInicio, fechaFin);
-  const totalEstimado = diasSeleccionados * totalDiario;
+
+  const diasCalculados = calcularDiasSinDomingos(fechaInicio, fechaFin);
+    
+    // Si está marcado "Ponerse al tanto" y ya tenemos el resumen del servidor, usamos esos datos.
+    // Si no, usamos el cálculo normal de fechas.
+
+
+const totalEstimado = diasReales * (parseFloat(resumen?.renta_diaria || 0) + parseFloat(resumen?.abono_poliza_mantenimiento || 0));
 
   useEffect(() => {
     cargarPagos();
     cargarResumen();
   }, []);
+
+  // NUEVO USEEFFECT: Autocompletar fecha cuando llegue el resumen
+  useEffect(() => {
+      if (ponerseAlTanto && resumen?.ultimo_pago_aprobado) {
+        
+        // 1. FECHA INICIO: El día hábil después del último pago
+        const inicioCalculado = getSiguienteDiaHabil(resumen.ultimo_pago_aprobado);
+        
+        // 2. FECHA FIN: Hoy mismo
+        // (Usamos new Date() y ajustamos a string YYYY-MM-DD)
+        const hoy = new Date();
+        const finCalculado = hoy.toISOString().split('T')[0];
+
+        // Validamos que 'hoy' no sea menor que el inicio (por si pagó por adelantado)
+        if (new Date(finCalculado) < new Date(inicioCalculado)) {
+          // Si está al día, ponemos inicio y fin iguales (1 día por adelantado si quiere)
+          setFechaInicio(inicioCalculado);
+          setFechaFin(inicioCalculado);
+        } else {
+          // Si debe dinero, ponemos el rango completo
+          setFechaInicio(inicioCalculado);
+          setFechaFin(finCalculado);
+        }
+        
+      } else if (!ponerseAlTanto && resumen?.ultimo_pago_aprobado) {
+        // Si LO DESACTIVA, regresamos a pagar solo 1 día (el siguiente hábil)
+        const siguienteDia = getSiguienteDiaHabil(resumen.ultimo_pago_aprobado);
+        setFechaInicio(siguienteDia);
+        setFechaFin(siguienteDia);
+      }
+    }, [ponerseAlTanto, resumen]);
 
   const cargarPagos = async () => {
     try {
@@ -121,19 +218,45 @@ const MisPagos = () => {
     }
   };
 
-  const handleFechaInicioChange = (value) => {
-    setFechaInicio(value);
-    if (fechaFin < value) {
-      setFechaFin(value);
+const handleFechaInicioChange = (valor) => {
+    if (!valor) {
+      setFechaInicio('');
+      return;
     }
+
+    // 🟢 VALIDACIÓN DE DOMINGOS MANUAL
+    const fechaObj = new Date(`${valor}T12:00:00`);
+    const diaSemana = fechaObj.getDay();
+
+    if (diaSemana === 0) { // 0 = Domingo
+      // Puedes usar una alerta estándar o un toast si tienes configurado
+      alert("⛔ No se pueden iniciar pagos en domingo (Día inhábil). Se seleccionará el lunes.");
+      
+      //  Auto-corregir al lunes en lugar de solo bloquear
+      fechaObj.setDate(fechaObj.getDate() + 1);
+      setFechaInicio(fechaObj.toISOString().split('T')[0]);
+      return;
+    }
+
+    setFechaInicio(valor);
   };
 
-  const handleFechaFinChange = (value) => {
-    if (value < fechaInicio) {
-      setFechaInicio(value);
-    }
-    setFechaFin(value);
-  };
+  const handleFechaFinChange = (valor) => {
+      if (!valor) {
+        setFechaFin('');
+        return;
+      }
+
+      // 🟢 VALIDACIÓN: Prohibir elegir Domingo como día final
+      const fechaObj = new Date(`${valor}T12:00:00`);
+      if (fechaObj.getDay() === 0) {
+        alert("⛔ No se puede seleccionar domingo como fecha final (No laboral). Por favor selecciona sábado o lunes.");
+        // Limpiamos el input o no hacemos nada
+        return; 
+      }
+
+      setFechaFin(valor);
+    };
 
   const handleSubmitPago = async (e) => {
     e.preventDefault();
@@ -147,12 +270,14 @@ const MisPagos = () => {
       setRegistrando(true);
       
       const formData = new FormData();
+      formData.append('notas', notas || '');
+
       if (!ponerseAlTanto) {
         formData.append('fecha_inicio', fechaInicio);
         formData.append('fecha_fin', fechaFin);
       }
+
       formData.append('comprobante', comprobante);
-      formData.append('notas', notas);
 
       const respuesta = ponerseAlTanto
         ? await conductorService.registrarPagoMultiple(formData)
@@ -178,9 +303,11 @@ const MisPagos = () => {
   const totalPagado = resumen?.total_pagado || 0;
   const totalPendiente = resumen?.total_pendiente || 0;
   const totalPlan = resumen?.total_plan || (totalPagado + totalPendiente);
-  const progresoPagos = totalPlan > 0
-    ? Math.min(100, Math.round((totalPagado / totalPlan) * 100))
-    : 0;
+  const progresoPagos = resumen?.porcentaje_pagado !== undefined && resumen?.porcentaje_pagado !== null
+      ? Math.min(100, parseFloat(resumen.porcentaje_pagado))
+      : (totalPlan > 0
+          ? Math.min(100, Math.round((totalPagado / totalPlan) * 100))
+          : 0);
   const pagosRealizados = resumen?.total_pagos_realizados || 0;
   const estadoProgreso = progresoPagos >= 100 ? 'Completado' : 'En progreso';
 
@@ -286,7 +413,7 @@ const MisPagos = () => {
               className="mt-1 h-4 w-4 rounded border-white/20 bg-white/5 text-cyan-500 focus:ring-cyan-500"
             />
             <label htmlFor="ponerse-al-tanto" className="text-sm text-gray-200">
-              <span className="font-semibold text-white">Ponerse al tanto:</span> registra todos los adeudos pendientes en una sola transacción.
+              <span className="font-semibold text-white">Ponerse al corriente:</span> registra todos los adeudos pendientes en una sola transacción.
               <span className="block text-xs text-gray-400 mt-1">
                 Se registrará un pago por cada día pendiente hasta la fecha actual.
               </span>
@@ -332,26 +459,35 @@ const MisPagos = () => {
                 </div>
               </div>
 
-              {/* Rango de Pago */}
               <div>
                 <label className="block text-white font-semibold mb-2 flex items-center gap-2">
                   <Calendar className="w-5 h-5 text-cyan-400" />
                   Rango de Pago
                 </label>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <input
-                    type="date"
-                    value={fechaInicio}
-                    onChange={(e) => handleFechaInicioChange(e.target.value)}
-                    className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white disabled:opacity-60"
-                    required
-                    disabled={ponerseAlTanto}
-                  />
+                  
+                  {/* 🔒 INPUT INICIO: BLOQUEADO (READONLY) */}
+                  <div className="relative">
+                    <input
+                      type="date"
+                      value={fechaInicio}
+                      readOnly // <--- ESTO LO BLOQUEA
+                      className="w-full p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-gray-400 cursor-not-allowed" // Estilo visual de bloqueado
+                      required
+                    />
+                    {/* Tooltip opcional para explicar por qué está bloqueado */}
+                    <span className="text-[13px] text-gray-500 absolute bottom-[-25px] left-1">
+                      * Automático (Día siguiente al último pago)
+                    </span>
+                  </div>
+
+                  {/* 🟢 INPUT FIN: CON VALIDACIÓN DE DOMINGOS */}
                   <input
                     type="date"
                     value={fechaFin}
-                    onChange={(e) => handleFechaFinChange(e.target.value)}
-                    className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white disabled:opacity-60"
+                    onChange={(e) => handleFechaFinChange(e.target.value)} // <--- Llama a nuestra validación
+                    min={fechaInicio} // No puedes elegir una fecha anterior al inicio
+                    className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white disabled:opacity-60 focus:border-cyan-400 focus:outline-none transition-colors"
                     required
                     disabled={ponerseAlTanto}
                   />
@@ -429,7 +565,7 @@ const MisPagos = () => {
       <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
         <div className="flex items-center justify-between gap-3 mb-4">
           <h2 className="text-2xl font-bold text-white">Historial de Pagos</h2>
-          <p className="text-sm text-gray-300">Mostrando últimos 30 días y adeudos pendientes</p>
+          <p className="text-sm text-gray-300">Historial completo de pagos</p>
         </div>
         
         {pagos.length === 0 ? (

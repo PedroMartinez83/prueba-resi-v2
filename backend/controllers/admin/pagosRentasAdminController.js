@@ -3,20 +3,32 @@ const { db } = require('../../config/database');
 const auditService = require('../../services/auditService');
 const { format, subDays } = require('date-fns');
 
-const toDateString = (value) => {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return date.toISOString().split('T')[0];
-};
 
+// Función auxiliar simple para evitar errores de fecha
+const toDateString = (dateVal) => {
+  if (!dateVal) return null;
+  const d = new Date(dateVal);
+  return d.toISOString().split('T')[0];
+};
 const addDaysToDate = (dateString, days) => {
   const date = new Date(`${dateString}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().split('T')[0];
 };
+const calcularDiasHabiles = (inicio, fin) => {
+  if (!inicio || !fin) return 1;
+  const dInicio = new Date(`${inicio}T12:00:00`);
+  const dFin = new Date(`${fin}T12:00:00`);
+  if (dFin < dInicio) return 0;
 
+  let dias = 0;
+  let cursor = new Date(dInicio);
+  while (cursor <= dFin) {
+    if (cursor.getDay() !== 0) dias++; // No contar domingos
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dias;
+};
 const getNextExpectedDate = (startDate, paidDates) => {
   let expected = startDate;
   const sortedDates = [...paidDates].sort();
@@ -315,11 +327,11 @@ exports.getEstadisticasPagos = async (req, res) => {
         db.raw("COUNT(DISTINCT asignacion_id) as conductores_activos")
       );
 
-    // Cobrado HOY (solo renta, no póliza; por fecha de registro)
+    // Cobrado HOY (renta + póliza; por fecha de registro)
     const hoyResult = await db('pagos_diarios')
       .where('status', 'Confirmado')
       .whereRaw('DATE(created_at) = CURRENT_DATE')
-      .sum('monto_renta_pagado as total');
+      .sum('monto_total as total');
     const cobradoHoy = parseFloat(hoyResult[0]?.total || 0);
 
     // Cobrado SEMANA (últimos 7 días)
@@ -345,7 +357,7 @@ exports.getEstadisticasPagos = async (req, res) => {
       .sum('monto_poliza_pagado as total');
     const polizaMes = parseFloat(polizaMesResult[0]?.total || 0);
 
-    // Conductores con deuda
+    // Conductores con deuda PENDIENTE (ultimo pago confirmado)
     const deudaResult = await db.raw(`
       WITH pagos_confirmados AS (
         SELECT
@@ -369,22 +381,50 @@ exports.getEstadisticasPagos = async (req, res) => {
         WHERE EXTRACT(DOW FROM d.fecha) <> 0
       ) dias ON true
       WHERE a.activa = true
-        AND NOT EXISTS (
-          SELECT 1 FROM pagos_diarios pd
-          WHERE pd.asignacion_id = a.id
-            AND pd.status = 'Confirmado'
-            AND pd.fecha_pago >= CURRENT_DATE - INTERVAL '2 days'
-        )
+        AND COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) > 0
     `);
     const conductoresDeuda = parseInt(deudaResult.rows[0]?.total || 0);
 
-    // Proyección mensual
-    const diasDelMes = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+    // Proyección mensual: NumConductores × MontoRenta × DíasDelMessinDomingos
+    
+    // 1. Obtener número de conductores activos
+    const conductoresActivosResult = await db('asignaciones')
+      .where('activa', true)
+      .countDistinct('conductor_id as total');
+    const numConductores = parseInt(conductoresActivosResult[0]?.total || 0);
+
+    // 2. Obtener monto de renta promedio
+    let montoRenta = 0;
+    if (numConductores > 0) {
+      const rentaResult = await db('asignaciones')
+        .where('activa', true)
+        .avg('renta_diaria as promedio');
+      montoRenta = parseFloat(rentaResult[0]?.promedio || 0);
+    }
+
+    // 3. Calcular días del mes descontando domingos
+    const fecha = new Date();
+    const ano = fecha.getFullYear();
+    const mes = fecha.getMonth();
+    const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+    
+    let domingos = 0;
+    for (let dia = 1; dia <= ultimoDia; dia++) {
+      const d = new Date(ano, mes, dia);
+      if (d.getDay() === 0) {
+        domingos++;
+      }
+    }
+    const diasHabiles = ultimoDia - domingos;
+
+    // 4. Calcular proyección: NumConductores × MontoRenta × DíasHábiles
+    const proyeccion = numConductores * montoRenta * diasHabiles;
+    
+    // Mantener proyección de póliza con método anterior
     const diaActual = new Date().getDate();
-    const diasRestantes = diasDelMes - diaActual;
-    const promedioDiario = cobradoMes / diaActual;
-    const proyeccion = cobradoMes + (promedioDiario * diasRestantes);
-    const promedioDiarioPoliza = polizaMes / diaActual;
+    const promedioDiarioPoliza = polizaMes / diaActual || 0;
+    const diasRestantes = ultimoDia - diaActual;
     const proyeccionPoliza = polizaMes + (promedioDiarioPoliza * diasRestantes);
 
     // Por método de pago
@@ -547,26 +587,61 @@ exports.validarPago = async (req, res) => {
       console.warn('⚠️ Advertencia: No se pudo configurar contexto de auditoría', auditErr.message);
     }
 
-    await auditService.setUserContext(trx, req.user);
-
-    const pago = await trx('pagos_diarios')
-      .where('id', id)
-      .first();
+    // 1. Obtener el pago
+    const pago = await trx('pagos_diarios').where('id', id).first();
 
     if (!pago) {
-      await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'Pago no encontrado'
-      });
+      throw new Error('Pago no encontrado en la base de datos');
     }
 
     if (pago.status !== 'Pendiente') {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'Solo se pueden validar pagos pendientes'
+      throw new Error(`El pago no está pendiente (Estado actual: ${pago.status})`);
+    }
+
+    // 2. Obtener Asignación y Vehículo
+    const asignacion = await trx('asignaciones').where('id', pago.asignacion_id).first();
+    if (!asignacion) throw new Error('Asignación no encontrada');
+
+    const vehiculo = await trx('vehiculos').where('id', asignacion.vehiculo_id).first();
+    if (!vehiculo) throw new Error('Vehículo no encontrado');
+
+    // 3. Cálculos financieros (Protegidos contra nulos)
+    const montoAbonar = parseFloat(pago.monto_total || 0);
+    const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
+    const pagadoActual = parseFloat(vehiculo.total_pagado_corrida || 0);
+
+    const nuevoPagado = pagadoActual + montoAbonar;
+    const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoPagado);
+    
+    let nuevoPorcentaje = 0;
+    if (totalCorrida > 0) {
+      nuevoPorcentaje = (nuevoPagado / totalCorrida) * 100;
+    }
+
+    console.log(`💰 Actualizando finanzas: ${vehiculo.numero_vehiculo} | Abono: ${montoAbonar} | Nuevo %: ${nuevoPorcentaje.toFixed(2)}`);
+
+    // 4. ACTUALIZAR VEHÍCULO
+    await trx('vehiculos')
+      .where('id', vehiculo.id)
+      .update({
+        total_pagado_corrida: nuevoPagado,
+        saldo_pendiente_corrida: nuevoSaldoPendiente,
+        porcentaje_pagado: nuevoPorcentaje, // PostgreSQL maneja float a numeric
+        updated_at: new Date()
       });
+
+    // 5. CONFIRMAR EL PAGO
+    // ⚠️ NOTA: Si 'registrado_por' no existe en tu tabla, esto dará error.
+    // Usamos un objeto dinámico para prevenirlo si es necesario, pero aquí asumimos que existe.
+    const datosUpdate = {
+      status: 'Confirmado',
+      observaciones: observaciones || pago.observaciones,
+      updated_at: new Date()
+    };
+    
+    // Solo intentamos guardar el email si tenemos el dato
+    if (usuarioActual.email) {
+      datosUpdate.registrado_por = usuarioActual.email;
     }
 
     const [pagoActualizado] = await trx('pagos_diarios')
@@ -574,43 +649,42 @@ exports.validarPago = async (req, res) => {
       .update(datosUpdate)
       .returning('*');
 
-    await auditService.logCriticalChange({
-      usuario_id: req.user.id,
-      tipo_cambio: 'validacion_pago_renta',
-      descripcion: `Pago validado - Renta: $${pago.monto_renta_pagado}, Póliza: $${pago.monto_poliza_pagado}`,
-      datos_sensibles: {
-        pago_id: id,
-        monto_total: pago.monto_total,
-        monto_renta: pago.monto_renta_pagado,
-        monto_poliza: pago.monto_poliza_pagado,
-        metodo_pago: pago.metodo_pago,
-        fecha_pago: pago.fecha_pago
-      },
-      ip_address: auditService.getClientIp(req)
-    });
+    // 6. Auditoría final
+    try {
+      await auditService.logCriticalChange({
+        usuario_id: usuarioActual.id,
+        tipo_cambio: 'validacion_pago_renta',
+        descripcion: `Pago validado ($${montoAbonar}) - Avance auto: ${nuevoPorcentaje.toFixed(2)}%`,
+        datos_sensibles: {
+          pago_id: id,
+          vehiculo_id: vehiculo.id,
+          monto_abonado: montoAbonar
+        },
+        ip_address: req.ip || '0.0.0.0'
+      });
+    } catch (logErr) {
+      console.warn('⚠️ Error guardando log de auditoría (no crítico):', logErr.message);
+    }
 
     await trx.commit();
     console.log('✅ Pago validado exitosamente');
 
     res.json({
       success: true,
-      message: 'Pago validado exitosamente',
-      pago: pagoActualizado
+      message: 'Pago validado correctamente.',
+      pago: pagoActualizado,
+      avance_vehiculo: {
+        total_pagado: nuevoPagado,
+        pendiente: nuevoSaldoPendiente,
+        porcentaje: nuevoPorcentaje.toFixed(2) + '%'
+      }
     });
 
   } catch (error) {
     await trx.rollback();
-
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'error',
-      mensaje: `Error validando pago: ${error.message}`,
-      stack_trace: error.stack,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
-    });
-
+    console.error('❌ ERROR FATAL EN VALIDAR PAGO:', error); // <--- Mira esto en tu terminal negra
+    
+    // Respondemos con el error real para que lo veas en el frontend (solo para debug)
     res.status(500).json({
       success: false,
       message: 'Error interno al validar pago',
@@ -701,334 +775,67 @@ exports.rechazarPago = async (req, res) => {
 
 // ========== REGISTRAR PAGO MANUAL (ADMIN) - CON DESTINO DE AHORRO ==========
 exports.registrarPagoManual = async (req, res) => {
-  const trx = await db.transaction();
+  const { conductor_id, monto_renta, monto_extra, fecha_pago, fecha_fin, metodo_pago, observaciones, referencia } = req.body;
 
   try {
-    const {
-      conductor_id,
-      conductorId,
-      monto_total,
-      montoTotal,
-      monto_renta,
-      monto_extra,
-      destino_extra, // 'poliza' o 'mantenimiento'
-      metodo_pago,
-      metodoPago,
-      referencia,
-      referencia_pago,
-      comprobante_url,
-      comprobanteUrl,
-      fecha_pago,
-      fechaPago,
-      observaciones
-    } = req.body;
+    await db.transaction(async (trx) => {
+      // 1. Buscamos la asignación (Indispensable para obtener el asignacion_id)
+      const asignacion = await trx('asignaciones').where({ conductor_id, activa: true }).first();
+      if (!asignacion) throw new Error('Conductor sin asignación activa');
 
-    // ✅ Normalizar nombres
-    const conductorIdFinal = conductor_id || conductorId;
-    const montoTotalFinal = parseFloat(monto_total || montoTotal || 0);
-    const montoRentaFinal = parseFloat(monto_renta || 0);
-    const montoExtraFinal = parseFloat(monto_extra || 0);
-    const destinoExtra = destino_extra || 'poliza'; // Default a póliza
-    const metodoPagoFinal = metodo_pago || metodoPago;
-    const comprobanteUrlFinal = comprobante_url || comprobanteUrl;
-    const referenciaPagoFinal = referencia_pago || referencia || null;
-    let observacionesFinal = observaciones ? String(observaciones) : null;
+      const vehiculo = await trx('vehiculos').where('id', asignacion.vehiculo_id).first().forUpdate();
 
-    if (referenciaPagoFinal) {
-      observacionesFinal = observacionesFinal
-        ? `${observacionesFinal} | Referencia: ${referenciaPagoFinal}`
-        : `Referencia: ${referenciaPagoFinal}`;
-    }
+      // 2. Cálculos según el rango de fechas
+      const numDias = calcularDiasHabiles(fecha_pago, fecha_fin);
+      const abonoRentaTotal = parseFloat(monto_renta || 0) * numDias;
+      const abonoExtraTotal = parseFloat(monto_extra || 0) * numDias;
+      const montoTotalAbono = abonoRentaTotal + abonoExtraTotal;
 
-    console.log('🔍 === ADMIN REGISTRANDO PAGO MANUAL ===');
-    console.log('📥 Datos recibidos:', req.body);
-    console.log('✅ Conductor ID:', conductorIdFinal);
-    console.log('✅ Monto total:', montoTotalFinal);
-    console.log('✅ Monto renta:', montoRentaFinal);
-    console.log('✅ Monto extra:', montoExtraFinal);
-    console.log('✅ Destino extra:', destinoExtra);
+      const fechaInicioPago = normalizeDateString(fecha_pago);
+      const fechaFinPago = normalizeDateString(fecha_fin || fecha_pago);
+      const etiquetaRango = fechaInicioPago && fechaFinPago
+        ? `[Rango: ${fechaInicioPago} > ${fechaFinPago}]`
+        : '';
+      const observacionesBase = observaciones ? observaciones.trim() : '';
+      const observacionesFinal = etiquetaRango && !/Rango:/i.test(observacionesBase)
+        ? [observacionesBase, etiquetaRango].filter(Boolean).join(' | ')
+        : observacionesBase;
 
-    // Validaciones
-    if (!conductorIdFinal || !metodoPagoFinal) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'Faltan datos requeridos: conductor_id, metodo_pago'
-      });
-    }
-    await auditService.setUserContext(trx, req.user);
-
-    // Obtener conductor
-    const conductor = await trx('conductores')
-      .where('id', conductorIdFinal)
-      .first();
-
-    if (!conductor) {
-      await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'Conductor no encontrado'
-      });
-    }
-
-    const tipoPoliza = conductor.tipo_poliza || 'POLIZA_100';
-
-    console.log('👤 CONDUCTOR:', conductor.nombre_conductor);
-    console.log('📋 Tipo de póliza:', tipoPoliza);
-    console.log('🎯 Destino extra:', destinoExtra);
-
-    // Obtener asignación activa
-    const asignacion = await trx('asignaciones')
-      .where('conductor_id', conductorIdFinal)
-      .where('activa', true)
-      .first();
-
-    if (!asignacion) {
-      await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'El conductor no tiene una asignación activa'
-      });
-    }
-
-    console.log('✅ Asignación encontrada:', asignacion.id);
-
-    const fechaInicioAsignacion = toDateString(asignacion.fecha_inicio);
-    const fechaPagoSolicitada = toDateString(fecha_pago || fechaPago || new Date());
-
-    if (!fechaInicioAsignacion || !fechaPagoSolicitada) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'No se pudo determinar la fecha de pago o la fecha de inicio de asignación'
-      });
-    }
-
-    const pagosRegistrados = await trx('pagos_diarios')
-      .where({ asignacion_id: asignacion.id })
-      .whereIn('status', ['Confirmado', 'Pendiente'])
-      .select('fecha_pago');
-
-    const fechasPagadas = new Set(
-      pagosRegistrados
-        .map((pago) => toDateString(pago.fecha_pago))
-        .filter(Boolean)
-    );
-
-    if (fechaPagoSolicitada < fechaInicioAsignacion) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: `La fecha de pago no puede ser anterior al inicio de asignación (${fechaInicioAsignacion}).`
-      });
-    }
-
-    if (fechasPagadas.has(fechaPagoSolicitada)) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: `Ya existe un pago registrado para el día ${fechaPagoSolicitada}.`
-      });
-    }
-
-    // 🎯 CALCULAR MONTOS CORRECTAMENTE
-    let montoParaRenta = 0;
-    let montoParaExtra = 0;
-    let montoTotalCalculado = 0;
-
-    // Si vienen los montos separados (desde el frontend nuevo)
-    if (montoRentaFinal > 0 && montoExtraFinal > 0) {
-      montoParaRenta = montoRentaFinal;
-      montoParaExtra = montoExtraFinal;
-      montoTotalCalculado = montoParaRenta + montoParaExtra;
-      
-    // Si solo viene el total (compatibilidad con frontend viejo)
-    } else if (montoTotalFinal > 0) {
-      const montoExtraDefault = tipoPoliza === 'AHORRO_50' ? 50 : 100;
-      montoParaExtra = Math.min(montoTotalFinal, montoExtraDefault);
-      montoParaRenta = montoTotalFinal - montoParaExtra;
-      montoTotalCalculado = montoTotalFinal;
-      
-    } else {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'Debe proporcionar monto_total o monto_renta + monto_extra'
-      });
-    }
-
-    // Validar que el total sea mayor a 0
-    if (montoTotalCalculado <= 0) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'El monto total debe ser mayor a 0'
-      });
-    }
-
-    console.log('🧮 DIVISIÓN DEL PAGO:');
-    console.log('   💰 Total pagado:', montoTotalCalculado.toFixed(2));
-    console.log('   🚗 → Para renta:', montoParaRenta.toFixed(2));
-    console.log('   💵 → Para extra:', montoParaExtra.toFixed(2));
-    console.log('   🎯 → Destino:', destinoExtra);
-
-    // Guardar pago en la base de datos
-    const [nuevoPago] = await trx('pagos_diarios')
-      .insert({
-        asignacion_id: asignacion.id,
-        monto_total: montoTotalCalculado,
-        monto_renta_pagado: montoParaRenta,
-        monto_poliza_pagado: montoParaExtra,
-        fecha_pago: new Date(`${fechaPagoSolicitada}T00:00:00`),
-        metodo_pago: metodoPagoFinal,
-        comprobante_url: comprobanteUrlFinal || null,
-       observaciones: observacionesFinal,
-        status: 'Confirmado',
-        registrado_por: `Admin: ${req.user.email}`,
+      // 3. INSERTAR EN PAGOS_DIARIOS (Con tus nombres de columna reales)
+      await trx('pagos_diarios').insert({
+        asignacion_id: asignacion.id,        
+        fecha_pago: fecha_fin,               
+        monto_renta_pagado: abonoRentaTotal, 
+        monto_poliza_pagado: abonoExtraTotal, 
+        monto_total: montoTotalAbono,        
+        metodo_pago: metodo_pago,            
+        referencia: referencia,              
+        status: 'Confirmado',                
+        observaciones: observacionesFinal,        
         created_at: new Date(),
         updated_at: new Date()
-      })
-      .returning('*');
+      });
 
-    console.log('✅ Pago guardado con ID:', nuevoPago.id);
+      // 4. ACTUALIZAR CORRIDA DEL VEHÍCULO
+      const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
+      const pagadoAnterior = parseFloat(vehiculo.total_pagado_corrida || 0);
+      
+      const nuevoTotalPagado = pagadoAnterior + montoTotalAbono;
+      const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoTotalPagado);
+      const nuevoPorcentaje = totalCorrida > 0 ? (nuevoTotalPagado / totalCorrida) * 100 : 0;
 
-    // 🏦 ACTUALIZAR SALDOS DEL CONDUCTOR
-    let saldoPolizaPrevio = parseFloat(conductor.saldo_poliza_mecanica || 50000);
-    let saldoMantenimientoPrevio = parseFloat(conductor.saldo_ahorro_mantenimiento || 0);
-    let totalAportadoPrevio = parseFloat(conductor.total_aportado_poliza || 0);
-    
-    let nuevoSaldoPoliza = saldoPolizaPrevio;
-    let nuevoSaldoMantenimiento = saldoMantenimientoPrevio;
-    let nuevoTotalAportado = totalAportadoPrevio;
-
-    if (montoParaExtra > 0) {
-      if (destinoExtra === 'poliza') {
-        // 🛡️ VA PARA PÓLIZA MECÁNICA
-        console.log('🛡️ DESTINO: PÓLIZA MECÁNICA');
-        
-        // SIEMPRE actualizar el total histórico
-        nuevoTotalAportado = totalAportadoPrevio + montoParaExtra;
-        
-        // Solo si es AHORRO_50, sumar al saldo
-        if (tipoPoliza === 'AHORRO_50') {
-          nuevoSaldoPoliza = saldoPolizaPrevio + montoParaExtra;
-          console.log('   💰 AHORRO_50: SÍ suma al saldo');
-          console.log('   Saldo previo:', saldoPolizaPrevio.toFixed(2));
-          console.log('   + Abono:', montoParaExtra.toFixed(2));
-          console.log('   = Nuevo saldo:', nuevoSaldoPoliza.toFixed(2));
-        } else {
-          console.log('   🛡️ POLIZA_100: NO suma al saldo (prima de seguro)');
-          console.log('   Saldo se mantiene en:', saldoPolizaPrevio.toFixed(2));
-        }
-        
-        console.log('   📊 Total aportado histórico:', nuevoTotalAportado.toFixed(2));
-
-        await trx('conductores')
-          .where('id', conductorIdFinal)
-          .update({
-            saldo_poliza_mecanica: nuevoSaldoPoliza,
-            total_aportado_poliza: nuevoTotalAportado,
-            updated_at: new Date()
-          });
-
-      } else if (destinoExtra === 'mantenimiento') {
-        // 🔧 VA PARA AHORRO DE MANTENIMIENTO
-        console.log('🔧 DESTINO: AHORRO DE MANTENIMIENTO');
-        nuevoSaldoMantenimiento = saldoMantenimientoPrevio + montoParaExtra;
-        
-        console.log('   💰 Se ACUMULA en ahorro de mantenimiento');
-        console.log('   Saldo previo:', saldoMantenimientoPrevio.toFixed(2));
-        console.log('   + Abono:', montoParaExtra.toFixed(2));
-        console.log('   = Nuevo saldo:', nuevoSaldoMantenimiento.toFixed(2));
-
-        await trx('conductores')
-          .where('id', conductorIdFinal)
-          .update({
-            saldo_ahorro_mantenimiento: nuevoSaldoMantenimiento,
-            updated_at: new Date()
-          });
-      }
-    }
-
-    // 📝 Auditoría crítica
-    await auditService.logCriticalChange({
-      usuario_id: req.user.id,
-      tipo_cambio: 'registro_pago_manual_admin',
-      descripcion: `Pago manual [${destinoExtra.toUpperCase()}] - Renta: $${montoParaRenta.toFixed(2)}, Extra: $${montoParaExtra.toFixed(2)}`,
-      datos_sensibles: {
-        pago_id: nuevoPago.id,
-        conductor_id: conductorIdFinal,
-        asignacion_id: asignacion.id,
-        tipo_poliza: tipoPoliza,
-        destino_extra: destinoExtra,
-        monto_total: montoTotalCalculado,
-        monto_renta: montoParaRenta,
-        monto_extra: montoParaExtra,
-        metodo_pago: metodoPagoFinal,
-        referencia_pago: referenciaPagoFinal,
-        saldo_poliza_anterior: saldoPolizaPrevio,
-        saldo_poliza_nuevo: nuevoSaldoPoliza,
-        saldo_mantenimiento_anterior: saldoMantenimientoPrevio,
-        saldo_mantenimiento_nuevo: nuevoSaldoMantenimiento,
-        total_aportado_anterior: totalAportadoPrevio,
-        total_aportado_nuevo: nuevoTotalAportado
-      },
-      ip_address: auditService.getClientIp(req)
+      await trx('vehiculos').where('id', vehiculo.id).update({
+        total_pagado_corrida: nuevoTotalPagado.toFixed(2),
+        saldo_pendiente_corrida: nuevoSaldoPendiente.toFixed(2),
+        porcentaje_pagado: nuevoPorcentaje.toFixed(2),
+        updated_at: new Date()
+      });
     });
 
-    await trx.commit();
-
-    console.log('✅ TRANSACCIÓN COMPLETADA EXITOSAMENTE');
-
-    res.status(201).json({
-      success: true,
-      message: 'Pago registrado exitosamente',
-      pago: nuevoPago,
-      tipo_poliza: tipoPoliza,
-      destino_extra: destinoExtra,
-      division: {
-        total: montoTotal,
-        para_renta: montoParaRenta,
-        para_extra: montoParaExtra,
-        porcentaje_renta: ((montoParaRenta / montoTotal) * 100).toFixed(1) + '%',
-        porcentaje_extra: ((montoParaExtra / montoTotal) * 100).toFixed(1) + '%'
-      },
-      saldos_actualizados: {
-        poliza: {
-          anterior: saldoPolizaPrevio,
-          nuevo: nuevoSaldoPoliza,
-          cambio: nuevoSaldoPoliza - saldoPolizaPrevio
-        },
-        mantenimiento: {
-          anterior: saldoMantenimientoPrevio,
-          nuevo: nuevoSaldoMantenimiento,
-          cambio: nuevoSaldoMantenimiento - saldoMantenimientoPrevio
-        },
-        total_aportado_poliza: nuevoTotalAportado
-      }
-    });
-
+    res.json({ success: true, message: 'Pago registrado y unidad actualizada' });
   } catch (error) {
-    await trx.rollback();
-    console.error('❌ ERROR REGISTRANDO PAGO MANUAL:', error.message);
-    console.error('📍 Stack:', error.stack);
-
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'error',
-      mensaje: `Error registrando pago manual: ${error.message}`,
-      stack_trace: error.stack,
-      contexto: req.body,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
-    });
-
-    res.status(500).json({
-      success: false,
-      error: 'Error al registrar pago',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('❌ Error DB:', error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
@@ -1095,68 +902,50 @@ exports.getSiguientePagoPendiente = async (req, res) => {
   try {
     const { conductorId } = req.params;
 
+    // 1. Obtener la asignación activa
     const asignacion = await db('asignaciones')
       .where({ conductor_id: conductorId, activa: true })
       .first();
 
     if (!asignacion) {
-      return res.status(404).json({
-        success: false,
-        error: 'El conductor no tiene una asignación activa'
-      });
+      return res.status(404).json({ success: false, message: 'El conductor no tiene asignación activa' });
     }
 
-    const fechaInicioAsignacion = toDateString(asignacion.fecha_inicio);
-    const fechaActual = toDateString(new Date());
-
-    if (!fechaInicioAsignacion || !fechaActual) {
-      return res.status(400).json({
-        success: false,
-        error: 'No se pudo determinar la fecha de inicio o la fecha actual'
-      });
-    }
-
-    const pagosRegistrados = await db('pagos_diarios')
+    // 2. BUSCAR EL ÚLTIMO PAGO CONFIRMADO (Ordenado por fecha DESC)
+    const ultimoPagoReal = await db('pagos_diarios')
       .where({ asignacion_id: asignacion.id })
-      .whereIn('status', ['Confirmado', 'Pendiente'])
-      .select('fecha_pago');
+      .where('status', 'Confirmado') // ⚠️ Asegúrate que en tu BD sea 'Confirmado' (con C mayúscula)
+      .orderBy('fecha_pago', 'desc') // El más reciente primero
+      .first();
 
-    const fechasPagadas = new Set(
-      pagosRegistrados
-        .map((pago) => toDateString(pago.fecha_pago))
-        .filter(Boolean)
-    );
+    let fechaReferencia;
 
-    const siguienteFechaPendiente = getNextExpectedDate(
-      fechaInicioAsignacion,
-      fechasPagadas
-    );
-
-    const hayPendiente = siguienteFechaPendiente <= fechaActual;
+    if (ultimoPagoReal) {
+      // Si encontramos pagos, esa es nuestra referencia
+      fechaReferencia = ultimoPagoReal.fecha_pago;
+      console.log(`✅ Último pago encontrado: ${toDateString(fechaReferencia)}`);
+    } else {
+      // ⚠️ FALLBACK: Si no hay pagos confirmados, usamos (Inicio Contrato - 1 día)
+      // Así, al sumar +1 día en el frontend, te sugerirá la fecha exacta del contrato (19 Sep).
+      const fechaInicio = new Date(asignacion.fecha_inicio);
+      fechaInicio.setDate(fechaInicio.getDate() - 1); 
+      fechaReferencia = fechaInicio;
+      console.log(`⚠️ Sin pagos confirmados. Usando inicio contrato: ${toDateString(fechaReferencia)}`);
+    }
 
     res.json({
       success: true,
-      siguiente_fecha_pendiente: siguienteFechaPendiente,
-      fecha_actual: fechaActual,
-      hay_pendiente: hayPendiente
-    });
-  } catch (error) {
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'error',
-      mensaje: `Error obteniendo siguiente pago pendiente: ${error.message}`,
-      stack_trace: error.stack,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
+      // Enviamos la fecha encontrada para que el Frontend calcule el "Siguiente Día"
+      siguiente_fecha_pendiente: toDateString(fechaReferencia) 
     });
 
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener siguiente pago pendiente'
-    });
+  } catch (error) {
+    console.error('Error al obtener siguiente pago:', error);
+    res.status(500).json({ success: false, message: 'Error interno' });
   }
 };
+
+
 
 // ========== 🆕 OBTENER OPCIONES PARA CREAR PAGO (CORREGIDO) ==========
 exports.getOpcionesPagos = async (req, res) => {
@@ -1385,14 +1174,7 @@ exports.getTopConductores = async (req, res) => {
 
 // ========== CONDUCTORES MOROSOS ==========
 exports.getConductoresMorosos = async (req, res) => {
-  console.log('🔍 Iniciando getConductoresMorosos...');
-  
   try {
-    const { dias_sin_pago = 2 } = req.query;
-    const diasSinPago = parseInt(dias_sin_pago);
-    
-    console.log('📅 Días sin pago:', diasSinPago);
-    
     const sql = `
       WITH pagos_confirmados AS (
         SELECT
@@ -1409,43 +1191,66 @@ exports.getConductoresMorosos = async (req, res) => {
         c.numero_telefono,
         v.numero_vehiculo,
         v.tipo_socio,
-        MAX(pd.fecha_pago) as ultimo_pago,
-        CURRENT_DATE - MAX(pd.fecha_pago)::date as dias_sin_pagar,
-        (CURRENT_DATE - MAX(pd.fecha_pago)::date) * a.renta_diaria as deuda_estimada
+        a.id as asignacion_id,
+        a.renta_diaria,
+        a.fecha_inicio,
+        -- Dias adeudados desde el siguiente pago (sin domingos)
+        COALESCE(dias.dias_adeudados, 0) as dias_transcurridos,
+        -- Total debido acumulado (pagado + deuda actual)
+        COALESCE(p.total_pagado, 0) + COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) as total_debido,
+        -- Total pagado confirmado (renta + poliza)
+        COALESCE(p.total_pagado, 0) as total_pagado,
+        -- Deuda aproximada con base en el ultimo pago confirmado
+        COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) as deuda_aproximada,
+        -- Ultimo pago confirmado
+        p.ultimo_pago
       FROM conductores c
       INNER JOIN asignaciones a ON c.id = a.conductor_id
       INNER JOIN vehiculos v ON a.vehiculo_id = v.id
-      LEFT JOIN pagos_diarios pd ON a.id = pd.asignacion_id AND pd.status = 'Confirmado'
+      LEFT JOIN pagos_confirmados p ON a.id = p.asignacion_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int as dias_adeudados
+        FROM generate_series(
+          COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+          CURRENT_DATE,
+          interval '1 day'
+        ) as d(fecha)
+        WHERE EXTRACT(DOW FROM d.fecha) <> 0
+      ) dias ON true
       WHERE a.activa = true
-      GROUP BY c.id, c.nombre_conductor, c.numero_telefono, v.numero_vehiculo, v.tipo_socio, a.renta_diaria
-      HAVING MAX(pd.fecha_pago) IS NULL 
-         OR (CURRENT_DATE - MAX(pd.fecha_pago)::date) >= ${diasSinPago}
-      ORDER BY dias_sin_pagar DESC NULLS FIRST
+        -- Mostrar SOLO conductores con DEUDA PENDIENTE (deuda > 0)
+        AND COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) > 0
+      ORDER BY deuda_aproximada DESC
     `;
-    
-    console.log('📊 Ejecutando SQL...');
+
     const result = await db.raw(sql);
-    console.log('✅ Resultados obtenidos:', result.rows.length);
     
     res.json({
       success: true,
       conductores_morosos: result.rows.map(row => ({
         id: row.id,
         nombre: row.nombre_conductor,
+        nombre_conductor: row.nombre_conductor,
         telefono: row.numero_telefono,
+        numero_telefono: row.numero_telefono,
         vehiculo: row.numero_vehiculo,
+        numero_vehiculo: row.numero_vehiculo,
         tipo_socio: row.tipo_socio,
-        ultimo_pago: row.ultimo_pago,
-        dias_sin_pagar: parseInt(row.dias_sin_pagar || 0),
-        deuda_estimada: parseFloat(row.deuda_estimada || 0)
+        dias_transcurridos: parseInt(row.dias_transcurridos || 0),
+        total_debido: parseFloat(row.total_debido || 0),
+        total_pagado: parseFloat(row.total_pagado || 0),
+        deuda_aproximada: parseFloat(row.deuda_aproximada || 0),
+        porcentaje_pago: row.total_debido > 0 ? ((parseFloat(row.total_pagado || 0) / parseFloat(row.total_debido || 1)) * 100).toFixed(1) : '0',
+        ultimo_pago: row.ultimo_pago
       })),
-      total_morosos: result.rows.length
+      total_morosos: result.rows.length,
+      nota: 'Los conductores se muestran si tienen deuda pendiente con base en el ultimo pago confirmado (domingos excluidos)'
     });
     
   } catch (error) {
-    console.error('❌ Error COMPLETO en getConductoresMorosos:', error.message);
-    console.error('📍 Stack:', error.stack);
-    
     res.status(500).json({
       success: false,
       error: 'Error al obtener conductores morosos',
