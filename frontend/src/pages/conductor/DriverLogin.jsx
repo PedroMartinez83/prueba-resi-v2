@@ -78,7 +78,7 @@ const DriverLogin = () => {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.message || 'Credenciales incorrectas');
+        throw new Error(data.error || data.message || 'Credenciales incorrectas');
       }
 
       // Verificar que sea un conductor

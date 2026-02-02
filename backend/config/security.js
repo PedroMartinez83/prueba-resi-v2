@@ -6,11 +6,11 @@ const auditService = require('../services/auditService');
 
 // Configuración de Rate Limiting por tipo de endpoint
 const rateLimiters = {
-  // Login: máximo 5 intentos por IP cada 15 minutos
+  // Login: máximo 10 intentos por IP cada 30 segundos
   login: rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 5,
-    message: 'Demasiados intentos de login. Intente nuevamente en 15 minutos.',
+    windowMs: 30 * 1000,
+    max: 10,
+    message: 'Demasiados intentos de login. Intente nuevamente en 30 segundos.',
     standardHeaders: true,
     legacyHeaders: false,
     handler: async (req, res) => {
@@ -25,7 +25,7 @@ const rateLimiters = {
       
       res.status(429).json({
         success: false,
-        error: 'Demasiados intentos. Por favor espere 15 minutos.'
+        error: 'Demasiados intentos. Por favor espere 30 segundos.'
       });
     }
   }),

@@ -100,7 +100,7 @@ export const AuthProvider = ({ children }) => {
      const message =
         err.response?.status === 401
           ? 'Correo o contraseña incorrectos'
-          : err.response?.data?.message || 'Error al iniciar sesión';
+          : err.response?.data?.error || err.response?.data?.message || 'Error al iniciar sesión';
 
     await new Promise(resolve => setTimeout(resolve, 500));
 

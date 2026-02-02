@@ -128,36 +128,14 @@ const Reportes = () => {
         return;
       }
 
-      // Formatear datos para Excel
-      const datos = pagos.map((pago, index) => ({
-        Folio: String(pago.id).padStart(6, '0'),
-        Fecha: new Date(pago.fecha_pago).toLocaleDateString('es-MX'),
-        Conductor: pago.nombre_conductor,
-        Vehiculo: pago.numero_vehiculo,
-        'Tipo Socio': pago.tipo_socio,
-        'Renta Pagada': parseFloat(pago.monto_renta_pagado || 0),
-        'Poliza Pagada': parseFloat(pago.monto_poliza_pagado || 0),
-        Total: parseFloat(pago.monto_total),
-        Metodo: pago.metodo_pago,
-        Estado: pago.status,
-        Observaciones: pago.observaciones || ''
+      // Formatear datos para Excel con el mismo formato de la vista previa
+      const datos = buildVistaPreviaRows(pagos).map((row) => ({
+        'Fecha de pago': row.fechaPago,
+        'Días cubiertos': row.diasCubiertos,
+        Conductor: row.conductor,
+        Vehículo: row.vehiculo,
+        'Total pagado': row.totalPagado
       }));
-
-      // Agregar fila de totales
-      const totales = {
-        Folio: '',
-        Fecha: '',
-        Conductor: '',
-        Vehiculo: '',
-        'Tipo Socio': 'TOTAL:',
-        'Renta Pagada': datos.reduce((sum, p) => sum + p['Renta Pagada'], 0),
-        'Poliza Pagada': datos.reduce((sum, p) => sum + p['Poliza Pagada'], 0),
-        Total: datos.reduce((sum, p) => sum + p.Total, 0),
-        Metodo: '',
-        Estado: '',
-        Observaciones: ''
-      };
-      datos.push(totales);
 
       // Crear libro de Excel
       const wb = XLSX.utils.book_new();
@@ -165,17 +143,11 @@ const Reportes = () => {
 
       // Ajustar anchos de columna
       ws['!cols'] = [
-        { wch: 10 }, // Folio
-        { wch: 12 }, // Fecha
+        { wch: 14 }, // Fecha de pago
+        { wch: 22 }, // Dias cubiertos
         { wch: 30 }, // Conductor
         { wch: 12 }, // Vehiculo
-        { wch: 12 }, // Tipo Socio
-        { wch: 12 }, // Renta
-        { wch: 12 }, // Poliza
-        { wch: 12 }, // Total
-        { wch: 14 }, // Metodo
-        { wch: 12 }, // Estado
-        { wch: 30 }  // Observaciones
+        { wch: 14 } // Total pagado
       ];
 
       XLSX.utils.book_append_sheet(wb, ws, 'Pagos de Rentas');
@@ -399,6 +371,32 @@ const Reportes = () => {
     return rangoLabel || '-';
   };
 
+  const formatCurrency = (value) => {
+    const numero = Number.parseFloat(value || 0);
+    return `$${numero.toFixed(2)}`;
+  };
+
+  const buildVistaPreviaRows = (pagos = []) =>
+    pagos.map((pago) => ({
+      id: pago.id,
+      fechaPago: new Date(pago.fecha_pago).toLocaleDateString('es-MX'),
+      diasCubiertos: getDiasCubiertosLabel(pago),
+      conductor: pago.nombre_conductor,
+      vehiculo: pago.numero_vehiculo,
+      totalPagado: formatCurrency(pago.monto_total),
+      estado: pago.status
+    }));
+
+  const vistaPreviaRows = useMemo(
+    () => buildVistaPreviaRows(vistaPrevia || []),
+    [vistaPrevia]
+  );
+
+  const datosPdfRows = useMemo(
+    () => buildVistaPreviaRows(datosPDF || []),
+    [datosPDF]
+  );
+
 
   return (
     <div className="p-6 space-y-6">
@@ -564,7 +562,7 @@ const Reportes = () => {
           {/* ✅ PDF ELEGANTE CON @react-pdf/renderer */}
           {datosPDF ? (
             <PDFDownloadLink
-              document={<RentasPDFReport data={datosPDF} filtros={filtros} />}
+              document={<RentasPDFReport rows={datosPdfRows} filtros={filtros} />}
               fileName={
                 filtros.tipo === 'diario'
                   ? `reporte_diario_${filtros.fecha_desde}.pdf`
@@ -641,24 +639,24 @@ const Reportes = () => {
                 </tr>
               </thead>
               <tbody>
-                {vistaPrevia.map((pago) => (
-                  <tr key={pago.id} className="border-b border-white/5 hover:bg-white/5">
+                {vistaPreviaRows.map((row) => (
+                  <tr key={row.id} className="border-b border-white/5 hover:bg-white/5">
                     <td className="py-3 px-4 text-white">
-                      {new Date(pago.fecha_pago).toLocaleDateString('es-MX')}
+                      {row.fechaPago}
                     </td>
-                    <td className="py-3 px-4 text-white">{getDiasCubiertosLabel(pago)}</td>
-                    <td className="py-3 px-4 text-white">{pago.nombre_conductor}</td>
-                    <td className="py-3 px-4 text-white">{pago.numero_vehiculo}</td>
+                    <td className="py-3 px-4 text-white">{row.diasCubiertos}</td>
+                    <td className="py-3 px-4 text-white">{row.conductor}</td>
+                    <td className="py-3 px-4 text-white">{row.vehiculo}</td>
                     <td className="py-3 px-4 text-white text-right font-bold">
-                      ${parseFloat(pago.monto_total).toFixed(2)}
+                      {row.totalPagado}
                     </td>
                     <td className="py-3 px-4">
                       <span className={`px-2 py-1 rounded-full text-xs ${
-                        pago.status === 'Confirmado' 
+                        row.estado === 'Confirmado' 
                           ? 'bg-emerald-500/20 text-emerald-400'
                           : 'bg-amber-500/20 text-amber-400'
                       }`}>
-                        {pago.status}
+                        {row.estado}
                       </span>
                     </td>
                   </tr>
