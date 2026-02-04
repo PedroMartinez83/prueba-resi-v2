@@ -5,10 +5,10 @@ const { format, subDays } = require('date-fns');
 
 
 // Función auxiliar simple para evitar errores de fecha
-const toDateString = (dateVal) => {
-  if (!dateVal) return null;
-  const d = new Date(dateVal);
-  return d.toISOString().split('T')[0];
+const toDateString = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().split('T')[0];
 };
 const addDaysToDate = (dateString, days) => {
   const date = new Date(`${dateString}T00:00:00Z`);
@@ -208,6 +208,7 @@ exports.getPagosRentas = async (req, res) => {
         .select(
           'p.id',
           'p.fecha_pago',
+          'p.fecha_pago_fin',
           'p.monto_total',
           'p.monto_renta_pagado',
           'p.monto_poliza_pagado',
@@ -223,38 +224,16 @@ exports.getPagosRentas = async (req, res) => {
           pago.observaciones = observacionesMap.get(pago.id) || pago.observaciones;
         }
 
-        if (!pago.rango_inicio && !pago.rango_fin) {
-          const rango = parseRangeFromObservaciones(pago.observaciones || '');
-          if (rango) {
-            pago.rango_inicio = rango.inicio;
-            pago.rango_fin = rango.fin;
-          }
-        }
-
-        if (!pago.rango_inicio && !pago.rango_fin) {
-          const detalle = detalleMap.get(pago.id);
-          if (detalle?.fecha_pago) {
-            const rentaDiaria = parseFloat(detalle.renta_diaria || 0);
-            const polizaDiaria = parseFloat(detalle.abono_poliza_mantenimiento || 0);
-            const montoRenta = parseFloat(detalle.monto_renta_pagado || 0);
-            const montoPoliza = parseFloat(detalle.monto_poliza_pagado || 0);
-            const montoTotal = parseFloat(detalle.monto_total || 0);
-
-            let diasEstimados = 1;
-            if (rentaDiaria > 0 && montoRenta > 0) {
-              diasEstimados = Math.round(montoRenta / rentaDiaria);
-            } else if (polizaDiaria > 0 && montoPoliza > 0) {
-              diasEstimados = Math.round(montoPoliza / polizaDiaria);
-            } else if (rentaDiaria + polizaDiaria > 0 && montoTotal > 0) {
-              diasEstimados = Math.round(montoTotal / (rentaDiaria + polizaDiaria));
-            }
-
-            const diasNormalizados = Math.max(1, diasEstimados || 1);
-            const fechaFin = normalizeDateString(detalle.fecha_pago);
-            const fechaInicio = calcularFechaInicioDesdeFin(fechaFin, diasNormalizados);
-
-            pago.rango_inicio = fechaInicio;
-            pago.rango_fin = fechaFin;
+        const detalle = detalleMap.get(pago.id);
+        if (detalle?.fecha_pago) {
+          const rangoInicio = normalizeDateString(detalle.fecha_pago);
+          const rangoFin = normalizeDateString(detalle.fecha_pago_fin || detalle.fecha_pago);
+          pago.rango_inicio = rangoInicio;
+          pago.rango_fin = rangoFin;
+          if (rangoInicio || rangoFin) {
+            pago.dias_cubiertos = rangoInicio && rangoFin && rangoInicio !== rangoFin
+              ? `${rangoInicio} a ${rangoFin}`
+              : (rangoInicio || rangoFin);
           }
         }
       });
@@ -374,7 +353,10 @@ exports.getEstadisticasPagos = async (req, res) => {
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int as dias_adeudados
         FROM generate_series(
-          COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+          GREATEST(
+            COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+            DATE '2026-01-01'
+          ),
           CURRENT_DATE,
           interval '1 day'
         ) as d(fecha)
@@ -773,69 +755,153 @@ exports.rechazarPago = async (req, res) => {
   }
 };
 
+// Cuenta días hábiles en un rango (ignora Domingos)
+const contarDiasCobrables = (fechaInicio, fechaFin) => {
+  let contador = 0;
+  // Usamos hora fija (12:00) para evitar problemas de zona horaria
+  let actual = new Date(fechaInicio + 'T12:00:00');
+  const fin = new Date(fechaFin + 'T12:00:00');
+
+  while (actual <= fin) {
+    const diaSemana = actual.getDay(); // 0 = Domingo
+    if (diaSemana !== 0) {
+      contador++;
+    }
+    actual.setDate(actual.getDate() + 1);
+  }
+  return contador;
+};
+
 // ========== REGISTRAR PAGO MANUAL (ADMIN) - CON DESTINO DE AHORRO ==========
 exports.registrarPagoManual = async (req, res) => {
   const { conductor_id, monto_renta, monto_extra, fecha_pago, fecha_fin, metodo_pago, observaciones, referencia } = req.body;
 
   try {
     await db.transaction(async (trx) => {
-      // 1. Buscamos la asignación (Indispensable para obtener el asignacion_id)
-      const asignacion = await trx('asignaciones').where({ conductor_id, activa: true }).first();
-      if (!asignacion) throw new Error('Conductor sin asignación activa');
+      // 1. Buscamos la asignación
+      const asignacion = await trx('asignaciones')
+        .where({ conductor_id, activa: true })
+        .orderBy('id', 'desc') // Importante: tomar la última
+        .first();
+      
+      if (!asignacion) throw new Error('❌ El conductor no tiene asignación activa.');
+      if (!asignacion.vehiculo_id) throw new Error(`❌ La asignación #${asignacion.id} no tiene vehículo vinculado.`);
 
-      const vehiculo = await trx('vehiculos').where('id', asignacion.vehiculo_id).first().forUpdate();
+      // 2. BUSCAR VEHÍCULO CON VALIDACIÓN (AQUÍ ESTABA EL ERROR)
+      const vehiculo = await trx('vehiculos')
+        .where('id', asignacion.vehiculo_id)
+        .first()
+        .forUpdate();
+      
+      // 🛡️ ESTA LÍNEA EVITA EL ERROR "integer: «»"
+      if (!vehiculo) throw new Error(`❌ El vehículo ID ${asignacion.vehiculo_id} no existe en la base de datos.`);
 
-      // 2. Cálculos según el rango de fechas
-      const numDias = calcularDiasHabiles(fecha_pago, fecha_fin);
-      const abonoRentaTotal = parseFloat(monto_renta || 0) * numDias;
-      const abonoExtraTotal = parseFloat(monto_extra || 0) * numDias;
-      const montoTotalAbono = abonoRentaTotal + abonoExtraTotal;
+      // 3. FECHAS Y RANGO
+      const fInicio = toDateString(fecha_pago);
+      let fFin = toDateString(fecha_fin);
+      if (!fFin) fFin = fInicio; // Si no hay fin, es igual al inicio
+      if (new Date(fFin) < new Date(fInicio)) fFin = fInicio;
 
-      const fechaInicioPago = normalizeDateString(fecha_pago);
-      const fechaFinPago = normalizeDateString(fecha_fin || fecha_pago);
-      const etiquetaRango = fechaInicioPago && fechaFinPago
-        ? `[Rango: ${fechaInicioPago} > ${fechaFinPago}]`
-        : '';
-      const observacionesBase = observaciones ? observaciones.trim() : '';
-      const observacionesFinal = etiquetaRango && !/Rango:/i.test(observacionesBase)
-        ? [observacionesBase, etiquetaRango].filter(Boolean).join(' | ')
-        : observacionesBase;
+      // 4. DÍAS HÁBILES
+      const diasACobrar = contarDiasCobrables(fInicio, fFin);
+      if (diasACobrar === 0) throw new Error('❌ El rango seleccionado solo contiene domingos.');
 
-      // 3. INSERTAR EN PAGOS_DIARIOS (Con tus nombres de columna reales)
+      // 5. TOTALES
+      const rentaTotal = parseFloat(monto_renta || 0) * diasACobrar;
+      const polizaTotal = parseFloat(monto_extra || 0) * diasACobrar;
+      const granTotal = rentaTotal + polizaTotal;
+      
+      const textoRango = (diasACobrar > 1) ? ` (Pago del dia: ${fInicio} al ${fFin})` : '';
+      const obsFinal = (observaciones || '') + textoRango;
+
+      // 6. INSERTAR
       await trx('pagos_diarios').insert({
-        asignacion_id: asignacion.id,        
-        fecha_pago: fecha_fin,               
-        monto_renta_pagado: abonoRentaTotal, 
-        monto_poliza_pagado: abonoExtraTotal, 
-        monto_total: montoTotalAbono,        
-        metodo_pago: metodo_pago,            
-        referencia: referencia,              
-        status: 'Confirmado',                
-        observaciones: observacionesFinal,        
+        asignacion_id: asignacion.id,
+        fecha_pago: fInicio,
+        fecha_pago_fin: fFin,
+        monto_renta_pagado: rentaTotal,
+        monto_poliza_pagado: polizaTotal,
+        monto_total: granTotal,
+        metodo_pago: metodo_pago,
+        referencia: referencia,
+        status: 'Confirmado',
+        observaciones: obsFinal.trim(),
         created_at: new Date(),
         updated_at: new Date()
       });
 
-      // 4. ACTUALIZAR CORRIDA DEL VEHÍCULO
+      // 7. ACTUALIZAR VEHÍCULO
       const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
       const pagadoAnterior = parseFloat(vehiculo.total_pagado_corrida || 0);
-      
-      const nuevoTotalPagado = pagadoAnterior + montoTotalAbono;
+      const nuevoTotalPagado = pagadoAnterior + granTotal;
       const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoTotalPagado);
       const nuevoPorcentaje = totalCorrida > 0 ? (nuevoTotalPagado / totalCorrida) * 100 : 0;
 
-      await trx('vehiculos').where('id', vehiculo.id).update({
-        total_pagado_corrida: nuevoTotalPagado.toFixed(2),
-        saldo_pendiente_corrida: nuevoSaldoPendiente.toFixed(2),
-        porcentaje_pagado: nuevoPorcentaje.toFixed(2),
-        updated_at: new Date()
-      });
+      await trx('vehiculos')
+        .where('id', vehiculo.id) // Ahora es seguro porque validamos 'vehiculo' arriba
+        .update({
+          total_pagado_corrida: nuevoTotalPagado.toFixed(2),
+          saldo_pendiente_corrida: nuevoSaldoPendiente.toFixed(2),
+          porcentaje_pagado: nuevoPorcentaje.toFixed(2),
+          updated_at: new Date()
+        });
     });
 
-    res.json({ success: true, message: 'Pago registrado y unidad actualizada' });
+    res.json({ success: true, message: 'Pago registrado y unidad actualizada correctamente.' });
+
   } catch (error) {
-    console.error('❌ Error DB:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('❌ Error Admin Pago:', error.message);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};  
+
+// 2. CORRECCIÓN EN OBTENER SIGUIENTE PAGO (PARA DETECTAR SI ES NUEVO)
+exports.getSiguientePagoPendiente = async (req, res) => {
+  try {
+    const { conductorId } = req.params;
+
+    // 1. Validar Asignación
+    const asignacion = await db('asignaciones')
+      .where({ conductor_id: conductorId, activa: true })
+      .first();
+
+    if (!asignacion) {
+      return res.status(404).json({ success: false, message: 'Sin asignación activa' });
+    }
+
+    // 2. BUSCAR EL ÚLTIMO PAGO REAL (CONFIRMADO O PENDIENTE)
+    // ⚠️ EL TRUCO: Ordenamos por la fecha FINAL, no la inicial.
+    // COALESCE asegura que si fecha_pago_fin es null, use fecha_pago.
+    const ultimoPagoReal = await db('pagos_diarios')
+      .where({ asignacion_id: asignacion.id })
+      .whereIn('status', ['Confirmado', 'Pendiente']) 
+      .orderByRaw('COALESCE(fecha_pago_fin, fecha_pago) DESC') // <--- CLAVE MAESTRA 🗝️
+      .first();
+
+    let fechaReferencia;
+    let sinHistorial = false;
+
+    if (ultimoPagoReal) {
+      // 3. SELECCIONAR LA FECHA CORRECTA
+      // Tomamos la fecha FIN del rango. Si no tiene fin, tomamos la de inicio.
+      fechaReferencia = ultimoPagoReal.fecha_pago_fin || ultimoPagoReal.fecha_pago;
+      
+      console.log(`🔍 Último pago encontrado: ID ${ultimoPagoReal.id} | Fin: ${fechaReferencia}`);
+    } else {
+      // No hay pagos previos
+      sinHistorial = true;
+      fechaReferencia = null;
+    }
+
+    res.json({
+      success: true,
+      siguiente_fecha_pendiente: toDateString(fechaReferencia), // Enviamos la fecha fin correcta
+      sin_historial: sinHistorial
+    });
+
+  } catch (error) {
+    console.error('Error al obtener siguiente pago:', error);
+    res.status(500).json({ success: false, message: 'Error interno' });
   }
 };
 
@@ -896,55 +962,6 @@ exports.getSaldoPolizaConductor = async (req, res) => {
     });
   }
 };
-
-// ========== OBTENER SIGUIENTE PAGO PENDIENTE (ADMIN) ==========
-exports.getSiguientePagoPendiente = async (req, res) => {
-  try {
-    const { conductorId } = req.params;
-
-    // 1. Obtener la asignación activa
-    const asignacion = await db('asignaciones')
-      .where({ conductor_id: conductorId, activa: true })
-      .first();
-
-    if (!asignacion) {
-      return res.status(404).json({ success: false, message: 'El conductor no tiene asignación activa' });
-    }
-
-    // 2. BUSCAR EL ÚLTIMO PAGO CONFIRMADO (Ordenado por fecha DESC)
-    const ultimoPagoReal = await db('pagos_diarios')
-      .where({ asignacion_id: asignacion.id })
-      .where('status', 'Confirmado') // ⚠️ Asegúrate que en tu BD sea 'Confirmado' (con C mayúscula)
-      .orderBy('fecha_pago', 'desc') // El más reciente primero
-      .first();
-
-    let fechaReferencia;
-
-    if (ultimoPagoReal) {
-      // Si encontramos pagos, esa es nuestra referencia
-      fechaReferencia = ultimoPagoReal.fecha_pago;
-      console.log(`✅ Último pago encontrado: ${toDateString(fechaReferencia)}`);
-    } else {
-      // ⚠️ FALLBACK: Si no hay pagos confirmados, usamos (Inicio Contrato - 1 día)
-      // Así, al sumar +1 día en el frontend, te sugerirá la fecha exacta del contrato (19 Sep).
-      const fechaInicio = new Date(asignacion.fecha_inicio);
-      fechaInicio.setDate(fechaInicio.getDate() - 1); 
-      fechaReferencia = fechaInicio;
-      console.log(`⚠️ Sin pagos confirmados. Usando inicio contrato: ${toDateString(fechaReferencia)}`);
-    }
-
-    res.json({
-      success: true,
-      // Enviamos la fecha encontrada para que el Frontend calcule el "Siguiente Día"
-      siguiente_fecha_pendiente: toDateString(fechaReferencia) 
-    });
-
-  } catch (error) {
-    console.error('Error al obtener siguiente pago:', error);
-    res.status(500).json({ success: false, message: 'Error interno' });
-  }
-};
-
 
 
 // ========== 🆕 OBTENER OPCIONES PARA CREAR PAGO (CORREGIDO) ==========
@@ -1127,7 +1144,10 @@ exports.getTopConductores = async (req, res) => {
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int as dias_adeudados
         FROM generate_series(
-          COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+          GREATEST(
+            COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+            DATE '2026-01-01'
+          ),
           CURRENT_DATE,
           interval '1 day'
         ) as d(fecha)
@@ -1213,7 +1233,10 @@ exports.getConductoresMorosos = async (req, res) => {
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int as dias_adeudados
         FROM generate_series(
-          COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+          GREATEST(
+            COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+            DATE '2026-01-01'
+          ),
           CURRENT_DATE,
           interval '1 day'
         ) as d(fecha)
@@ -1281,6 +1304,31 @@ exports.getHistorialConductor = async (req, res) => {
       .where('conductor_id', conductorId)
       .orderBy('fecha_pago', 'desc')
       .limit(parseInt(limite));
+
+    const historialIds = historial.map((pago) => pago.id).filter(Boolean);
+    if (historialIds.length > 0) {
+      const pagosDetalle = await db('pagos_diarios')
+        .whereIn('id', historialIds)
+        .select('id', 'fecha_pago', 'fecha_pago_fin');
+      const detalleMap = new Map(
+        pagosDetalle.map((row) => [row.id, row])
+      );
+
+      historial.forEach((pago) => {
+        const detalle = detalleMap.get(pago.id);
+        if (detalle?.fecha_pago) {
+          const rangoInicio = normalizeDateString(detalle.fecha_pago);
+          const rangoFin = normalizeDateString(detalle.fecha_pago_fin || detalle.fecha_pago);
+          pago.rango_inicio = rangoInicio;
+          pago.rango_fin = rangoFin;
+          if (rangoInicio || rangoFin) {
+            pago.dias_cubiertos = rangoInicio && rangoFin && rangoInicio !== rangoFin
+              ? `${rangoInicio} a ${rangoFin}`
+              : (rangoInicio || rangoFin);
+          }
+        }
+      });
+    }
     
     const [resumen] = await db('pagos_diarios')
       .whereExists(function() {
@@ -1431,80 +1479,98 @@ exports.eliminarPago = async (req, res) => {
     console.log(`🗑️ Eliminando pago ID: ${id}. Motivo: ${motivo || 'No especificado'}`);
 
     await db.transaction(async (trx) => {
-      // 1. Buscamos el pago (igual que antes)
+      // 1. BUSCAR EL PAGO Y DATOS RELACIONADOS
+      // Usamos tu query original con JOINS porque es eficiente para traer todo junto
       const pago = await trx('pagos_diarios as p')
         .leftJoin('asignaciones as a', 'p.asignacion_id', 'a.id')
         .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
         .where('p.id', id)
-        .select('p.*', 'v.id as vehiculo_id', 'v.total_pagado_corrida', 'v.total_corrida')
+        .select(
+          'p.*', 
+          'v.id as vehiculo_id', // Si esto viene null, es el dato corrupto
+          'v.total_pagado_corrida', 
+          'v.total_corrida',
+          'v.saldo_pendiente_corrida'
+        )
         .first();
 
-      if (!pago) throw new Error('El pago no existe');
+      if (!pago) throw new Error('El pago no existe o ya fue eliminado.');
 
-      // 🟢 NUEVA REGLA DE CONTINUIDAD
-      // Si el pago es "Confirmado", validamos que sea EL ÚLTIMO de la fila
+      // 2. REGLA DE CONTINUIDAD (Lógica Original)
+      // Si el pago afecta saldos (Confirmado), validamos que sea el último
       if (pago.status === 'Confirmado') {
         
-        // Buscamos cuál es el pago confirmado más reciente de esta asignación
+        // Buscamos si hay un pago MÁS NUEVO
         const ultimoConfirmado = await trx('pagos_diarios')
           .where('asignacion_id', pago.asignacion_id)
           .where('status', 'Confirmado')
-          .orderBy('id', 'desc') // Ordenamos por ID (el último insertado)
+          .where('id', '>', pago.id) // Buscamos cualquier ID mayor (posterior)
           .first();
 
-        // Si existe un pago posterior, bloqueamos la acción
-        if (ultimoConfirmado && ultimoConfirmado.id !== pago.id) {
+        // Si existe uno posterior, bloqueamos
+        if (ultimoConfirmado) {
           throw new Error(
-            `⛔ Solo puedes eliminar el último pago confirmado de este conductor (ID: ${ultimoConfirmado.id}).`
+            `⛔ No se puede eliminar este pago porque existen pagos posteriores. Debes eliminar el último registrado primero para mantener la coherencia contable.`
           );
         }
 
-        console.log('✅ Es el último pago. Procediendo a revertir saldo...');
+        console.log('✅ Es el último pago confirmado. Procediendo a reversión...');
 
-        // ... (Aquí sigue tu lógica de reversión de saldo que ya teníamos) ...
-        const nuevoTotalPagado = Math.max(0, parseFloat(pago.total_pagado_corrida || 0) - parseFloat(pago.monto_total || 0));
-        const nuevoSaldoPendiente = Math.max(0, parseFloat(pago.total_corrida || 0) - nuevoTotalPagado);
-        let nuevoPorcentaje = 0;
-        if (pago.total_corrida > 0) nuevoPorcentaje = (nuevoTotalPagado / parseFloat(pago.total_corrida)) * 100;
+        // 3. BLINDAJE "ANTI-CRASH" (Lo nuevo que te di) 🛡️
+        // Antes de intentar actualizar el vehículo, verificamos si existe.
+        // Si 'pago.vehiculo_id' es NULL (dato corrupto), saltamos la actualización de saldos.
+        if (!pago.vehiculo_id) {
+            console.warn(`⚠️ ALERTA: El pago ${id} se eliminará, pero NO se actualizó el saldo del vehículo porque la asignación no tiene vehículo vinculado (Data corrupta).`);
+        } 
+        else {
+            // 4. ACTUALIZACIÓN DE SALDOS (Solo si existe vehículo)
+            const montoAEliminar = parseFloat(pago.monto_total || 0);
+            const pagadoActual = parseFloat(pago.total_pagado_corrida || 0);
+            const totalCorrida = parseFloat(pago.total_corrida || 0);
 
-        await trx('vehiculos')
-          .where('id', pago.vehiculo_id)
-          .update({
-            total_pagado_corrida: nuevoTotalPagado,
-            saldo_pendiente_corrida: nuevoSaldoPendiente,
-            porcentaje_pagado: nuevoPorcentaje,
-            updated_at: new Date()
-          });
+            // Revertimos la operación matemática
+            const nuevoTotalPagado = Math.max(0, pagadoActual - montoAEliminar);
+            const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoTotalPagado);
+            
+            let nuevoPorcentaje = 0;
+            if (totalCorrida > 0) {
+                nuevoPorcentaje = (nuevoTotalPagado / totalCorrida) * 100;
+            }
+
+            // Actualizamos el vehículo
+            await trx('vehiculos')
+              .where('id', pago.vehiculo_id)
+              .update({
+                total_pagado_corrida: nuevoTotalPagado.toFixed(2),
+                saldo_pendiente_corrida: nuevoSaldoPendiente.toFixed(2),
+                porcentaje_pagado: nuevoPorcentaje.toFixed(2),
+                updated_at: new Date()
+              });
+        }
       }
 
-
-      const textoEliminacion = motivo ? `[Pago Eliminado: ${motivo}]` : '[Pago Eliminado sin motivo especificado]';
-
-      // Concatenar observaciones antiguas con el motivo de eliminación
+      // 5. BORRADO LÓGICO (Lógica Original)
+      // No usamos .del(), sino que actualizamos el estado y agregamos nota
+      const textoEliminacion = motivo ? `[Pago Eliminado: ${motivo}]` : '[Pago Eliminado sin motivo]';
+      
       const nuevasObservaciones = [pago.observaciones, textoEliminacion]
-        .filter(Boolean)
-        .join('. ');
+        .filter(Boolean) // Quita nulls o vacíos
+        .join(' | ');
 
-      // 3. Borrado Lógico (Siempre permitido para Rechazados o el último Confirmado)
       await trx('pagos_diarios')
         .where('id', id)
         .update({
           status: 'Eliminado',
           updated_at: new Date(),
-          observaciones: `${nuevasObservaciones} - Eliminado por admin el ${new Date().toLocaleDateString()}`
+          observaciones: `${nuevasObservaciones} - Borrado el ${new Date().toLocaleDateString('es-MX')}`
         });
     });
 
-
-    res.json({ success: true, message: 'Registro eliminado y justificado correctamente.' });
+    res.json({ success: true, message: 'Registro eliminado (lógico) y saldo revertido correctamente.' });
 
   } catch (error) {
-    console.error('❌ Error en eliminarPago:', error);
-    // Usamos status 400 para errores de lógica de negocio (validaciones)
-    res.status(400).json({ 
-      success: false, 
-      message: error.message // Enviamos el mensaje claro al frontend
-    });
+    console.error('❌ Error en eliminarPago:', error.message);
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 

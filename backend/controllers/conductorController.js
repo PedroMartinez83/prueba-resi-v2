@@ -22,6 +22,52 @@ const generateTempPassword = () => {
   return `Conduc_${randomPart}`;
 };
 
+// Helper: Cuenta cuántos días hábiles (NO domingos) hay entre dos fechas
+const contarDiasDeuda = (fechaUltimoPagoFin, fechaHoy) => {
+  // 1. FUNCION INTERNA: Limpiar fecha a string YYYY-MM-DD
+  const limpiarFecha = (fecha) => {
+    if (!fecha) return null;
+    // Si ya es string, tomamos los primeros 10 chars
+    if (typeof fecha === 'string') return fecha.substring(0, 10);
+    // Si es objeto Date, lo pasamos a ISO y cortamos
+    return fecha.toISOString().split('T')[0];
+  };
+
+  const strUltimoPago = limpiarFecha(fechaUltimoPagoFin);
+  const strHoy = limpiarFecha(fechaHoy);
+
+  // 2. CONFIGURAR CURSOR (Día de inicio del conteo)
+  let cursor;
+  
+  if (strUltimoPago) {
+    // Si pagó hasta el día '2026-01-01', la deuda empieza el '2026-01-02'
+    // Usamos T12:00:00 para evitar problemas de horario de verano/invierno
+    cursor = new Date(`${strUltimoPago}T12:00:00`);
+    cursor.setDate(cursor.getDate() + 1); 
+  } else {
+    // Si es virgen (sin pagos), empieza el 1 de Enero
+    cursor = new Date('2026-01-01T12:00:00');
+  }
+
+  // 3. CONFIGURAR FIN (Hoy)
+  // Usamos T23:59:59 para asegurar que el día de hoy se cuente
+  const fin = new Date(`${strHoy}T23:59:59`);
+
+  let diasDeuda = 0;
+
+  // 4. BUCLE DE CONTEO
+  // Mientras el cursor sea menor o igual a hoy...
+  while (cursor <= fin) {
+    // Si NO es domingo (0), sumamos deuda
+    if (cursor.getDay() !== 0) {
+      diasDeuda++;
+    }
+    // Avanzamos un día
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return diasDeuda;
+};
 
 /**
  * OBTIENE TODOS LOS DATOS AGREGADOS PARA EL DASHBOARD DEL CONDUCTOR
@@ -30,7 +76,6 @@ const generateTempPassword = () => {
 const getDriverDashboard = async (req, res) => {
   try {
     // 1. OBTENER CONDUCTOR Y VEHÍCULO
-    // req.user.id es el ID de la tabla 'usuarios' (del middleware)
     const usuarioId = req.user?.id;
     const conductorIdFromToken = req.user?.conductorId;
 
@@ -47,20 +92,14 @@ const getDriverDashboard = async (req, res) => {
       })
       .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
       .select(
-        // Conductor
         'c.id as conductor_id', 'c.nombre_conductor', 'c.status', 'c.status_trabajo', 'c.categoria', 'c.fecha_ingreso',
-        // Finanzas (Pólizas y Ahorro)
         'c.tipo_poliza', 'c.saldo_poliza_mecanica', 'c.total_aportado_poliza', 'c.saldo_ahorro_mantenimiento',
-        // Vehiculo
         'v.id as vehiculo_id', 'v.numero_vehiculo', 'v.marca', 'v.modelo', 'v.placa', 'v.kilometraje_actual',
-        
-        // --- 👇 ¡AQUÍ ESTÁ LA CORRECCIÓN! 👇 ---
-        // Usamos el nombre real 'proximo_mantenimiento' y lo renombramos a 'proximo_mantenimiento_km'
-        'v.proximo_mantenimiento as proximo_mantenimiento_km' 
-        // --- 👆 FIN DE LA CORRECCIÓN 👆 ---
+        'v.proximo_mantenimiento as proximo_mantenimiento_km',
+        // Traemos datos de costos de la asignación para calcular deuda
+        'a.id as asignacion_id', 'a.renta_diaria', 'a.abono_poliza_mantenimiento as poliza_diaria'
       );
 
-    // Preferir conductorId del token si existe; fallback a usuario_id
     if (conductorIdFromToken) {
       conductorInfoQuery = conductorInfoQuery.where('c.id', conductorIdFromToken);
     } else {
@@ -69,135 +108,93 @@ const getDriverDashboard = async (req, res) => {
 
     let conductorInfo = await conductorInfoQuery.first();
 
-    // Fallback: si no encontramos por usuario_id pero tenemos email, buscar y vincular
+    // Fallback de email (tu lógica original se mantiene igual aquí)
     if (!conductorInfo && usuarioId) {
       const emailRaw = req.user?.email || req.user?.name || '';
       const emailNormalized = emailRaw.toString().trim().toLowerCase();
 
       if (!emailNormalized) {
-        return res.status(404).json({
-          success: false,
-          message: 'Perfil de conductor no encontrado. Contacta a un administrador para que active tu cuenta.'
-        });
+        return res.status(404).json({ success: false, message: 'Perfil no encontrado.' });
       }
 
-      const conductorByEmail = await db('conductores')
-        .where('email', emailNormalized)
-        .first();
-
+      const conductorByEmail = await db('conductores').where('email', emailNormalized).first();
       if (conductorByEmail) {
-        await db('conductores')
-          .where('id', conductorByEmail.id)
-          .update({
-            usuario_id: usuarioId,
-            updated_at: new Date()
-          });
-
-        conductorInfo = await conductorInfoQuery
-          .clearWhere()
-          .where('c.id', conductorByEmail.id)
-          .first();
+        await db('conductores').where('id', conductorByEmail.id).update({ usuario_id: usuarioId, updated_at: new Date() });
+        conductorInfo = await conductorInfoQuery.clearWhere().where('c.id', conductorByEmail.id).first();
       }
     }
 
     if (!conductorInfo) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Perfil de conductor no encontrado. Contacta a un administrador para que active tu cuenta.' 
-      });
+      return res.status(404).json({ success: false, message: 'Perfil de conductor no encontrado.' });
     }
 
-    // 2. OBTENER ESTADO DE RENTAS (Según el blueprint)
-    const rentas = await db('rentas')
-      .where('conductor_id', conductorInfo.conductor_id)
-      .whereIn('estado', ['Pendiente', 'Vencida'])
-      .select('monto_total');
-
-    let rentas_pendientes = rentas.length;
-    let monto_deuda_total = rentas.reduce((sum, r) => sum + parseFloat(r.monto_total || 0), 0);
+    // =========================================================================
+    // 2. OBTENER ESTADO DE RENTAS (NUEVA LÓGICA INTELIGENTE 🧠)
+    // =========================================================================
     
-    // Obtener fecha de hoy en formato ISO (YYYY-MM-DD)
-    const hoyDate = new Date();
-    const hoyISO = hoyDate.toISOString().split('T')[0];
-    
-    // Verificar si hay pago hoy
-    const pagoHoy = await db('pagos_diarios')
-      .join('asignaciones', 'pagos_diarios.asignacion_id', 'asignaciones.id')
-      .where('asignaciones.conductor_id', conductorInfo.conductor_id)
-      .where('pagos_diarios.fecha_pago', hoyISO)
-      .where('pagos_diarios.status', 'Confirmado')
+    // A. Buscamos el último pago confirmado para saber hasta dónde cubrió
+    // Ordenamos por fecha_pago_fin para ver el rango más lejano
+    const ultimoPago = await db('pagos_diarios')
+      .where('asignacion_id', conductorInfo.asignacion_id)
+      .whereIn('status', ['Confirmado', 'Pagada']) 
+      .orderByRaw('COALESCE(fecha_pago_fin, fecha_pago) DESC')
       .first();
+
+    // B. Determinamos la fecha límite cubierta
+    const fechaCubierta = ultimoPago 
+      ? (ultimoPago.fecha_pago_fin || ultimoPago.fecha_pago) 
+      : null; // Si es null, el helper usará '2026-01-01'
+
+    // C. Calculamos los días de atraso reales (excluyendo domingos)
+    const hoyISO = new Date().toISOString().split('T')[0];
     
-    // Si no hay pago hoy y tiene asignación activa, agregar hoy a la deuda (excepto domingos)
-    const hoyEsDomingo = new Date(`${hoyISO}T12:00:00`).getDay() === 0;
-    if (!pagoHoy && conductorInfo.vehiculo_id && !hoyEsDomingo) {
-      const asignacion = await db('asignaciones')
-        .where('conductor_id', conductorInfo.conductor_id)
-        .where('activa', true)
-        .first();
+    // Si no tiene vehículo asignado, no tiene deuda
+    let rentas_pendientes = 0;
+    let monto_deuda_total = 0;
+
+    if (conductorInfo.vehiculo_id) {
+        rentas_pendientes = contarDiasDeuda(fechaCubierta, hoyISO);
+        console.log(`📊 CALCULO DEUDA: Último Pago: ${fechaCubierta} | Hoy: ${hoyISO} | Días Deuda: ${rentas_pendientes}`);
         
-      if (asignacion) {
-        monto_deuda_total += parseFloat(asignacion.renta_diaria || 0);
-        rentas_pendientes += 1;
-      }
+        const costoDiario = parseFloat(conductorInfo.renta_diaria || 400) + parseFloat(conductorInfo.poliza_diaria || 100);
+        monto_deuda_total = rentas_pendientes * costoDiario;
     }
-    
-    // Lógica de tolerancia (Asumiendo 2 días)
+
+    // Lógica visual
     const dias_de_tolerancia_restantes = Math.max(0, 2 - rentas_pendientes);
     const estado_cuenta = rentas_pendientes > 0 ? 'Atrasado' : 'Al Corriente';
 
-    // 3. OBTENER ALERTAS (Amonestaciones, Mantenimientos, Siniestros)
-    const [amonestaciones, mant_pendiente, siniestro_pendiente] = await Promise.all([
-      // Total de amonestaciones activas (puedes ajustar esta lógica si se 'resetean')
-      db('amonestaciones_conductores')
-        .where('conductor_id', conductorInfo.conductor_id)
-        .count('id as total')
-        .first(),
+    // =========================================================================
+    // FIN DE LA NUEVA LÓGICA
+    // =========================================================================
 
-      // Mantenimiento pendiente (el más próximo programado)
-      db('mantenimientos')
-        .where('vehiculo_id', conductorInfo.vehiculo_id)
-        .where('estado', 'Programado')
-        .orderBy('fecha_programada', 'asc')
-        .select('id', 'tipo_servicio', 'fecha_programada')
-        .first(),
-        
-      // Siniestro pendiente (el último reportado/en revisión/en proceso)
-      db('siniestros')
-        .where('conductor_id', conductorInfo.conductor_id)
-        .whereIn('estado', ['Reportado', 'En revisión', 'En proceso'])
-        .orderBy('fecha_incidente', 'desc')
-        .select('id', 'folio_siniestro', 'estado')
-        .first()
+    // 3. OBTENER ALERTAS (Se mantiene igual)
+    const [amonestaciones, mant_pendiente, siniestro_pendiente] = await Promise.all([
+      db('amonestaciones_conductores').where('conductor_id', conductorInfo.conductor_id).count('id as total').first(),
+      db('mantenimientos').where('vehiculo_id', conductorInfo.vehiculo_id).where('estado', 'Programado').orderBy('fecha_programada', 'asc').first(),
+      db('siniestros').where('conductor_id', conductorInfo.conductor_id).whereIn('estado', ['Reportado', 'En revisión', 'En proceso']).orderBy('fecha_incidente', 'desc').first()
     ]);
 
     const mantenimientoPreventivo = conductorInfo.vehiculo_id
-      ? getPreventiveMaintenanceAlert({
-          modelo: conductorInfo.modelo,
-          kilometrajeActual: conductorInfo.kilometraje_actual
-        })
+      ? getPreventiveMaintenanceAlert({ modelo: conductorInfo.modelo, kilometrajeActual: conductorInfo.kilometraje_actual })
       : null;
 
     const mantenimientoPlan = conductorInfo.vehiculo_id
-      ? getMaintenancePlanContext({
-          modelo: conductorInfo.modelo,
-          kilometrajeActual: conductorInfo.kilometraje_actual
-        })
+      ? getMaintenancePlanContext({ modelo: conductorInfo.modelo, kilometrajeActual: conductorInfo.kilometraje_actual })
       : null;
 
-    // 3.1 Verificar estado de la revisión diaria (reinicia cada día a las 00:00)
-    const inicioHoy = new Date(hoyDate);
+    // 3.1 Revisión diaria
+    const inicioHoy = new Date();
     inicioHoy.setHours(0, 0, 0, 0);
-
     const revisionHoy = await db('revisiones_diarias')
       .where({ conductor_id: conductorInfo.conductor_id })
       .whereRaw('DATE(fecha_revision) = ?', [hoyISO])
       .first();
-
+    
     const proximoReinicio = new Date(inicioHoy);
     proximoReinicio.setDate(proximoReinicio.getDate() + 1);
 
-    // 4. ENSAMBLAR LA RESPUESTA (Según el blueprint)
+    // 4. RESPUESTA
     const respuesta = {
       success: true,
       conductor: {
@@ -213,20 +210,21 @@ const getDriverDashboard = async (req, res) => {
         modelo: conductorInfo.modelo,
         placa: conductorInfo.placa,
         kilometraje_actual: conductorInfo.kilometraje_actual,
-        proximo_mantenimiento_km: conductorInfo.proximo_mantenimiento_km // <-- Esta línea ya funcionará gracias al 'as'
+        proximo_mantenimiento_km: conductorInfo.proximo_mantenimiento_km
       } : null,
       finanzas: {
         tipo_poliza: conductorInfo.tipo_poliza,
         saldo_poliza_mecanica: parseFloat(conductorInfo.saldo_poliza_mecanica || 0),
-        limite_poliza: 50000.00, // Límite de Póliza $100
+        limite_poliza: 50000.00,
         total_aportado_poliza: parseFloat(conductorInfo.total_aportado_poliza || 0),
         saldo_ahorro_mantenimiento: parseFloat(conductorInfo.saldo_ahorro_mantenimiento || 0)
       },
       estado_rentas: {
-        rentas_pendientes: rentas_pendientes,
+        rentas_pendientes: rentas_pendientes, // <--- DATO CORREGIDO
         dias_de_tolerancia_restantes: dias_de_tolerancia_restantes,
-        monto_deuda_total: monto_deuda_total,
-        estado_cuenta: estado_cuenta
+        monto_deuda_total: monto_deuda_total, // <--- DATO CORREGIDO
+        estado_cuenta: estado_cuenta,
+        ultimo_pago_fecha: fechaCubierta // Extra útil para el frontend
       },
       revision_diaria: {
         completada_hoy: !!revisionHoy,
@@ -237,7 +235,7 @@ const getDriverDashboard = async (req, res) => {
       },
       alertas: {
         amonestaciones_activas: parseInt(amonestaciones?.total || 0),
-        mantenimiento_pendiente: mant_pendiente || null, // Devuelve el objeto de mantenimiento o null
+        mantenimiento_pendiente: mant_pendiente || null,
         mantenimiento_preventivo: mantenimientoPreventivo,
         mantenimiento_plan: mantenimientoPlan,
         siniestro_pendiente: siniestro_pendiente ? {
@@ -251,15 +249,10 @@ const getDriverDashboard = async (req, res) => {
     res.json(respuesta);
 
   } catch (error) {
-    console.error(`Error obteniendo dashboard del conductor (User: ${req.user.id}):`, error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al obtener los datos del dashboard',
-      error: error.message
-    });
+    console.error(`Error obteniendo dashboard:`, error);
+    res.status(500).json({ success: false, message: 'Error al obtener los datos del dashboard', error: error.message });
   }
 };
-
 
 // Obtener información del conductor
 const getMiInfo = async (req, res) => {
@@ -537,7 +530,7 @@ const getHistorialPagos = async (req, res) => {
 module.exports = {
   // Exportamos la nueva función
   getDriverDashboard, 
-  
+  contarDiasDeuda,
   // (Funciones existentes)
   getMiInfo,
   getMisRentas,

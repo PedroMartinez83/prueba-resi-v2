@@ -155,20 +155,20 @@ const obtenerInfoTolerancia = (ultimoPagoData) => {
   };
 
   // FUNCIÓN CORREGIDA: Suma 1 día y salta domingos
-  const calcularSiguienteFechaPago = (fechaUltimoPago) => {
-    if (!fechaUltimoPago) return '';
-
-    // 1. Tomamos la fecha del último pago (ej. 31 de Enero)
-    const fecha = new Date(`${fechaUltimoPago}T12:00:00`); 
+  const calcularSiguienteFechaPago = (fechaStr) => {
+    if (!fechaStr) return '';
     
-    // 2. ¡IMPORTANTE! Sumamos 1 día para ir al día que toca pagar (ej. 1 de Febrero)
+    // Forzamos zona horaria neutra (T12:00:00) para no restar horas
+    const fecha = new Date(`${fechaStr}T12:00:00`);
+    
+    // Sumamos 1 día
     fecha.setDate(fecha.getDate() + 1);
-
-    // 3. Ahora sí, si ese nuevo día es Domingo (0), saltamos al Lunes
+    
+    // Si cae en Domingo (0), sumamos otro día (Lunes)
     if (fecha.getDay() === 0) {
       fecha.setDate(fecha.getDate() + 1);
     }
-
+    
     return fecha.toISOString().split('T')[0];
   };
 
@@ -235,17 +235,36 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
   const [diaCorrespondiente, setDiaCorrespondiente] = useState(null);
 
 
-  useEffect(() => {
-      if (ultimoPagoConductor && ultimoPagoConductor.siguiente_fecha_pendiente) {
-        const siguienteFecha = calcularSiguienteFechaPago(ultimoPagoConductor.siguiente_fecha_pendiente);
-        
-        setFormData(prev => ({
-          ...prev,
-          fecha_pago: siguienteFecha,
-          fecha_fin: siguienteFecha // Inicializamos fecha fin igual que inicio
-        }));
-      }
-    }, [ultimoPagoConductor]);
+useEffect(() => {
+    if (!ultimoPagoConductor) return;
+
+    const FECHA_ARRANQUE = '2026-01-01'; 
+    const fechaBackend = ultimoPagoConductor.siguiente_fecha_pendiente;
+
+    // CASO 1: NUEVO o SIN HISTORIAL (Fecha < 2026 o vacía)
+    if (!fechaBackend || fechaBackend < FECHA_ARRANQUE) {
+      console.log('📅 Usuario Nuevo: Iniciando el 01/01/2026');
+      setFormData(prev => ({
+        ...prev,
+        fecha_pago: FECHA_ARRANQUE,
+        fecha_fin: FECHA_ARRANQUE
+      }));
+    } 
+    // CASO 2: TIENE HISTORIAL (Confirmado/Pendiente)
+    else {
+      // El backend nos manda el "Fin del último pago".
+      // Nosotros calculamos el "Inicio del NUEVO pago" (Día siguiente)
+      const siguienteDia = calcularSiguienteFechaPago(fechaBackend);
+      
+      console.log(`📅 Historial detectado. Último: ${fechaBackend} -> Siguiente: ${siguienteDia}`);
+      
+      setFormData(prev => ({
+        ...prev,
+        fecha_pago: siguienteDia,
+        fecha_fin: siguienteDia // Por defecto 1 día
+      }));
+    }
+  }, [ultimoPagoConductor]);
 
   // Auto-llenar conductor_id cuando se recibe el prop
   useEffect(() => {
@@ -574,6 +593,7 @@ const handleSubmit = async (e) => {
                   type="date"
                   required
                   value={formData.fecha_pago}
+                  readOnly
                   min={ultimoPagoConductor?.siguiente_fecha_pendiente 
                     ? calcularSiguienteFechaPago(ultimoPagoConductor.siguiente_fecha_pendiente)
                     : "2024-01-01"

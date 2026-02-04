@@ -241,33 +241,6 @@ class ConductorService {
     }
   }
 
-  /**
-   * Registra pagos pendientes en una sola transacción
-   * @param {FormData} formData - Datos del pago con comprobante
-   * @returns {Promise<Object>} Confirmación
-   */
-  async registrarPagoMultiple(formData) {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(`${this.baseURL}/conductor/pagos/ponerse-al-tanto`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Error al registrar pagos pendientes');
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error('Error al registrar pagos pendientes:', error);
-      throw error;
-    }
-  }
 
   /**
    * Obtiene resumen de cuenta del conductor

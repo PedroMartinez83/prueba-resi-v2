@@ -98,6 +98,11 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
         'https://automanager.vercel.app',
         'https://automanager-back.vercel.app',
         'http://18.221.148.23:4173',
+        'http://driverautomanager.com',
+        'http://www.driverautomanager.com',
+        'http://driverautomanager.com:4173', // Por si entras con el puerto
+        'https://driverautomanager.com',
+        'https://www.driverautomanager.com',
         ...vercelOrigins
       ]
     : ['http://localhost:3000', 'http://localhost:5173','http://18.221.148.23:4173',];
@@ -172,7 +177,11 @@ app.use(cors({
     const allowedIPs = [
       'http://18.221.148.23:4173', 
       'http://18.221.148.23:3000',
-      'http://localhost:5173'
+      'http://localhost:5173',
+      'http://automanagersistema.com',
+      'http://www.automanagersistema.com',
+      'https://automanagersistema.com',
+      'https://www.automanagersistema.com'
     ];
 
     // 3. Verificar si el origen está en tus IPs o en la lista general

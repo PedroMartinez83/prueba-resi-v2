@@ -7,8 +7,13 @@ require('dotenv').config({ path: '../.env' }); // Cargar .env desde la raíz
 const dbConfigBase = {
   client: 'pg',
   pool: {
-    min: 2,
-    max: 10
+    min: 5,  
+    max: 50,  
+    acquireTimeoutMillis: 30000,  
+    idleTimeoutMillis: 30000,  
+    createTimeoutMillis: 30000,  
+    reapIntervalMillis: 1000,  
+    propagateCreateError: false  
   },
   migrations: {
     directory: '../../migrations'
@@ -48,7 +53,19 @@ if (process.env.DATABASE_URL) {
 }
 
 // Crear instancia de Knex
-const db = knex(dbConfig);
+const db = knex({  
+  ...dbConfig,  
+  pool: {  
+    ...dbConfig.pool,  
+    afterCreate: (connection, done) => {  
+      connection.on('error', (err) => {  
+        console.error('💥 Error de conexión DB:', err);  
+        // Knex intentará reconectar automáticamente  
+      });  
+      done(null, connection);  
+    }  
+  }  
+});
 
 // Función para verificar la conexión (sin cambios)
 const testConnection = async () => {

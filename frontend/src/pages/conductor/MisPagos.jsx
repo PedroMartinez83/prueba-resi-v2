@@ -89,41 +89,43 @@ const MisPagos = () => {
   const [pagos, setPagos] = useState([]);
   const [resumen, setResumen] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
   const [mostrarFormPago, setMostrarFormPago] = useState(false);
+  const [resumenPonerseAlTanto, setResumenPonerseAlTanto] = useState(null);
+  const [cargandoResumenPonerse, setCargandoResumenPonerse] = useState(false);
   
   // Form de pago
-  const hoy = new Date().toISOString().split('T')[0];
+  const hoy = new Date().toLocaleDateString('en-CA');
   const [fechaInicio, setFechaInicio] = useState(hoy);
   const [fechaFin, setFechaFin] = useState(hoy);
   const [comprobante, setComprobante] = useState(null);
   const [notas, setNotas] = useState('');
   const [registrando, setRegistrando] = useState(false);
   const [ponerseAlTanto, setPonerseAlTanto] = useState(false);
-  const [resumenPonerseAlTanto, setResumenPonerseAlTanto] = useState(null);
-  const [cargandoResumenPonerse, setCargandoResumenPonerse] = useState(false);
 
-  const rentaDiaria = resumen?.renta_diaria || 400;
-  const polizaDiaria = resumen?.abono_poliza_mantenimiento ?? 100;
+  const rentaDiaria = resumen?.renta_diaria ? parseFloat(resumen.renta_diaria) : 400;
+  const polizaDiaria = resumen?.abono_poliza_mantenimiento ? parseFloat(resumen.abono_poliza_mantenimiento) : 100;
   const totalDiario = rentaDiaria + polizaDiaria;
   const diasReales = calcularDiasSinDomingos(fechaInicio, fechaFin);
   const diasSeleccionados = diasReales;
-  const calcularDiasSeleccionados = (inicio, fin) => {
-    const fechaInicioLocal = new Date(`${inicio}T00:00:00`);
-    const fechaFinLocal = new Date(`${fin}T00:00:00`);
-    if (Number.isNaN(fechaInicioLocal.getTime()) || Number.isNaN(fechaFinLocal.getTime())) {
-      return 1;
-    }
-    const diferencia = Math.floor((fechaFinLocal - fechaInicioLocal) / (1000 * 60 * 60 * 24));
-    return Math.max(1, diferencia + 1);
-  };
 
-  const diasCalculados = calcularDiasSinDomingos(fechaInicio, fechaFin);
+
     
     // Si está marcado "Ponerse al tanto" y ya tenemos el resumen del servidor, usamos esos datos.
     // Si no, usamos el cálculo normal de fechas.
 
 
-const totalEstimado = diasReales * (parseFloat(resumen?.renta_diaria || 0) + parseFloat(resumen?.abono_poliza_mantenimiento || 0));
+const totalEstimado = diasSeleccionados * totalDiario;
+
+const estaAlCorriente = React.useMemo(() => {
+    if (!resumen?.ultimo_pago_aprobado) return false; // Si no ha pagado nunca, no está al corriente
+    
+    // Normalizamos fechas para comparar solo YYYY-MM-DD
+    const ultimo = String(resumen.ultimo_pago_aprobado).substring(0, 10);
+    const hoy = new Date().toLocaleDateString('en-CA');
+    
+    return ultimo >= hoy; // Si su último pago es hoy o futuro, está al corriente
+  }, [resumen]);
 
   useEffect(() => {
     cargarPagos();
@@ -132,34 +134,54 @@ const totalEstimado = diasReales * (parseFloat(resumen?.renta_diaria || 0) + par
 
   // NUEVO USEEFFECT: Autocompletar fecha cuando llegue el resumen
   useEffect(() => {
-      if (ponerseAlTanto && resumen?.ultimo_pago_aprobado) {
-        
-        // 1. FECHA INICIO: El día hábil después del último pago
-        const inicioCalculado = getSiguienteDiaHabil(resumen.ultimo_pago_aprobado);
-        
-        // 2. FECHA FIN: Hoy mismo
-        // (Usamos new Date() y ajustamos a string YYYY-MM-DD)
-        const hoy = new Date();
-        const finCalculado = hoy.toISOString().split('T')[0];
+    if (!resumen) return;
 
-        // Validamos que 'hoy' no sea menor que el inicio (por si pagó por adelantado)
-        if (new Date(finCalculado) < new Date(inicioCalculado)) {
-          // Si está al día, ponemos inicio y fin iguales (1 día por adelantado si quiere)
-          setFechaInicio(inicioCalculado);
-          setFechaFin(inicioCalculado);
-        } else {
-          // Si debe dinero, ponemos el rango completo
-          setFechaInicio(inicioCalculado);
-          setFechaFin(finCalculado);
-        }
+    // 1. AHORA USAMOS EL CAMPO QUE INCLUYE PENDIENTES
+    // Si este viene null, significa que no tiene NADA (ni aprobado ni pendiente) -> Se irá al 01/01/2026
+    const ultimoPago = resumen.ultimo_pago_aprobado;
+    
+    // 2. Definimos el "Día Cero" (Arranque de año)
+    const fechaArranque = '2026-01-01'; // <--- Tu fecha deseada por defecto
+    
+    const fechaInicioAsignacion = resumen.fecha_inicio_asignacion 
+          ? new Date(resumen.fecha_inicio_asignacion).toISOString().split('T')[0]
+          : fechaArranque;
+      
+    const hoy = new Date().toLocaleDateString('en-CA');
+
+    // Lógica 1: MODO "PONERSE AL TANTO"
+    if (ponerseAlTanto) {
+      if (ultimoPago) {
+        // Tiene historial (Pendiente o Aprobado) -> Sigue la cadena
+        const inicioCalculado = getSiguienteDiaHabil(ultimoPago);
         
-      } else if (!ponerseAlTanto && resumen?.ultimo_pago_aprobado) {
-        // Si LO DESACTIVA, regresamos a pagar solo 1 día (el siguiente hábil)
-        const siguienteDia = getSiguienteDiaHabil(resumen.ultimo_pago_aprobado);
+        if (new Date(inicioCalculado) > new Date(hoy)) {
+           setFechaInicio(inicioCalculado);
+           setFechaFin(inicioCalculado);
+        } else {
+           setFechaInicio(inicioCalculado);
+           setFechaFin(hoy);
+        }
+      } else {
+        // 🆕 LIMPIO TOTAL: No tiene ni pendientes. Empieza el 1 de Enero.
+        setFechaInicio(fechaArranque);
+        setFechaFin(hoy);
+      }
+    } 
+    // Lógica 2: MODO MANUAL
+    else {
+      if (ultimoPago) {
+        // Tiene historial -> Siguiente día
+        const siguienteDia = getSiguienteDiaHabil(ultimoPago);
         setFechaInicio(siguienteDia);
         setFechaFin(siguienteDia);
+      } else {
+        // 🆕 LIMPIO TOTAL -> 1 de Enero
+        setFechaInicio(fechaArranque);
+        setFechaFin(fechaArranque);
       }
-    }, [ponerseAlTanto, resumen]);
+    }
+  }, [ponerseAlTanto, resumen]);
 
   const cargarPagos = async () => {
     try {
@@ -218,29 +240,6 @@ const totalEstimado = diasReales * (parseFloat(resumen?.renta_diaria || 0) + par
     }
   };
 
-const handleFechaInicioChange = (valor) => {
-    if (!valor) {
-      setFechaInicio('');
-      return;
-    }
-
-    // 🟢 VALIDACIÓN DE DOMINGOS MANUAL
-    const fechaObj = new Date(`${valor}T12:00:00`);
-    const diaSemana = fechaObj.getDay();
-
-    if (diaSemana === 0) { // 0 = Domingo
-      // Puedes usar una alerta estándar o un toast si tienes configurado
-      alert("⛔ No se pueden iniciar pagos en domingo (Día inhábil). Se seleccionará el lunes.");
-      
-      //  Auto-corregir al lunes en lugar de solo bloquear
-      fechaObj.setDate(fechaObj.getDate() + 1);
-      setFechaInicio(fechaObj.toISOString().split('T')[0]);
-      return;
-    }
-
-    setFechaInicio(valor);
-  };
-
   const handleFechaFinChange = (valor) => {
       if (!valor) {
         setFechaFin('');
@@ -258,45 +257,58 @@ const handleFechaInicioChange = (valor) => {
       setFechaFin(valor);
     };
 
-  const handleSubmitPago = async (e) => {
+const handleSubmitPago = async (e) => {
     e.preventDefault();
     
+    // 1. Validaciones Visuales
     if (!comprobante) {
-      toast.error('El comprobante es obligatorio');
+      toast.error('Debes subir el comprobante de transferencia');
+      return;
+    }
+    if (!fechaInicio) {
+      toast.error('Selecciona una fecha de inicio');
       return;
     }
 
     try {
-      setRegistrando(true);
-      
+      setLoading(true);
+
+      // 2. Preparamos el paquete 📦
       const formData = new FormData();
+      
+      // Siempre mandamos las dos fechas. 
+      // Si es pago de un solo día (DatePicker normal), el estado 'fechaFin' podría ser igual a 'fechaInicio' 
+      // o venir vacío. Si viene vacío, el backend es inteligente y asume que es el mismo día.
+      formData.append('fecha_inicio', fechaInicio);
+      
+      // Si 'fechaFin' tiene valor, lo mandamos. Si no, mandamos fechaInicio como fin (o dejamos que el backend decida)
+      // Lo ideal es mandar ambos para ser explícitos.
+      formData.append('fecha_fin', fechaFin || fechaInicio);
+      
       formData.append('notas', notas || '');
-
-      if (!ponerseAlTanto) {
-        formData.append('fecha_inicio', fechaInicio);
-        formData.append('fecha_fin', fechaFin);
-      }
-
       formData.append('comprobante', comprobante);
 
-      const respuesta = ponerseAlTanto
-        ? await conductorService.registrarPagoMultiple(formData)
-        : await conductorService.registrarPago(formData);
-      
-      toast.success(respuesta?.message || '¡Pago registrado correctamente!');
-      setMostrarFormPago(false);
-      setFechaInicio(hoy);
-      setFechaFin(hoy);
-      setComprobante(null);
-      setNotas('');
-      setPonerseAlTanto(false);
-      cargarPagos();
-      cargarResumen();
-      
+      // 3. ¡Disparamos a la función única! 🔫
+      const response = await conductorService.registrarPago(formData);
+
+      if (response.success) {
+        toast.success(response.message); // "Se cobraron 3 días hábiles..."
+        
+        // 4. Limpieza y recarga
+        setMostrarFormPago(false);
+        setPonerseAlTanto(false);
+        setComprobante(null);
+        setNotas('');
+        // Recargamos el resumen para que se actualice la fecha sugerida automáticamente
+        cargarResumen(); 
+        cargarPagos();
+      }
+
     } catch (error) {
-      toast.error(error.message);
+      console.error(error);
+      toast.error(error.message || 'Error al registrar el pago');
     } finally {
-      setRegistrando(false);
+      setLoading(false);
     }
   };
 
@@ -404,33 +416,40 @@ const handleFechaInicioChange = (valor) => {
             </div>
           </div>
 
-          <div className="flex items-start gap-3 p-4 mb-6 bg-white/5 border border-white/10 rounded-xl text-white">
+<div className={`flex items-start gap-3 p-4 mb-6 border rounded-xl transition-colors ${
+            estaAlCorriente 
+              ? 'bg-gray-800/30 border-gray-700 opacity-60 cursor-not-allowed' // Estilo deshabilitado
+              : 'bg-white/5 border-white/10 text-white' // Estilo normal
+          }`}>
             <input
               id="ponerse-al-tanto"
               type="checkbox"
               checked={ponerseAlTanto}
               onChange={handlePonerseAlTantoChange}
-              className="mt-1 h-4 w-4 rounded border-white/20 bg-white/5 text-cyan-500 focus:ring-cyan-500"
+              disabled={estaAlCorriente} // ⛔ BLOQUEO
+              className="mt-1 h-4 w-4 rounded border-white/20 bg-white/5 text-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed"
             />
-            <label htmlFor="ponerse-al-tanto" className="text-sm text-gray-200">
-              <span className="font-semibold text-white">Ponerse al corriente:</span> registra todos los adeudos pendientes en una sola transacción.
-              <span className="block text-xs text-gray-400 mt-1">
-                Se registrará un pago por cada día pendiente hasta la fecha actual.
+            <label 
+              htmlFor="ponerse-al-tanto" 
+              className={`text-sm ${estaAlCorriente ? 'cursor-not-allowed text-gray-500' : 'cursor-pointer text-gray-200'}`}
+            >
+              <span className={`font-semibold ${estaAlCorriente ? 'text-gray-400' : 'text-white'}`}>
+                {estaAlCorriente ? 'Estás al corriente' : 'Ponerse al corriente:'}
               </span>
-              {ponerseAlTanto && (
-                <span className="block text-xs text-gray-300 mt-2">
-                  {cargandoResumenPonerse ? (
-                    'Calculando total pendiente...'
-                  ) : resumenPonerseAlTanto?.total_dias > 0 ? (
-                    <>
-                      Total a pagar hasta hoy: <span className="text-white font-semibold">{formatCurrency(resumenPonerseAlTanto.total_monto)}</span>
-                      <span className="block text-gray-400 mt-1">
-                        {resumenPonerseAlTanto.total_dias} día{resumenPonerseAlTanto.total_dias !== 1 ? 's' : ''} · Renta {formatCurrency(resumenPonerseAlTanto.total_monto_renta)} · Póliza {formatCurrency(resumenPonerseAlTanto.total_monto_poliza)}
-                      </span>
-                    </>
-                  ) : (
-                    'No tienes adeudos pendientes hasta hoy.'
-                  )}
+              
+              {!estaAlCorriente && (
+                <>
+                   registra todos los adeudos pendientes en una sola transacción.
+                  <span className="block text-xs text-gray-400 mt-1">
+                    Se registrará un pago por cada día pendiente hasta la fecha actual.
+                  </span>
+                </>
+              )}
+              
+              {estaAlCorriente && (
+                <span className="block text-xs text-green-400 mt-1 flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  ¡Felicidades! No tienes adeudos pendientes hasta la fecha.
                 </span>
               )}
             </label>
@@ -594,11 +613,41 @@ const handleFechaInicioChange = (valor) => {
                       {pago.folio_pago || `#${pago.id}`}
                     </td>
                     <td className="p-3 text-white">
-                      {new Date(pago.fecha_pago).toLocaleDateString('es-MX', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: 'numeric'
-                      })}
+                      {(() => {
+                        // 1. Función para limpiar la fecha y evitar errores de zona horaria (resta de 1 día)
+                        // Tomamos solo los primeros 10 caracteres (YYYY-MM-DD) y agregamos mediodía
+                        const parseDate = (dateStr) => {
+                          if (!dateStr) return null;
+                          return new Date(`${dateStr.substring(0, 10)}T12:00:00`);
+                        };
+
+                        // 2. Obtenemos fechas objeto
+                        const dInicio = parseDate(pago.fecha_pago);
+                        const dFin = parseDate(pago.fecha_pago_fin);
+
+                        // 3. Configuración de formato (ej: 02 ene 2026)
+                        const options = { day: '2-digit', month: 'short', year: 'numeric' };
+                        
+                        // Si falla la fecha inicio, mostramos guión
+                        if (!dInicio) return '-';
+
+                        const strInicio = dInicio.toLocaleDateString('es-MX', options);
+
+                        // 4. LÓGICA DE RANGO:
+                        // Si existe fecha fin Y es distinta a la fecha de inicio...
+                        if (dFin && dFin.getTime() !== dInicio.getTime()) {
+                          const strFin = dFin.toLocaleDateString('es-MX', options);
+                          return (
+                            <span className="flex flex-col text-sm">
+                              <span className="font-medium text-white">{strInicio} al</span>
+                              <span className="text-gray-300">{strFin}</span>
+                            </span>
+                          );
+                        }
+
+                        // Si es el mismo día (o no tiene fin), mostramos solo inicio
+                        return strInicio;
+                      })()}
                     </td>
                     <td className="p-3 text-white font-semibold">
                       {formatCurrency(pago.monto_total || pago.monto_renta_pagado)}

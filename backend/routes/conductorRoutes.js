@@ -127,22 +127,8 @@ router.get('/pagos/ponerse-al-tanto/resumen', pagosController.getResumenPonerseA
  * Registra un pago de renta (sube comprobante)
  * Acepta: monto, fecha_pago, comprobante (imagen)
  */
-router.post(
-  '/pagos/registrar',
-  upload.single('comprobante'),
-  pagosController.registrarPagoDiario
-);
+router.post('/pagos/registrar', upload.single('comprobante'), pagosController.registrarPago);
 
-/**
- * POST /api/conductor/pagos/ponerse-al-tanto
- * Registra pagos pendientes en una sola transacción
- * Acepta: comprobante (imagen) y notas opcionales
- */
-router.post(
-  '/pagos/ponerse-al-tanto',
-  upload.single('comprobante'),
-  pagosController.registrarPagoMultiple
-);
 
 /**
  * GET /api/conductor/pagos/mi-saldo-poliza
@@ -250,5 +236,7 @@ router.get('/mis-rentas', getMisRentas);
 router.get('/mis-mantenimientos', getMisMantenimientos);
 router.post('/reportar-siniestro', reportarSiniestro);
 router.get('/historial-pagos', getHistorialPagos);
+
+
 
 module.exports = router;

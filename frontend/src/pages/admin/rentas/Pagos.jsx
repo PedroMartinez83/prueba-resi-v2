@@ -280,10 +280,10 @@ const handleValidarPago = async (pagoId) => {
       'Monto Póliza': r.monto_poliza_pagado,
       'Monto Total': r.monto_total,
       'Fecha Pago': formatDate(r.fecha_pago),
-      'Día que cubre': formatDiaCorrespondiente(obtenerFechaCorrespondiente(r.fecha_pago)),
-      'Días hábiles transcurridos (sin domingo)': obtenerInfoTolerancia(r.fecha_pago).diasHabilesTranscurridos ?? 'N/A',
-      'Días restantes de tolerancia': obtenerInfoTolerancia(r.fecha_pago).diasRestantesTolerancia ?? 'N/A',
-      'Estado tolerancia': obtenerInfoTolerancia(r.fecha_pago).estadoTolerancia,
+      'Día que cubre': formatDiaCorrespondiente(obtenerFechaCorrespondiente(getPagoFechaBase(r))),
+      'Días hábiles transcurridos (sin domingo)': obtenerInfoTolerancia(getPagoFechaBase(r)).diasHabilesTranscurridos ?? 'N/A',
+      'Días restantes de tolerancia': obtenerInfoTolerancia(getPagoFechaBase(r)).diasRestantesTolerancia ?? 'N/A',
+      'Estado tolerancia': obtenerInfoTolerancia(getPagoFechaBase(r)).estadoTolerancia,
       'Método': r.metodo_pago,
       'Estado': r.status,
       'Observaciones': r.observaciones || ''
@@ -341,21 +341,25 @@ const handleValidarPago = async (pagoId) => {
     });
   };
 
-  const obtenerRangoObservaciones = (observaciones) => {
-    if (!observaciones) return null;
-    const match = observaciones.match(/Rango\s+(\d{4}-\d{2}-\d{2})\s+a\s+(\d{4}-\d{2}-\d{2})/i);
-    if (!match) return null;
-    return {
-      inicio: match[1],
-      fin: match[2]
-    };
+  const getPagoRangoLabel = (pago) => {
+    if (!pago) return null;
+    if (pago.dias_cubiertos) return pago.dias_cubiertos;
+    if (pago.rango_inicio || pago.rango_fin) {
+      return pago.rango_inicio && pago.rango_fin && pago.rango_inicio !== pago.rango_fin
+        ? `${pago.rango_inicio} a ${pago.rango_fin}`
+        : (pago.rango_inicio || pago.rango_fin);
+    }
+    if (pago.fecha_pago_fin) {
+      return pago.fecha_pago && pago.fecha_pago !== pago.fecha_pago_fin
+        ? `${pago.fecha_pago} a ${pago.fecha_pago_fin}`
+        : pago.fecha_pago;
+    }
+    return pago.fecha_pago || null;
   };
 
-  const formatRangoObservaciones = (observaciones) => {
-    const rango = obtenerRangoObservaciones(observaciones);
-    if (!rango) return null;
-    return `${formatDate(rango.inicio)} a ${formatDate(rango.fin)}`;
-  };
+  const getPagoFechaBase = (pago) => (
+    pago?.fecha_pago_fin || pago?.fecha_pago || null
+  );
 
   const obtenerFechaCorrespondiente = (fechaPago) => {
     if (!fechaPago) return null;
@@ -734,9 +738,10 @@ const rentasFiltradas = rentas.filter(renta => {
                 </thead>
                 <tbody>
                   {rentasFiltradas.map((renta) => {
-                    const fechaCorresponde = obtenerFechaCorrespondiente(renta.fecha_pago);
-                    const fechaParaMostrar = fechaCorresponde || renta.fecha_pago;
-                    const rangoObservaciones = formatRangoObservaciones(renta.observaciones);
+                    const fechaBasePago = getPagoFechaBase(renta);
+                    const fechaCorresponde = obtenerFechaCorrespondiente(fechaBasePago);
+                    const fechaParaMostrar = fechaCorresponde || fechaBasePago;
+                    const rangoObservaciones = getPagoRangoLabel(renta);
                     const puedeBorrar = renta.status === 'Confirmado' || renta.status === 'Rechazado';
 
                     return (
@@ -971,20 +976,20 @@ const ModalHistorial = ({ historial, onClose, formatCurrency, formatDate }) => {
 
   const { historial: pagos, resumen } = historial;
 
-  const obtenerRangoObservaciones = (observaciones) => {
-    if (!observaciones) return null;
-    const match = observaciones.match(/Rango\s+(\d{4}-\d{2}-\d{2})\s+a\s+(\d{4}-\d{2}-\d{2})/i);
-    if (!match) return null;
-    return {
-      inicio: match[1],
-      fin: match[2]
-    };
-  };
-
-  const formatRangoObservaciones = (observaciones) => {
-    const rango = obtenerRangoObservaciones(observaciones);
-    if (!rango) return null;
-    return `${formatDate(rango.inicio)} a ${formatDate(rango.fin)}`;
+  const getPagoRangoLabel = (pago) => {
+    if (!pago) return null;
+    if (pago.dias_cubiertos) return pago.dias_cubiertos;
+    if (pago.rango_inicio || pago.rango_fin) {
+      return pago.rango_inicio && pago.rango_fin && pago.rango_inicio !== pago.rango_fin
+        ? `${pago.rango_inicio} a ${pago.rango_fin}`
+        : (pago.rango_inicio || pago.rango_fin);
+    }
+    if (pago.fecha_pago_fin) {
+      return pago.fecha_pago && pago.fecha_pago !== pago.fecha_pago_fin
+        ? `${pago.fecha_pago} a ${pago.fecha_pago_fin}`
+        : pago.fecha_pago;
+    }
+    return pago.fecha_pago || null;
   };
 
   return (
@@ -1042,7 +1047,7 @@ const ModalHistorial = ({ historial, onClose, formatCurrency, formatDate }) => {
                       </span>
                       {pago.status === 'Confirmado' && pago.fecha_pago && (
                         <span className="text-xs text-green-300">
-                          cubre {formatRangoObservaciones(pago.observaciones) || formatDate(pago.fecha_pago)}
+                          cubre {getPagoRangoLabel(pago) || formatDate(pago.fecha_pago)}
                         </span>
                       )}
                     </div>

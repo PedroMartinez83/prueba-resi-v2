@@ -248,127 +248,26 @@ const Reportes = () => {
     }
   ];
 
-  const normalizeDateString = (value) => {
-    if (!value) return null;
-    const trimmed = value.toString().trim();
-
-    const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (isoMatch) return trimmed;
-
-    const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-    if (slashMatch) {
-      let year = slashMatch[3];
-      if (year.length === 2) {
-        year = String(2000 + parseInt(year, 10)).padStart(4, '0');
-      }
-      const month = slashMatch[2].padStart(2, '0');
-      const day = slashMatch[1].padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
-
-    return trimmed;
-  };
-
-  const parseRangeFromText = (text = '') => {
-    if (!text) return null;
-
-    const patterns = [
-      /Rango:\s*(\d{4}-\d{2}-\d{2})\s*>\s*(\d{4}-\d{2}-\d{2})/i,
-      /Rango[:\s]+(\d{4}-\d{2}-\d{2})\s*a\s*(\d{4}-\d{2}-\d{2})/i,
-      /Pago del\s*(\d{4}-\d{2}-\d{2})\s*al\s*(\d{4}-\d{2}-\d{2})/i,
-      /Rango[:\s]+(\d{1,2}\/\d{1,2}\/\d{2,4})\s*a\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-      /Pago del\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*al\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-      /Del\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*al\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i
-    ];
-
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        return {
-          inicio: normalizeDateString(match[1]),
-          fin: normalizeDateString(match[2])
-        };
-      }
-    }
-
-    return null;
-  };
-
-  const calcularDiasHabiles = (inicio, fin) => {
-    if (!inicio || !fin) return 1;
-    const dInicio = new Date(`${inicio}T12:00:00`);
-    const dFin = new Date(`${fin}T12:00:00`);
-    if (Number.isNaN(dInicio.getTime()) || Number.isNaN(dFin.getTime())) return 1;
-    if (dFin < dInicio) return 0;
-
-    let dias = 0;
-    const cursor = new Date(dInicio);
-    while (cursor <= dFin) {
-      if (cursor.getDay() !== 0) dias++;
-      cursor.setDate(cursor.getDate() + 1);
-    }
-    return dias;
-  };
-
-  const formatDateLabel = (value) => {
-    if (!value) return '';
-
-    let date;
-    if (value instanceof Date) {
-      date = value;
-    } else if (typeof value === 'string') {
-      const trimmed = value.trim();
-      const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-      if (slashMatch) {
-        let year = slashMatch[3];
-        if (year.length === 2) {
-          year = String(2000 + parseInt(year, 10)).padStart(4, '0');
-        }
-        const month = slashMatch[2].padStart(2, '0');
-        const day = slashMatch[1].padStart(2, '0');
-        date = new Date(`${year}-${month}-${day}T12:00:00Z`);
-      } else if (trimmed.length <= 10 && /\d{4}-\d{2}-\d{2}/.test(trimmed)) {
-        date = new Date(`${trimmed}T12:00:00Z`);
-      } else {
-        date = new Date(trimmed);
-      }
-    } else {
-      date = new Date(value);
-    }
-
-    if (Number.isNaN(date.getTime())) return String(value);
-
-    return new Intl.DateTimeFormat('es-MX', {
-      day: 'numeric',
-      month: 'numeric',
-      year: 'numeric',
-      timeZone: 'UTC'
-    }).format(date);
-  };
-
   const getDiasCubiertosLabel = (pago) => {
     if (!pago) return '-';
 
-    const range =
-      (pago.fecha_inicio && pago.fecha_fin
-        ? { inicio: pago.fecha_inicio, fin: pago.fecha_fin }
-        : null) ||
-      (pago.rango_inicio && pago.rango_fin
-        ? { inicio: pago.rango_inicio, fin: pago.rango_fin }
-        : null) ||
-      parseRangeFromText(pago.observaciones || '');
-
-    if (!range) {
-      return formatDateLabel(pago.fecha_pago) || '-';
+    if (pago.dias_cubiertos) {
+      return pago.dias_cubiertos;
     }
 
-    const inicioLabel = formatDateLabel(range.inicio);
-    const finLabel = formatDateLabel(range.fin);
-    const rangoLabel = inicioLabel && finLabel && inicioLabel !== finLabel
-      ? `${inicioLabel} a ${finLabel}`
-      : (inicioLabel || finLabel);
+    if (pago.rango_inicio || pago.rango_fin) {
+      return pago.rango_inicio && pago.rango_fin && pago.rango_inicio !== pago.rango_fin
+        ? `${pago.rango_inicio} a ${pago.rango_fin}`
+        : (pago.rango_inicio || pago.rango_fin);
+    }
 
-    return rangoLabel || '-';
+    if (pago.fecha_pago_fin) {
+      return pago.fecha_pago && pago.fecha_pago !== pago.fecha_pago_fin
+        ? `${pago.fecha_pago} a ${pago.fecha_pago_fin}`
+        : pago.fecha_pago;
+    }
+
+    return pago.fecha_pago || '-';
   };
 
   const formatCurrency = (value) => {

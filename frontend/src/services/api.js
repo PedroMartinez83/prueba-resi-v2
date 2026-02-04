@@ -3,42 +3,14 @@ import axios from 'axios';
 
 // Configuración base de Axios con detección de entorno y soporte para variables de entorno
 export const getApiBaseUrl = () => {
-  if (window.location.hostname === '18.221.148.23') {
-    return 'http://18.221.148.23:3001/api';
-  }
-  const envUrl = import.meta.env?.VITE_API_URL;
-  if (envUrl) return envUrl;
+  const hostname = window.location.hostname;
 
-  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
-  const port = typeof window !== 'undefined' ? window.location.port : '';
-
-  // Entornos locales (localhost, IPs privadas o dominios .local)
-  const isLocalHost = (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname.startsWith('192.168.') ||
-    hostname.startsWith('10.') ||
-    hostname.endsWith('.local')
-  );
-
-  if (isLocalHost) {
-    return `http://${hostname || 'localhost'}:${import.meta.env?.VITE_API_PORT || '3001'}/api`;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://localhost:3001/api';
   }
 
-  // Producción en dominios oficiales
-  if (hostname.includes('driverautomanager.com')) {
-    return 'https://api.driverautomanager.com/api';
-  }
-
-  // Deploys en plataformas de preview (Vercel/Railway) apuntan a su propio dominio
-  if (hostname.includes('vercel.app') || hostname.includes('railway.app')) {
-    return `https://${hostname}/api`;
-  }
-
-  // Fallback: usar el mismo host (EC2 u otros despliegues sin dominio dedicado)
-  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
-  const baseHost = `${protocol}//${hostname}${port ? `:${port}` : ''}`;
-  return `${baseHost}/api`;
+  // Caddy se encarga del puerto. Nosotros solo apuntamos al dominio.
+  return `${window.location.protocol}//${hostname}/api`;
 };
 
 export const API_BASE_URL = getApiBaseUrl();
