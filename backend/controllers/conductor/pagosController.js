@@ -319,7 +319,8 @@ const registrarPago = async (req, res) => {
 
   try {
     const conductorId = req.user.conductorId;
-    const { fecha_inicio, fecha_fin, notas } = req.body;
+    const { fecha_inicio, fecha_fin, notas, metodo_pago } = req.body;
+
 
     // Validaciones
     if (!req.file) {
@@ -396,7 +397,7 @@ const registrarPago = async (req, res) => {
         monto_poliza_pagado: totalPoliza,// Suma total póliza
         fecha_pago: fInicio,
         fecha_pago_fin: fFin,            // Guardamos el fin del rango
-        metodo_pago: 'Transferencia',
+        metodo_pago: metodo_pago || 'Transferencia',
         comprobante_url: result.secure_url,
         observaciones: textoObservacion,
         status: 'Pendiente',

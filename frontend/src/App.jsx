@@ -5,9 +5,9 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
-const CORE_ADMIN_ROLES = ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'admin'];
-const SOLICITUDES_ROLES = ['super_admin', 'director', 'gerente_ops', 'reclutador', 'secretaria', 'admin'];
-const PAGOS_ROLES = ['super_admin', 'director', 'gerente_ops', 'contador', 'secretaria', 'admin'];
+const CORE_ADMIN_ROLES = ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'finanzas', 'admin'];
+const SOLICITUDES_ROLES = ['super_admin', 'director', 'gerente_ops', 'reclutador', 'secretaria', 'finanzas', 'admin'];
+const PAGOS_ROLES = ['super_admin', 'director', 'gerente_ops', 'finanzas', 'secretaria', 'admin'];
 import Layout from './components/layout/Layout.jsx';
 import Login from './pages/auth/Login';
 import ForgotPassword from './pages/auth/ForgotPassword';
@@ -233,7 +233,7 @@ function App() {
             <Route
               path="admin/usuarios"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'director', 'finanzas']}>
                   <Usuarios />
                 </ProtectedRoute>
               }

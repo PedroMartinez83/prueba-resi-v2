@@ -164,6 +164,24 @@ const auditMiddleware = (options = {}) => {
 
         if (debeAuditar) {
           await auditService.logAction(auditData);
+
+          if (
+            auditData.accion === 'DELETE' &&
+            auditData.resultado === 'success' &&
+            req.user?.rol === 'finanzas'
+          ) {
+            const deletedData = responseData?.data || responseData?.result || responseData;
+            await auditService.notificarEliminacionFinanzas({
+              actor: req.user,
+              ruta_api: auditData.ruta_api,
+              tabla_afectada: auditData.tabla_afectada,
+              registro_id: auditData.registro_id,
+              ip_address: auditData.ip_address,
+              user_agent: auditData.user_agent,
+              fecha: new Date(),
+              datos_registro: deletedData
+            });
+          }
         }
       } catch (error) {
         console.error('Error al registrar auditoría:', error);

@@ -102,7 +102,7 @@ const MisPagos = () => {
   const [notas, setNotas] = useState('');
   const [registrando, setRegistrando] = useState(false);
   const [ponerseAlTanto, setPonerseAlTanto] = useState(false);
-
+  const [metodoPago, setMetodoPago] = useState('Transferencia');
   const rentaDiaria = resumen?.renta_diaria ? parseFloat(resumen.renta_diaria) : 400;
   const polizaDiaria = resumen?.abono_poliza_mantenimiento ? parseFloat(resumen.abono_poliza_mantenimiento) : 100;
   const totalDiario = rentaDiaria + polizaDiaria;
@@ -284,6 +284,7 @@ const handleSubmitPago = async (e) => {
       // Si 'fechaFin' tiene valor, lo mandamos. Si no, mandamos fechaInicio como fin (o dejamos que el backend decida)
       // Lo ideal es mandar ambos para ser explícitos.
       formData.append('fecha_fin', fechaFin || fechaInicio);
+      formData.append('metodo_pago', metodoPago);
       
       formData.append('notas', notas || '');
       formData.append('comprobante', comprobante);
@@ -514,6 +515,31 @@ const handleSubmitPago = async (e) => {
               </div>
             </div>
 
+            {/* 💳 SECCIÓN: MÉTODO DE PAGO */}
+            <div>
+              <label className="block text-white font-semibold mb-2 flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-cyan-400" />
+                Método de Pago
+              </label>
+              <div className="relative">
+                <select
+                  value={metodoPago}
+                  onChange={(e) => setMetodoPago(e.target.value)}
+                  className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white focus:border-cyan-400 focus:outline-none appearance-none cursor-pointer transition-colors"
+                >
+                  <option value="Transferencia" className="bg-gray-900 text-white">Transferencia</option>
+                  <option value="Deposito" className="bg-gray-900 text-white">Depósito</option>
+                </select>
+                
+                {/* Flecha decorativa */}
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+
             {/* Comprobante */}
             <div>
               <label className="block text-white font-semibold mb-2 flex items-center gap-2">
@@ -588,6 +614,7 @@ const handleSubmitPago = async (e) => {
         </div>
         
         {pagos.length === 0 ? (
+
           <div className="text-center py-12">
             <FileText className="w-16 h-16 text-gray-500 mx-auto mb-4" />
             <p className="text-gray-400">No hay pagos registrados</p>
@@ -614,39 +641,53 @@ const handleSubmitPago = async (e) => {
                     </td>
                     <td className="p-3 text-white">
                       {(() => {
-                        // 1. Función para limpiar la fecha y evitar errores de zona horaria (resta de 1 día)
-                        // Tomamos solo los primeros 10 caracteres (YYYY-MM-DD) y agregamos mediodía
+                        // 1. Limpieza de fecha y zona horaria
                         const parseDate = (dateStr) => {
                           if (!dateStr) return null;
                           return new Date(`${dateStr.substring(0, 10)}T12:00:00`);
                         };
 
-                        // 2. Obtenemos fechas objeto
                         const dInicio = parseDate(pago.fecha_pago);
                         const dFin = parseDate(pago.fecha_pago_fin);
 
-                        // 3. Configuración de formato (ej: 02 ene 2026)
-                        const options = { day: '2-digit', month: 'short', year: 'numeric' };
-                        
-                        // Si falla la fecha inicio, mostramos guión
                         if (!dInicio) return '-';
 
-                        const strInicio = dInicio.toLocaleDateString('es-MX', options);
+                        // 2. FUNCIONES DE FORMATEO MANUAL (Anti-Guiones 🛡️)
+                        // Extraemos las partes por separado para unirlas nosotros mismos
+                        const getDia = (d) => d.toLocaleDateString('es-MX', { day: '2-digit' });
+                        const getMes = (d) => d.toLocaleDateString('es-MX', { month: 'short' }).replace('.', '');
+                        const getAnio = (d) => d.getFullYear();
 
-                        // 4. LÓGICA DE RANGO:
-                        // Si existe fecha fin Y es distinta a la fecha de inicio...
-                        if (dFin && dFin.getTime() !== dInicio.getTime()) {
-                          const strFin = dFin.toLocaleDateString('es-MX', options);
+                        // Construye "21 ene" (sin guiones sorpresa)
+                        const fmtDiaMes = (d) => `${getDia(d)} ${getMes(d)}`;
+                        // Construye "21 ene 2026"
+                        const fmtCompleto = (d) => `${getDia(d)} ${getMes(d)} ${getAnio(d)}`;
+
+                        // CASO 1: MISMO DÍA (O sin fin)
+                        if (!dFin || dFin.getTime() === dInicio.getTime()) {
+                          return fmtCompleto(dInicio);
+                        }
+
+                        // CASO 2: RANGO
+                        const esMismoMes = 
+                          dInicio.getMonth() === dFin.getMonth() && 
+                          dInicio.getFullYear() === dFin.getFullYear();
+
+                        if (esMismoMes) {
+                          // Mismo mes: "12 al 20 ene 2026"
                           return (
-                            <span className="flex flex-col text-sm">
-                              <span className="font-medium text-white">{strInicio} al</span>
-                              <span className="text-gray-300">{strFin}</span>
+                            <span className="text-sm font-medium text-white">
+                              {getDia(dInicio)} al {fmtCompleto(dFin)}
+                            </span>
+                          );
+                        } else {
+                          // Meses distintos: "21 ene al 03 feb 2026"
+                          return (
+                            <span className="text-sm font-medium text-white">
+                              {fmtDiaMes(dInicio)} al {fmtCompleto(dFin)}
                             </span>
                           );
                         }
-
-                        // Si es el mismo día (o no tiene fin), mostramos solo inicio
-                        return strInicio;
                       })()}
                     </td>
                     <td className="p-3 text-white font-semibold">
@@ -686,14 +727,14 @@ const handleSubmitPago = async (e) => {
 
                       <div className="flex justify gap-2">
                         {pago.status === 'Eliminado' && (
-    <button
-      onClick={() => alert(`⛔ RAZÓN DE LA ELIMINACIÓN:\n\n${pago.observaciones || 'Sin motivo especificado'}`)}
-      className="p-2 rounded-lg bg-gray-600/20 text-gray-400 hover:bg-gray-600/30 transition-colors"
-      title="Ver motivo de eliminación"
-    >
-      <MessageSquareX size={18} />
-    </button>
-  )}
+                      <button
+                        onClick={() => alert(`⛔ RAZÓN DE LA ELIMINACIÓN:\n\n${pago.observaciones || 'Sin motivo especificado'}`)}
+                        className="p-2 rounded-lg bg-gray-600/20 text-gray-400 hover:bg-gray-600/30 transition-colors"
+                        title="Ver motivo de eliminación"
+                      >
+                        <MessageSquareX size={18} />
+                      </button>
+                    )}
                       </div>
                     </td>
                   </tr>

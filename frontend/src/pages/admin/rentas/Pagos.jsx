@@ -431,12 +431,52 @@ const handleValidarPago = async (pagoId) => {
 
   const formatDiaCorrespondiente = (fecha) => {
     if (!fecha) return 'N/A';
-    return fecha.toLocaleDateString('es-MX', {
-      weekday: 'long',
-      month: 'short',
-      day: 'numeric'
+    const date = new Date(fecha);
+    return date.toLocaleDateString('es-MX', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
     });
   };
+
+  // Función para formatear rangos (Versión Blindada contra Zonas Horarias) 🛡️
+const formatRangoCubre = (fechaInicio, fechaFin) => {
+  if (!fechaInicio) return 'Sin fecha';
+
+  // 1. Helper para parsear fecha asegurando que sea mediodía (evita el -1 día)
+  const parseFecha = (fecha) => {
+    if (!fecha) return null;
+    // Si la fecha es solo "YYYY-MM-DD", le pegamos la hora T12:00:00
+    // Si ya trae hora (ISO string), la usamos tal cual
+    const fechaSegura = fecha.includes('T') ? fecha : `${fecha}T12:00:00`;
+    return new Date(fechaSegura);
+  };
+
+  const dInicio = parseFecha(fechaInicio);
+  
+  // Si no hay fechaFin, o es igual a inicio, usamos dInicio
+  const dFin = fechaFin ? parseFecha(fechaFin) : dInicio;
+
+  // 2. Helpers de formato
+  const getDia = (d) => d.getDate();
+  const getMes = (d) => d.toLocaleDateString('es-MX', { month: 'long' }).replace('.', '');
+  const getAnio = (d) => d.getFullYear();
+
+  // 3. Comparación: Usamos getTime() para ser exactos, o toDateString()
+  // Si las fechas son idénticas (mismo día)
+  if (dInicio.toDateString() === dFin.toDateString()) {
+    return `${getDia(dInicio)} ${getMes(dInicio)} ${getAnio(dInicio)}`;
+  }
+
+  // 4. Lógica de Rangos
+  // Mismo mes y año (Ej: 1 al 10 ene 2026)
+  if (dInicio.getMonth() === dFin.getMonth() && dInicio.getFullYear() === dFin.getFullYear()) {
+    return `${getDia(dInicio)} al ${getDia(dFin)} ${getMes(dInicio)} ${getAnio(dInicio)}`;
+  }
+
+  // Diferente mes o año (Ej: 31 ene al 2 feb 2026)
+  return `${getDia(dInicio)} ${getMes(dInicio)} al ${getDia(dFin)} ${getMes(dFin)} ${getAnio(dFin)}`;
+};
 
   // 🆕 Filtro de búsqueda mejorado
 const rentasFiltradas = rentas.filter(renta => {
@@ -802,12 +842,13 @@ const rentasFiltradas = rentas.filter(renta => {
                           <div className="space-y-2">
                             <div className="flex items-center gap-2 text-gray-200">
                               <Calendar className="w-4 h-4" />
-                              <span className="font-medium whitespace-nowrap">
-                                {formatDate(fechaParaMostrar)}
-                              </span>
+                            <span className="font-medium whitespace-nowrap capitalize">
+                              {/* Usamos 'renta.created_at' que es la fecha de creación en BD */}
+                              {formatDiaCorrespondiente(renta.created_at)}
+                            </span>
                             </div>
                             <p className="text-xs text-gray-500 capitalize">
-                              Cubre: {rangoObservaciones || formatDiaCorrespondiente(fechaCorresponde)}
+                              Cubre: {formatRangoCubre(renta.fecha_pago, renta.fecha_pago_fin)}
                             </p>
                           </div>
                         </td>

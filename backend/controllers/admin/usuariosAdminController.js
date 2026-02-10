@@ -216,12 +216,12 @@ exports.createUsuario = async (req, res) => {
     }
 
     // Validar que el rol sea válido
-    const rolesValidos = [
-      'super_admin',
-      'director',
-      'gerente_ops',
-      'contador',
-      'reclutador',
+      const rolesValidos = [
+        'super_admin',
+        'director',
+        'gerente_ops',
+        'finanzas',
+        'reclutador',
       'jefe_taller',
       'secretaria'
     ];
@@ -728,6 +728,15 @@ exports.deleteUsuario = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: 'No puedes eliminar a un super administrador'
+      });
+    }
+
+    // Finanzas no puede eliminar usuarios de direcciÃ³n
+    if (req.user?.rol === 'finanzas' && usuario.rol === 'director') {
+      await trx.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'No puedes eliminar a un usuario de direcciÃ³n'
       });
     }
 

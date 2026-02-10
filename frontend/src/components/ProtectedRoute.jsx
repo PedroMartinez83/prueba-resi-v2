@@ -5,7 +5,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 // Definir adminRoles
-const adminRoles = ['admin', 'super_admin', 'director', 'gerente_ops', 'contador', 'gestor_flota', 'secretaria'];
+const adminRoles = ['admin', 'super_admin', 'director', 'gerente_ops', 'finanzas', 'gestor_flota', 'secretaria'];
 
 // Función para verificar acceso según roles
 const checkRoleAccess = (userRole, requiredRole, allowedRoles) => {

@@ -275,11 +275,90 @@ const Reportes = () => {
     return `$${numero.toFixed(2)}`;
   };
 
+  const parseLocalDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    const str = String(value).trim();
+
+    const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+      const year = Number(isoMatch[1]);
+      const month = Number(isoMatch[2]);
+      const day = Number(isoMatch[3]);
+      return new Date(year, month - 1, day);
+    }
+
+    const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (slashMatch) {
+      const day = Number(slashMatch[1]);
+      const month = Number(slashMatch[2]);
+      let year = Number(slashMatch[3]);
+      if (year < 100) year += 2000;
+      return new Date(year, month - 1, day);
+    }
+
+    const date = new Date(str);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+  };
+
+  const formatDiasCubiertosVistaPrevia = (pago) => {
+    if (!pago) return '-';
+
+    const inicioRaw = pago.rango_inicio || pago.fecha_pago;
+    const finRaw = pago.rango_fin || pago.fecha_pago_fin || pago.fecha_pago;
+
+    if (!inicioRaw) return '-';
+
+    const inicioDate = parseLocalDate(inicioRaw);
+    const finDate = finRaw ? parseLocalDate(finRaw) : null;
+
+    if (!inicioDate || Number.isNaN(inicioDate.getTime())) {
+      return pago.dias_cubiertos || getDiasCubiertosLabel(pago);
+    }
+
+    const inicioDia = inicioDate.getDate();
+    const inicioMes = inicioDate
+      .toLocaleDateString('es-MX', { month: 'long' })
+      .replace('.', '')
+      .toLowerCase();
+    const inicioAno = inicioDate.getFullYear();
+
+    if (!finDate || Number.isNaN(finDate.getTime()) || inicioRaw === finRaw) {
+      return `${inicioDia} ${inicioMes} ${inicioAno}`;
+    }
+
+    const finDia = finDate.getDate();
+    const finDiaPadded = String(finDia).padStart(2, '0');
+    const finMes = finDate
+      .toLocaleDateString('es-MX', { month: 'long' })
+      .replace('.', '')
+      .toLowerCase();
+    const finAno = finDate.getFullYear();
+
+    if (inicioMes === finMes && inicioAno === finAno) {
+      return `${inicioDia} al ${finDia} ${inicioMes} ${inicioAno}`;
+    }
+
+    if (inicioAno === finAno) {
+      return `${inicioDia} ${inicioMes} al ${finDiaPadded} ${finMes} ${finAno}`;
+    }
+
+    return `${inicioDia} ${inicioMes} ${inicioAno} al ${finDiaPadded} ${finMes} ${finAno}`;
+  };
+
+  const getFechaRegistroLabel = (pago) => {
+    if (!pago) return '-';
+    const fecha = pago.created_at || pago.fecha_registro || pago.fecha_pago;
+    if (!fecha) return '-';
+    return new Date(fecha).toLocaleDateString('es-MX');
+  };
+
   const buildVistaPreviaRows = (pagos = []) =>
     pagos.map((pago) => ({
       id: pago.id,
-      fechaPago: new Date(pago.fecha_pago).toLocaleDateString('es-MX'),
-      diasCubiertos: getDiasCubiertosLabel(pago),
+      fechaPago: getFechaRegistroLabel(pago),
+      diasCubiertos: formatDiasCubiertosVistaPrevia(pago),
       conductor: pago.nombre_conductor,
       vehiculo: pago.numero_vehiculo,
       totalPagado: formatCurrency(pago.monto_total),

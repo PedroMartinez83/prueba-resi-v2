@@ -209,6 +209,7 @@ exports.getPagosRentas = async (req, res) => {
           'p.id',
           'p.fecha_pago',
           'p.fecha_pago_fin',
+          'p.created_at',
           'p.monto_total',
           'p.monto_renta_pagado',
           'p.monto_poliza_pagado',
@@ -226,6 +227,8 @@ exports.getPagosRentas = async (req, res) => {
 
         const detalle = detalleMap.get(pago.id);
         if (detalle?.fecha_pago) {
+          pago.created_at = detalle.created_at;
+          pago.fecha_pago_fin = detalle.fecha_pago_fin;
           const rangoInicio = normalizeDateString(detalle.fecha_pago);
           const rangoFin = normalizeDateString(detalle.fecha_pago_fin || detalle.fecha_pago);
           pago.rango_inicio = rangoInicio;
@@ -235,6 +238,10 @@ exports.getPagosRentas = async (req, res) => {
               ? `${rangoInicio} a ${rangoFin}`
               : (rangoInicio || rangoFin);
           }
+        }
+
+        if (!pago.created_at && detalle?.created_at) {
+          pago.created_at = detalle.created_at;
         }
       });
     }
@@ -276,7 +283,8 @@ exports.getEstadisticasPagos = async (req, res) => {
   console.log('🔍 Iniciando getEstadisticasPagos...');
 
   try {
-    const { fecha_desde, fecha_hasta } = req.query;
+    const { fecha_desde, fecha_hasta, tz_offset } = req.query;
+    const tzOffsetMinutes = Number.isFinite(Number(tz_offset)) ? Number(tz_offset) : 0;
 
     let baseQuery = db('pagos_diarios');
 
@@ -298,6 +306,9 @@ exports.getEstadisticasPagos = async (req, res) => {
         // 🎯 CAMBIO CLAVE: Usar monto_renta_pagado (ganancia empresa)
         db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_renta_pagado ELSE 0 END) as total_cobrado"),
         
+        // 🔵 NUEVO: Total cobrado incluyendo póliza (monto_total)
+        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_total ELSE 0 END) as total_cobrado_total"),
+        
         // 🆕 NUEVO: Total ahorrado en póliza (dinero conductor)
         db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_poliza_pagado ELSE 0 END) as total_ahorrado_poliza"),
         
@@ -309,30 +320,43 @@ exports.getEstadisticasPagos = async (req, res) => {
     // Cobrado HOY (renta + póliza; por fecha de registro)
     const hoyResult = await db('pagos_diarios')
       .where('status', 'Confirmado')
-      .whereRaw('DATE(created_at) = CURRENT_DATE')
+      .whereRaw(
+        "DATE((created_at AT TIME ZONE 'UTC') - (? || ' minutes')::interval) = " +
+        "DATE((now() AT TIME ZONE 'UTC') - (? || ' minutes')::interval)",
+        [tzOffsetMinutes, tzOffsetMinutes]
+      )
       .sum('monto_total as total');
     const cobradoHoy = parseFloat(hoyResult[0]?.total || 0);
 
-    // Cobrado SEMANA (últimos 7 días)
+    // Cobrado SEMANA (lunes a sabado, por fecha de registro)
     const semanaResult = await db('pagos_diarios')
       .where('status', 'Confirmado')
-      .whereRaw('fecha_pago >= CURRENT_DATE - INTERVAL \'7 days\'')
-      .sum('monto_renta_pagado as total');
+      .whereRaw("DATE(created_at) >= date_trunc('week', CURRENT_DATE)::date")
+      .whereRaw("DATE(created_at) <= (date_trunc('week', CURRENT_DATE) + INTERVAL '5 days')::date")
+      .sum('monto_total as total');
     const cobradoSemana = parseFloat(semanaResult[0]?.total || 0);
 
-    // Cobrado MES actual
+    // Cobrado MES actual (por fecha de registro)
     const mesResult = await db('pagos_diarios')
       .where('status', 'Confirmado')
-      .whereRaw('EXTRACT(MONTH FROM fecha_pago) = EXTRACT(MONTH FROM CURRENT_DATE)')
-      .whereRaw('EXTRACT(YEAR FROM fecha_pago) = EXTRACT(YEAR FROM CURRENT_DATE)')
-      .sum('monto_renta_pagado as total');
+      .whereRaw("created_at >= date_trunc('month', CURRENT_DATE)")
+      .whereRaw("created_at < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'")
+      .sum('monto_total as total');
     const cobradoMes = parseFloat(mesResult[0]?.total || 0);
 
-    // Fondo de pólizas MES actual
+    // Cobrado MES actual solo renta (por fecha de registro)
+    const mesRentaResult = await db('pagos_diarios')
+      .where('status', 'Confirmado')
+      .whereRaw("created_at >= date_trunc('month', CURRENT_DATE)")
+      .whereRaw("created_at < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'")
+      .sum('monto_renta_pagado as total');
+    const cobradoMesRenta = parseFloat(mesRentaResult[0]?.total || 0);
+
+    // Fondo de polizas MES actual (por fecha de registro)
     const polizaMesResult = await db('pagos_diarios')
       .where('status', 'Confirmado')
-      .whereRaw('EXTRACT(MONTH FROM fecha_pago) = EXTRACT(MONTH FROM CURRENT_DATE)')
-      .whereRaw('EXTRACT(YEAR FROM fecha_pago) = EXTRACT(YEAR FROM CURRENT_DATE)')
+      .whereRaw("created_at >= date_trunc('month', CURRENT_DATE)")
+      .whereRaw("created_at < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'")
       .sum('monto_poliza_pagado as total');
     const polizaMes = parseFloat(polizaMesResult[0]?.total || 0);
 
@@ -437,6 +461,7 @@ exports.getEstadisticasPagos = async (req, res) => {
         
         // 💰 GANANCIAS DE LA EMPRESA (solo renta)
         total_cobrado: parseFloat(stats.total_cobrado || 0),
+        total_cobrado_total: parseFloat(stats.total_cobrado_total || 0),
         
         // 🆕 NUEVO: Dinero ahorrado en póliza (conductores)
         total_ahorrado_poliza: parseFloat(stats.total_ahorrado_poliza || 0),
@@ -449,6 +474,7 @@ exports.getEstadisticasPagos = async (req, res) => {
         cobrado_hoy: cobradoHoy,
         cobrado_semana: cobradoSemana,
         cobrado_mes: cobradoMes,
+        cobrado_mes_renta: cobradoMesRenta,
         conductores_deuda: conductoresDeuda,
         proyeccion_mes: parseFloat(proyeccion),
         proyeccion_poliza_mes: parseFloat(proyeccionPoliza),
@@ -601,6 +627,7 @@ exports.validarPago = async (req, res) => {
     }
 
     console.log(`💰 Actualizando finanzas: ${vehiculo.numero_vehiculo} | Abono: ${montoAbonar} | Nuevo %: ${nuevoPorcentaje.toFixed(2)}`);
+
 
     // 4. ACTUALIZAR VEHÍCULO
     await trx('vehiculos')
@@ -973,7 +1000,7 @@ exports.getOpcionesPagos = async (req, res) => {
     const estados = ['Pendiente', 'Confirmado', 'Rechazado'];
     
     // Métodos de pago
-    const metodos_pago = ['Efectivo', 'Transferencia', 'Tarjeta', 'Stripe'];
+    const metodos_pago = ['Deposito', 'Transferencia', 'Tarjeta', 'Stripe'];
     
     // Traer TODOS los conductores con su vehículo asignado (si tienen)
     const conductores = await db('conductores')
@@ -1476,6 +1503,7 @@ exports.eliminarPago = async (req, res) => {
   const { motivo } = req.body;
 
   try {
+    let pagoEliminado = null;
     console.log(`🗑️ Eliminando pago ID: ${id}. Motivo: ${motivo || 'No especificado'}`);
 
     await db.transaction(async (trx) => {
@@ -1484,13 +1512,15 @@ exports.eliminarPago = async (req, res) => {
       const pago = await trx('pagos_diarios as p')
         .leftJoin('asignaciones as a', 'p.asignacion_id', 'a.id')
         .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
+        .leftJoin('conductores as c', 'a.conductor_id', 'c.id')
         .where('p.id', id)
         .select(
           'p.*', 
           'v.id as vehiculo_id', // Si esto viene null, es el dato corrupto
           'v.total_pagado_corrida', 
           'v.total_corrida',
-          'v.saldo_pendiente_corrida'
+          'v.saldo_pendiente_corrida',
+          'c.nombre_conductor as conductor_nombre'
         )
         .first();
 
@@ -1564,9 +1594,19 @@ exports.eliminarPago = async (req, res) => {
           updated_at: new Date(),
           observaciones: `${nuevasObservaciones} - Borrado el ${new Date().toLocaleDateString('es-MX')}`
         });
+
+      pagoEliminado = {
+        ...pago,
+        status: 'Eliminado',
+        observaciones: `${nuevasObservaciones} - Borrado el ${new Date().toLocaleDateString('es-MX')}`
+      };
     });
 
-    res.json({ success: true, message: 'Registro eliminado (lógico) y saldo revertido correctamente.' });
+    res.json({
+      success: true,
+      message: 'Registro eliminado (logico) y saldo revertido correctamente.',
+      data: pagoEliminado
+    });
 
   } catch (error) {
     console.error('❌ Error en eliminarPago:', error.message);

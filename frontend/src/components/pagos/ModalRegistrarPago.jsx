@@ -919,7 +919,7 @@ const handleSubmit = async (e) => {
                 className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent appearance-none"
               >
                 <option value="Transferencia" className="bg-gray-800">Transferencia</option>
-                <option value="Efectivo" className="bg-gray-800">Efectivo</option>
+                <option value="Deposito" className="bg-gray-800">Deposito</option>
                 <option value="Tarjeta" className="bg-gray-800">Tarjeta</option>
                 <option value="Stripe" className="bg-gray-800">Stripe</option>
               </select>
@@ -928,7 +928,7 @@ const handleSubmit = async (e) => {
 
 
            {/* Referencia de Pago */}
-          {['Transferencia', 'Tarjeta'].includes(formData.metodo_pago) && (
+          {['Transferencia'].includes(formData.metodo_pago) && (
             <div>
               <label className="block text-white font-medium mb-2">
                 Referencia de Pago {formData.metodo_pago === 'Transferencia' ? '(Folio/CLABE)' : '(Últimos dígitos)'}

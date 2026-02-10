@@ -247,7 +247,7 @@ const Dashboard = () => {
         <div className="cursor-pointer transform hover:scale-105 transition-all h-full">
           <StatCard
             title="Ingresos del Mes"
-            value={`$${(stats.rentas.montoTotalPagado || 0).toLocaleString('es-MX')}`}
+            value={`$${(stats.rentas.ingresosMes || 0).toLocaleString('es-MX')}`}
             icon={DollarSign}
             color="info"
             trend="up"

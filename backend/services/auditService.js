@@ -1,10 +1,11 @@
-// backend/services/auditService.js
+﻿// backend/services/auditService.js
 const { db } = require('../config/database');
+const { sendEmail, isEmailConfigured } = require('../utils/emailService');
 const os = require('os');
 
 class AuditService {
   /**
-   * Registra una acción en la tabla audit_logs
+   * Registra una acciÃ³n en la tabla audit_logs
    */
   async logAction({
     usuario_id = null,
@@ -49,8 +50,8 @@ class AuditService {
       
       return log;
     } catch (error) {
-      console.error('Error al registrar auditoría:', error);
-      // No lanzar error para no interrumpir la operación principal
+      console.error('Error al registrar auditorÃ­a:', error);
+      // No lanzar error para no interrumpir la operaciÃ³n principal
       return null;
     }
   }
@@ -99,7 +100,7 @@ class AuditService {
   }
 
   /**
-   * Registra eventos de sesión
+   * Registra eventos de sesiÃ³n
    */
   async logSession({
     usuario_id,
@@ -134,13 +135,13 @@ class AuditService {
       
       return log;
     } catch (error) {
-      console.error('Error al registrar sesión:', error);
+      console.error('Error al registrar sesiÃ³n:', error);
       return null;
     }
   }
 
   /**
-   * Registra cambios críticos que requieren revisión
+   * Registra cambios crÃ­ticos que requieren revisiÃ³n
    */
   async logCriticalChange({
     usuario_id,
@@ -165,14 +166,14 @@ class AuditService {
         created_at: new Date()
       }).returning('id');
       
-      // Si requiere revisión, notificar a admins
+      // Si requiere revisiÃ³n, notificar a admins
       if (requiere_revision) {
         await this.notificarCambiosCriticos(log);
       }
       
       return log;
     } catch (error) {
-      console.error('Error al registrar cambio crítico:', error);
+      console.error('Error al registrar cambio crÃ­tico:', error);
       return null;
     }
   }
@@ -193,129 +194,88 @@ class AuditService {
   }
 
   /**
-   * Obtiene la actividad reciente de un usuario
-   */
-  async getUserActivity(usuario_id, limit = 50) {
-    try {
-      const activity = await db('audit_logs')
-        .where('usuario_id', usuario_id)
-        .orderBy('created_at', 'desc')
-        .limit(limit);
-      
-      return activity;
-    } catch (error) {
-      console.error('Error obteniendo actividad del usuario:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Obtiene estadísticas de auditoría
-   */
-  async getAuditStats(dias = 30) {
-    try {
-      const fecha_limite = new Date();
-      fecha_limite.setDate(fecha_limite.getDate() - dias);
-
-      const stats = await db('audit_logs')
-        .where('created_at', '>=', fecha_limite)
-        .select(
-          db.raw('COUNT(*) as total'),
-          db.raw("COUNT(CASE WHEN accion = 'CREATE' THEN 1 END) as creaciones"),
-          db.raw("COUNT(CASE WHEN accion = 'UPDATE' THEN 1 END) as actualizaciones"),
-          db.raw("COUNT(CASE WHEN accion = 'DELETE' THEN 1 END) as eliminaciones"),
-          db.raw("COUNT(CASE WHEN resultado = 'error' THEN 1 END) as errores"),
-          db.raw("COUNT(CASE WHEN resultado = 'denied' THEN 1 END) as accesos_denegados")
-        )
-        .first();
-
-      const porTabla = await db('audit_logs')
-        .where('created_at', '>=', fecha_limite)
-        .whereNotNull('tabla_afectada')
-        .groupBy('tabla_afectada')
-        .select('tabla_afectada', db.raw('COUNT(*) as total'))
-        .orderBy('total', 'desc');
-
-      const porUsuario = await db('audit_logs')
-        .where('created_at', '>=', fecha_limite)
-        .whereNotNull('usuario_email')
-        .groupBy('usuario_email', 'usuario_rol')
-        .select('usuario_email', 'usuario_rol', db.raw('COUNT(*) as total'))
-        .orderBy('total', 'desc')
-        .limit(10);
-
-      return {
-        resumen: stats,
-        porTabla,
-        porUsuario,
-        periodo_dias: dias
-      };
-    } catch (error) {
-      console.error('Error obteniendo estadísticas:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Busca intentos sospechosos
-   */
-  async detectarActividadSospechosa() {
-    try {
-      // Múltiples errores del mismo usuario
-      const erroresRepetidos = await db('audit_logs')
-        .where('created_at', '>=', db.raw("NOW() - INTERVAL '1 hour'"))
-        .where('resultado', 'error')
-        .groupBy('usuario_id', 'usuario_email')
-        .having(db.raw('COUNT(*) > ?', [5]))
-        .select('usuario_id', 'usuario_email', db.raw('COUNT(*) as intentos'));
-
-      // Múltiples accesos denegados
-      const accesosDenegados = await db('audit_logs')
-        .where('created_at', '>=', db.raw("NOW() - INTERVAL '1 hour'"))
-        .where('resultado', 'denied')
-        .groupBy('ip_address')
-        .having(db.raw('COUNT(*) > ?', [10]))
-        .select('ip_address', db.raw('COUNT(*) as intentos'));
-
-      // Eliminaciones masivas
-      const eliminacionesMasivas = await db('audit_logs')
-        .where('created_at', '>=', db.raw("NOW() - INTERVAL '1 hour'"))
-        .where('accion', 'DELETE')
-        .groupBy('usuario_id', 'usuario_email')
-        .having(db.raw('COUNT(*) > ?', [10]))
-        .select('usuario_id', 'usuario_email', db.raw('COUNT(*) as eliminaciones'));
-
-      return {
-        erroresRepetidos,
-        accesosDenegados,
-        eliminacionesMasivas
-      };
-    } catch (error) {
-      console.error('Error detectando actividad sospechosa:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Limpia logs antiguos
-   */
-  async limpiarLogsAntiguos(diasRetener = 90) {
-    try {
-      const resultado = await db.raw('SELECT * FROM limpiar_logs_antiguos(?)', [diasRetener]);
-      return resultado.rows[0];
-    } catch (error) {
-      console.error('Error limpiando logs:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Notifica cambios críticos a administradores
+   * Notifica cambios criticos a administradores
    */
   async notificarCambiosCriticos(logId) {
-    // Implementar notificación por email/SMS/Slack
-    console.log(`⚠️ Cambio crítico registrado con ID: ${logId}`);
+    // Implementar notificaci??n por email/SMS/Slack
+    console.log(`?????? Cambio critico registrado con ID: ${logId}`);
     // TODO: Implementar notificaciones reales
+  }
+
+  /**
+   * Notifica por correo las eliminaciones realizadas por Finanzas
+   */
+  async notificarEliminacionFinanzas({
+    actor = {},
+    ruta_api = null,
+    tabla_afectada = null,
+    registro_id = null,
+    ip_address = null,
+    user_agent = null,
+    fecha = new Date(),
+    datos_registro = null
+  }) {
+    try {
+      if (!isEmailConfigured()) return;
+
+      const destinatarios = await db('usuarios')
+        .whereIn('rol', ['super_admin', 'director'])
+        .whereNotNull('email')
+        .pluck('email');
+
+      if (!destinatarios || destinatarios.length === 0) return;
+
+      const subject = 'Notificacion de accion';
+      const actorNombre = actor.nombre || actor.nombre_completo || actor.name || actor.email || 'N/A';
+      const objetivoNombre = datos_registro?.nombre_completo ||
+        datos_registro?.nombre_conductor ||
+        datos_registro?.nombre ||
+        datos_registro?.name ||
+        datos_registro?.email ||
+        (registro_id ? `ID ${registro_id}` : 'N/A');
+      const fechaTexto = new Date(fecha).toLocaleString('es-MX', {
+        timeZone: 'America/Mexico_City'
+      });
+
+      const accionEspecifica = (() => {
+        switch (tabla_afectada) {
+          case 'pagos':
+          case 'pagos_diarios':
+          case 'rentas':
+            return 'Eliminacion de pago de renta';
+          case 'conductores':
+            return 'Eliminacion de conductor';
+          case 'vehiculos':
+            return 'Eliminacion de vehiculo';
+          case 'usuarios':
+            return 'Eliminacion de usuario';
+          default:
+            return 'Eliminacion de registro';
+        }
+      })();
+
+      const text = [
+        'Se registro una accion.',
+        `Accion: ${accionEspecifica}`,
+        `Usuario que realizo la accion: ${actorNombre}`,
+        `Usuario afectado: ${objetivoNombre}`,
+        `Fecha y hora: ${fechaTexto}`
+      ].join('\n');
+
+      const html = `
+        <p>Se registro una <strong>accion</strong>.</p>
+        <ul>
+          <li><strong>Accion:</strong> ${accionEspecifica}</li>
+          <li><strong>Usuario que realizo la accion:</strong> ${actorNombre}</li>
+          <li><strong>Usuario afectado:</strong> ${objetivoNombre}</li>
+          <li><strong>Fecha y hora:</strong> ${fechaTexto}</li>
+        </ul>
+      `;
+
+      await sendEmail({ to: destinatarios, subject, text, html });
+    } catch (error) {
+      console.error('Error enviando notificacion de eliminacion:', error);
+    }
   }
 
   /**
@@ -335,7 +295,7 @@ class AuditService {
   parseUserAgent(userAgent) {
     if (!userAgent) return { navegador: null, sistema_operativo: null, dispositivo: null };
     
-    // Detección básica - puedes usar la librería 'useragent' para algo más robusto
+    // DetecciÃ³n bÃ¡sica - puedes usar la librerÃ­a 'useragent' para algo mÃ¡s robusto
     let navegador = 'Desconocido';
     let sistema_operativo = 'Desconocido';
     let dispositivo = 'Desktop';
@@ -361,5 +321,6 @@ class AuditService {
   }
 }
 
-// Exportar instancia única (Singleton)
+// Exportar instancia Ãºnica (Singleton)
 module.exports = new AuditService();
+

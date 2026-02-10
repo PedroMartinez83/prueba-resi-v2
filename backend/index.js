@@ -2,7 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const fileUpload = require('express-fileupload');
 const compression = require('compression');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 

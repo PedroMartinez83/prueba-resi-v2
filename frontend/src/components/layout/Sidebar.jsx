@@ -29,15 +29,15 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   // Menú para admin y roles administrativos
   const adminMenuItems = [
-    { path: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'admin'] },
-    { path: '/admin/rentas', icon: FileText, label: 'Rentas', roles: ['super_admin', 'director', 'gerente_ops', 'secretaria', 'admin'] },
-    { path: '/admin/vehiculos', icon: Car, label: 'Vehículos', roles: ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'admin'] },
-    { path: '/admin/conductores', icon: Users, label: 'Conductores', roles: ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'admin'] },
-    { path: '/admin/solicitudes', icon: UserPlus, label: 'Solicitudes', roles: ['super_admin', 'director', 'gerente_ops', 'reclutador', 'secretaria', 'admin'] },
+    { path: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'gestor_flota', 'admin'] },
+    { path: '/admin/rentas', icon: FileText, label: 'Rentas', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'secretaria', 'admin'] },
+    { path: '/admin/vehiculos', icon: Car, label: 'Vehículos', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'gestor_flota', 'admin'] },
+    { path: '/admin/conductores', icon: Users, label: 'Conductores', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'gestor_flota', 'admin'] },
+    { path: '/admin/solicitudes', icon: UserPlus, label: 'Solicitudes', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'reclutador', 'secretaria', 'admin'] },
     { path: '/admin/usuarios', icon: Shield, label: 'Usuarios', roles: ['super_admin', 'director'] }, // 🆕 MÓDULO DE USUARIOS
-    { path: '/admin/inversionistas-home', icon: TrendingUp, label: 'Inversionistas', roles: ['super_admin', 'director', 'gerente_ops', 'admin'] },
-    { path: '/admin/mantenimientos', icon: Wrench, label: 'Mantenimientos', roles: ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'jefe_taller', 'compras', 'admin'] },
-    { path: '/admin/siniestros', icon: AlertTriangle, label: 'Siniestros', roles: ['super_admin', 'director', 'gerente_ops', 'admin'] },
+    { path: '/admin/inversionistas-home', icon: TrendingUp, label: 'Inversionistas', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'admin'] },
+    { path: '/admin/mantenimientos', icon: Wrench, label: 'Mantenimientos', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'gestor_flota', 'jefe_taller', 'compras', 'admin'] },
+    { path: '/admin/siniestros', icon: AlertTriangle, label: 'Siniestros', roles: ['super_admin', 'director', 'finanzas', 'gerente_ops', 'admin'] },
   ];
 
   // Menú para conductor
@@ -50,7 +50,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   // Determinar qué menú mostrar según el rol
   const userRole = user?.rol || user?.role;
-  const adminRoles = ['admin', 'super_admin', 'director', 'gerente_ops', 'contador', 'gestor_flota', 'secretaria', 'reclutador', 'jefe_taller', 'compras'];
+  const adminRoles = ['admin', 'super_admin', 'director', 'gerente_ops', 'finanzas', 'gestor_flota', 'secretaria', 'reclutador', 'jefe_taller', 'compras'];
   
   // Filtrar items del menú según roles permitidos
   const menuItems = adminRoles.includes(userRole) 

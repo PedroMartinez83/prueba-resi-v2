@@ -67,7 +67,7 @@ const Login = () => {
           case 'super_admin':
           case 'director':
           case 'gerente_ops':
-          case 'contador':
+        case 'finanzas':
           case 'gestor_flota':
           case 'admin':
             navigate('/admin/dashboard');

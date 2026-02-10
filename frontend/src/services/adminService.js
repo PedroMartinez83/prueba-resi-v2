@@ -650,6 +650,11 @@ async cambiarStatusConductor(conductorId, status, motivo = null) {
       
       if (filtros.fecha_desde) params.append('fecha_desde', filtros.fecha_desde);
       if (filtros.fecha_hasta) params.append('fecha_hasta', filtros.fecha_hasta);
+      if (filtros.tz_offset !== undefined && filtros.tz_offset !== null) {
+        params.append('tz_offset', filtros.tz_offset);
+      } else {
+        params.append('tz_offset', new Date().getTimezoneOffset());
+      }
       
       const queryString = params.toString();
       const endpoint = queryString 
@@ -1146,8 +1151,9 @@ async deleteMantenimiento(id) {
       ]);
       const pagosRentasStats = pagosRentasResponse?.estadisticas || {};
       const mantenimientosStats = mantenimientosResponse?.estadisticas || {};
-      const montoTotalPagado = pagosRentasStats.total_cobrado ?? pagosRentasStats.cobrado_mes ?? 0;
-      const montoTotalPendiente = pagosRentasStats.pendiente_validar_renta ?? 0;
+      const ingresosMes = pagosRentasStats.cobrado_mes ?? 0;
+      const montoTotalPagado = pagosRentasStats.total_cobrado_total ?? pagosRentasStats.total_cobrado ?? 0;
+      const montoTotalPendiente = pagosRentasStats.pendiente_validar ?? pagosRentasStats.pendiente_validar_renta ?? 0;
       
       // Transformar la respuesta al formato que espera Dashboard
       if (response.estadisticas) {
@@ -1175,7 +1181,8 @@ async deleteMantenimiento(id) {
             pagadas: response.estadisticas.rentasPagadas || 0,
             vencidas: response.estadisticas.rentasVencidas || 0,
             montoTotalPagado,
-            montoTotalPendiente
+            montoTotalPendiente,
+            ingresosMes
           },
           mantenimientos: {
             total: response.estadisticas.totalMantenimientos || 0,
@@ -1323,7 +1330,7 @@ async getConductoresMorosos() {
       'super_admin': ['all'],
       'director': ['view', 'create', 'edit', 'delete'],
       'gerente_ops': ['view', 'create', 'edit'],
-      'contador': ['view'],
+      'finanzas': ['view', 'create', 'edit', 'delete'],
       'gestor_flota': ['view', 'edit'],
       'reclutador': ['view'],
       'jefe_taller': ['view', 'edit'],

@@ -1,26 +1,26 @@
-// backend/middleware/roleMiddleware.js
+﻿// backend/middleware/roleMiddleware.js
 
-// Definición de roles según el documento de especificaciones
+// DefiniciÃ³n de roles segÃºn el documento de especificaciones
 const ROLES = {
   SUPER_ADMIN: 'super_admin',        // TI - Control total del sistema
-  DIRECTOR_GENERAL: 'director',      // Vista total, dashboards, decisiones
-  GERENTE_OPERACIONES: 'gerente_ops', // Gestión flota y conductores
-  CONTADOR: 'contador',               // Finanzas, pagos, conciliación
+  DIRECCION: 'direccion',      // Vista total, dashboards, decisiones
+  GERENTE_OPERACIONES: 'gerente_ops', // GestiÃ³n flota y conductores
+  FINANZAS: 'finanzas',               // Finanzas, pagos, conciliaci?n
   GESTOR_FLOTA: 'gestor_flota',     // Documentos, seguros, compliance
   RECLUTADOR: 'reclutador',         // Solo prospectos y reclutamiento
-  JEFE_TALLER: 'jefe_taller',       // Mantenimiento y órdenes de servicio
+  JEFE_TALLER: 'jefe_taller',       // Mantenimiento y Ã³rdenes de servicio
   ENCARGADO_COMPRAS: 'compras',     // Inventario y proveedores
   SECRETARIA: 'secretaria',         // Soporte administrativo
-  CONDUCTOR: 'conductor',            // Acceso limitado a su información
+  CONDUCTOR: 'conductor',            // Acceso limitado a su informaciÃ³n
   CLIENTE: 'cliente'                // Solo sus rentas y pagos
 };
 
-// Jerarquía de roles (mayor número = más permisos)
+// JerarquÃ­a de roles (mayor nÃºmero = mÃ¡s permisos)
 const ROLE_HIERARCHY = {
   [ROLES.SUPER_ADMIN]: 100,
-  [ROLES.DIRECTOR_GENERAL]: 90,
+  [ROLES.DIRECCION]: 90,
   [ROLES.GERENTE_OPERACIONES]: 80,
-  [ROLES.CONTADOR]: 70,
+  [ROLES.FINANZAS]: 70,
   [ROLES.GESTOR_FLOTA]: 60,
   [ROLES.JEFE_TALLER]: 50,
   [ROLES.ENCARGADO_COMPRAS]: 40,
@@ -30,82 +30,83 @@ const ROLE_HIERARCHY = {
   [ROLES.CLIENTE]: 10
 };
 
-// Matriz de permisos por módulo y acción
+// Matriz de permisos por mÃ³dulo y acciÃ³n
 const PERMISSIONS = {
   // CONDUCTORES
-  'conductores.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA, ROLES.SECRETARIA],
+  'conductores.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA, ROLES.SECRETARIA],
   'conductores.create': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.SECRETARIA],
   'conductores.update': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
   'conductores.delete': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES],
   'conductores.approve': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES],
   
   // PROSPECTOS (Reclutamiento)
-  'prospectos.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.RECLUTADOR, ROLES.SECRETARIA],
+  'prospectos.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.RECLUTADOR, ROLES.SECRETARIA],
   'prospectos.create': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.RECLUTADOR, ROLES.SECRETARIA],
   'prospectos.update': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.RECLUTADOR, ROLES.SECRETARIA],
   'prospectos.delete': [ROLES.SUPER_ADMIN, ROLES.RECLUTADOR, ROLES.SECRETARIA],
   
-  // VEHÍCULOS
-  'vehiculos.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA, ROLES.JEFE_TALLER],
+  // VEHÃCULOS
+  'vehiculos.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA, ROLES.JEFE_TALLER],
   'vehiculos.create': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES],
   'vehiculos.update': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
   'vehiculos.delete': [ROLES.SUPER_ADMIN],
   'vehiculos.assign': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES],
   
-  // DOCUMENTOS VEHICULARES (Seguros, tarjetas circulación)
-  'documentos.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
+  // DOCUMENTOS VEHICULARES (Seguros, tarjetas circulaciÃ³n)
+  'documentos.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
   'documentos.update': [ROLES.SUPER_ADMIN, ROLES.GESTOR_FLOTA],
   
   // RENTAS
-  'rentas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.SECRETARIA],
+  'rentas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.SECRETARIA],
   'rentas.create': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.SECRETARIA],
   'rentas.update': [ROLES.SUPER_ADMIN, ROLES.SECRETARIA],
   'rentas.delete': [ROLES.SUPER_ADMIN],
   'rentas.payment': [ROLES.SUPER_ADMIN, ROLES.SECRETARIA],
   
-  // 🆕 PAGOS DE RENTAS (Lógica "Dos Cubetas")
-  'pagos_rentas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.CONTADOR, ROLES.SECRETARIA],
-  'pagos_rentas.create': [ROLES.SUPER_ADMIN, ROLES.CONTADOR, ROLES.SECRETARIA],
-  'pagos_rentas.update': [ROLES.SUPER_ADMIN, ROLES.CONTADOR, ROLES.SECRETARIA],
+  // PAGOS DE RENTAS
+  'pagos_rentas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.FINANZAS, ROLES.SECRETARIA],
+  'pagos_rentas.create': [ROLES.SUPER_ADMIN, ROLES.FINANZAS, ROLES.SECRETARIA],
+  'pagos_rentas.update': [ROLES.SUPER_ADMIN, ROLES.FINANZAS, ROLES.SECRETARIA],
   'pagos_rentas.delete': [ROLES.SUPER_ADMIN],
   
+  
   // FINANZAS
-  'finanzas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL],
+  'finanzas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS],
   'finanzas.ingresos': [ROLES.SUPER_ADMIN],
   'finanzas.gastos': [ROLES.SUPER_ADMIN, ROLES.JEFE_TALLER, ROLES.ENCARGADO_COMPRAS],
   'finanzas.conciliar': [ROLES.SUPER_ADMIN],
-  'finanzas.reportes': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL],
+  'finanzas.reportes': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS],
   
   // MANTENIMIENTO
-  'mantenimiento.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.JEFE_TALLER, ROLES.ENCARGADO_COMPRAS],
+  'mantenimiento.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.JEFE_TALLER, ROLES.ENCARGADO_COMPRAS],
   'mantenimiento.create': [ROLES.SUPER_ADMIN, ROLES.JEFE_TALLER],
   'mantenimiento.update': [ROLES.SUPER_ADMIN, ROLES.JEFE_TALLER],
   'mantenimiento.delete': [ROLES.SUPER_ADMIN],
   'mantenimiento.approve': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES],
   
   // INVENTARIO Y COMPRAS
-  'inventario.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.JEFE_TALLER, ROLES.ENCARGADO_COMPRAS],
+  'inventario.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.JEFE_TALLER, ROLES.ENCARGADO_COMPRAS],
   'inventario.update': [ROLES.SUPER_ADMIN, ROLES.ENCARGADO_COMPRAS],
   'compras.create': [ROLES.SUPER_ADMIN, ROLES.ENCARGADO_COMPRAS],
   'compras.approve': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES],
   'proveedores.manage': [ROLES.SUPER_ADMIN, ROLES.ENCARGADO_COMPRAS],
   
   // SINIESTROS
-  'siniestros.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
+  'siniestros.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
   'siniestros.create': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.GESTOR_FLOTA],
   'siniestros.update': [ROLES.SUPER_ADMIN, ROLES.GESTOR_FLOTA],
   
-  // REPORTES Y ESTADÍSTICAS
-  'estadisticas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES],
-  'reportes.financieros': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL],
-  'reportes.operativos': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL, ROLES.GERENTE_OPERACIONES],
+  // REPORTES Y ESTADÃSTICAS
+  'estadisticas.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES],
+  'reportes.financieros': [ROLES.SUPER_ADMIN, ROLES.DIRECCION],
+  'reportes.operativos': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES],
   
-  // 🆕 ADMINISTRACIÓN DE USUARIOS (ACTUALIZADO)
-  'usuarios.view': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL],
-  'usuarios.create': [ROLES.SUPER_ADMIN],
-  'usuarios.update': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL], // director solo puede cambiar estado
-  'usuarios.delete': [ROLES.SUPER_ADMIN],
-  'usuarios.reset_password': [ROLES.SUPER_ADMIN, ROLES.DIRECTOR_GENERAL],
+  // ðŸ†• ADMINISTRACIÃ“N DE USUARIOS (ACTUALIZADO)
+  'usuarios.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS],
+  'usuarios.create': [ROLES.SUPER_ADMIN, ROLES.FINANZAS],
+  'usuarios.update': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS], // director solo puede cambiar estado
+  'usuarios.delete': [ROLES.SUPER_ADMIN, ROLES.FINANZAS],
+  'usuarios.reset_password': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS],
   'sistema.config': [ROLES.SUPER_ADMIN],
 
   // Permisos de inversiones
@@ -117,7 +118,7 @@ const PERMISSIONS = {
 };
 
 /**
- * Verifica si un rol tiene un permiso específico
+ * Verifica si un rol tiene un permiso especÃ­fico
  * @param {string} userRole - Rol del usuario
  * @param {string} permission - Permiso a verificar
  * @returns {boolean}
@@ -125,8 +126,11 @@ const PERMISSIONS = {
 const hasPermission = (userRole, permission) => {
   // Super admin siempre tiene todos los permisos
   if (userRole === ROLES.SUPER_ADMIN) return true;
+
+  // Finanzas tiene todos los accesos segÃºn configuraciÃ³n
+  if (userRole === ROLES.FINANZAS) return true;
   
-  // Verificar si el permiso existe y el rol está en la lista
+  // Verificar si el permiso existe y el rol estÃ¡ en la lista
   const allowedRoles = PERMISSIONS[permission];
   if (!allowedRoles) return false;
   
@@ -134,7 +138,7 @@ const hasPermission = (userRole, permission) => {
 };
 
 /**
- * Verifica si un rol tiene mayor jerarquía que otro
+ * Verifica si un rol tiene mayor jerarquÃ­a que otro
  * @param {string} role1 - Primer rol
  * @param {string} role2 - Segundo rol
  * @returns {boolean}
@@ -150,7 +154,7 @@ const hasHigherRole = (role1, role2) => {
  */
 const requirePermission = (requiredPermissions) => {
   return (req, res, next) => {
-    // Verificar que el usuario esté autenticado
+    // Verificar que el usuario estÃ© autenticado
     if (!req.user) {
       return res.status(401).json({
         success: false,
@@ -160,7 +164,7 @@ const requirePermission = (requiredPermissions) => {
     
     const userRole = req.user.rol || req.user.role || ROLES.CONDUCTOR;
     
-    // ✅ BYPASS EXPLÍCITO PARA SUPER_ADMIN - AGREGADO PARA SEGURIDAD
+    // âœ… BYPASS EXPLÃCITO PARA SUPER_ADMIN - AGREGADO PARA SEGURIDAD
     if (userRole === 'super_admin' || userRole === ROLES.SUPER_ADMIN) {
       return next();
     }
@@ -174,7 +178,7 @@ const requirePermission = (requiredPermissions) => {
       if (!hasAnyPermission) {
         return res.status(403).json({
           success: false,
-          message: 'No tienes permisos para realizar esta acción',
+          message: 'No tienes permisos para realizar esta acciÃ³n',
           requiredPermissions,
           userRole
         });
@@ -184,7 +188,7 @@ const requirePermission = (requiredPermissions) => {
       if (!hasPermission(userRole, requiredPermissions)) {
         return res.status(403).json({
           success: false,
-          message: 'No tienes permisos para realizar esta acción',
+          message: 'No tienes permisos para realizar esta acciÃ³n',
           requiredPermission: requiredPermissions,
           userRole
         });
@@ -196,8 +200,8 @@ const requirePermission = (requiredPermissions) => {
 };
 
 /**
- * Middleware para requerir un rol mínimo
- * @param {string} minimumRole - Rol mínimo requerido
+ * Middleware para requerir un rol mÃ­nimo
+ * @param {string} minimumRole - Rol mÃ­nimo requerido
  * @returns {Function} Middleware de Express
  */
 const requireRole = (minimumRole) => {
@@ -216,7 +220,7 @@ const requireRole = (minimumRole) => {
     if (userHierarchy < requiredHierarchy) {
       return res.status(403).json({
         success: false,
-        message: 'Rol insuficiente para esta acción',
+        message: 'Rol insuficiente para esta acciÃ³n',
         requiredRole: minimumRole,
         userRole
       });
@@ -227,18 +231,18 @@ const requireRole = (minimumRole) => {
 };
 
 /**
- * Middleware para filtrar datos según el rol
- * Útil para que cada rol vea solo la información que le corresponde
+ * Middleware para filtrar datos segÃºn el rol
+ * Ãštil para que cada rol vea solo la informaciÃ³n que le corresponde
  */
 const filterDataByRole = (req, res, next) => {
   const userRole = req.user?.rol || ROLES.CONDUCTOR;
   
-  // Agregar filtros al query según el rol
+  // Agregar filtros al query segÃºn el rol
   req.roleFilters = {};
   
   switch(userRole) {
     case ROLES.CONDUCTOR:
-      // Los conductores solo ven su propia información
+      // Los conductores solo ven su propia informaciÃ³n
       req.roleFilters.conductorId = req.user.id;
       break;
       
@@ -257,17 +261,17 @@ const filterDataByRole = (req, res, next) => {
       req.roleFilters.onlyMaintenance = true;
       break;
       
-    case ROLES.CONTADOR:
-      // Contador ve toda la información financiera
+    case ROLES.FINANZAS:
+      // Finanzas ve toda la informaciÃ³n financiera
       req.roleFilters.financialData = true;
       break;
       
-    // Roles con acceso más amplio
+    // Roles con acceso mÃ¡s amplio
     case ROLES.GESTOR_FLOTA:
     case ROLES.GERENTE_OPERACIONES:
-    case ROLES.DIRECTOR_GENERAL:
+    case ROLES.DIRECCION:
     case ROLES.SUPER_ADMIN:
-      // Sin filtros, ven todo según sus permisos
+      // Sin filtros, ven todo segÃºn sus permisos
       break;
       
     default:
@@ -296,9 +300,9 @@ const getRolePermissions = (role) => {
 };
 
 /**
- * Obtener información completa del rol
+ * Obtener informaciÃ³n completa del rol
  * @param {string} role - Rol a consultar
- * @returns {Object} Información del rol
+ * @returns {Object} InformaciÃ³n del rol
  */
 const getRoleInfo = (role) => {
   return {
@@ -310,26 +314,25 @@ const getRoleInfo = (role) => {
 };
 
 /**
- * Obtener descripción del rol
+ * Obtener descripciÃ³n del rol
  * @param {string} role - Rol
- * @returns {string} Descripción
+ * @returns {string} DescripciÃ³n
  */
 const getRoleDescription = (role) => {
   const descriptions = {
     [ROLES.SUPER_ADMIN]: 'Administrador del sistema con control total',
-    [ROLES.DIRECTOR_GENERAL]: 'Visión completa del negocio y toma de decisiones',
-    [ROLES.GERENTE_OPERACIONES]: 'Gestión de flota y conductores',
-    [ROLES.CONTADOR]: 'Gestión financiera y conciliación',
-    [ROLES.GESTOR_FLOTA]: 'Gestión documental y compliance',
-    [ROLES.RECLUTADOR]: 'Captación y gestión de prospectos',
-    [ROLES.JEFE_TALLER]: 'Mantenimiento y órdenes de servicio',
+    [ROLES.DIRECCION]: 'VisiÃ³n completa del negocio y toma de decisiones',
+    [ROLES.GERENTE_OPERACIONES]: 'GestiÃ³n de flota y conductores',
+    [ROLES.GESTOR_FLOTA]: 'GestiÃ³n documental y compliance',
+    [ROLES.RECLUTADOR]: 'CaptaciÃ³n y gestiÃ³n de prospectos',
+    [ROLES.JEFE_TALLER]: 'Mantenimiento y Ã³rdenes de servicio',
     [ROLES.ENCARGADO_COMPRAS]: 'Inventario y proveedores',
     [ROLES.SECRETARIA]: 'Soporte administrativo (pagos y solicitudes)',
-    [ROLES.CONDUCTOR]: 'Conductor de vehículo',
+    [ROLES.CONDUCTOR]: 'Conductor de vehÃ­culo',
     [ROLES.CLIENTE]: 'Cliente del servicio'
   };
   
-  return descriptions[role] || 'Sin descripción';
+  return descriptions[role] || 'Sin descripciÃ³n';
 };
 
 module.exports = {
@@ -345,3 +348,4 @@ module.exports = {
   getRoleInfo,
   getRoleDescription
 };
+

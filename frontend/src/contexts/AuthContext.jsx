@@ -126,7 +126,7 @@ export const AuthProvider = ({ children }) => {
   // Verificar roles
   const isAdmin = () => {
     const userRole = user?.role || user?.rol;
-    return ['admin', 'super_admin', 'director', 'gerente_ops', 'contador', 'secretaria'].includes(userRole);
+    return ['admin', 'super_admin', 'director', 'gerente_ops', 'finanzas', 'secretaria'].includes(userRole);
   };
 
   const isConductor = () => {
@@ -136,7 +136,7 @@ export const AuthProvider = ({ children }) => {
 
   const isContador = () => {
     const userRole = user?.role || user?.rol;
-    return userRole === 'contador';
+    return userRole === 'finanzas';
   };
 
   const isGestorFlota = () => {

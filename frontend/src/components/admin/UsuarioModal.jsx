@@ -6,7 +6,7 @@ const ROL_OPTIONS = [
   { value: 'super_admin', label: 'Super Admin', description: 'Control total del sistema' },
   { value: 'director', label: 'Director', description: 'Vista total y decisiones' },
   { value: 'gerente_ops', label: 'Gerente Operaciones', description: 'Gestión flota y conductores' },
-  { value: 'contador', label: 'Contador', description: 'Finanzas y pagos' },
+  { value: 'finanzas', label: 'Finanzas', description: 'Finanzas y pagos' },
   { value: 'reclutador', label: 'Reclutador', description: 'Captación de conductores' },
   { value: 'jefe_taller', label: 'Jefe de Taller', description: 'Mantenimiento' },
   { value: 'secretaria', label: 'Secretaria', description: 'Solicitudes y pagos' }
