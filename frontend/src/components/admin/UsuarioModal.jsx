@@ -4,12 +4,11 @@ import { X, User, Mail, Shield, AlertCircle } from 'lucide-react';
 
 const ROL_OPTIONS = [
   { value: 'super_admin', label: 'Super Admin', description: 'Control total del sistema' },
-  { value: 'director', label: 'Director', description: 'Vista total y decisiones' },
+  { value: 'direccion', label: 'Direccion', description: 'Vista total y decisiones' },
   { value: 'gerente_ops', label: 'Gerente Operaciones', description: 'Gestión flota y conductores' },
+  { value: 'coordinador', label: 'Coordinador Zona', description: 'Operación y seguimiento regional' },
   { value: 'finanzas', label: 'Finanzas', description: 'Finanzas y pagos' },
-  { value: 'reclutador', label: 'Reclutador', description: 'Captación de conductores' },
   { value: 'jefe_taller', label: 'Jefe de Taller', description: 'Mantenimiento' },
-  { value: 'secretaria', label: 'Secretaria', description: 'Solicitudes y pagos' }
 ];
 
 const ESTADO_OPTIONS = [
@@ -19,20 +18,33 @@ const ESTADO_OPTIONS = [
 ];
 
 const UsuarioModal = ({ usuario, onClose, onGuardar }) => {
+
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+  const isEditing = !!usuario;
+  const userRol = currentUser.rol;
+  const canManageRoles = ['super_admin', 'finanzas'].includes(userRol);
+
+  
+const opcionesVisibles = ESTADO_OPTIONS.filter(opcion => {
+    // Si soy gerente_ops, OCULTO la opción 'prohibido'
+    if (userRol === 'gerente_ops' && opcion.value === 'prohibido') {
+      return false; 
+    }
+    // Para todos los demás casos (o roles), muestro todo
+    return true;
+  });
+
   const [formData, setFormData] = useState({
     email: '',
     nombre_completo: '',
-    rol: 'conductor',
+    rol: 'coordinador',
     estado_cuenta: 'Activo'
   });
 
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
 
-  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-  const isSuperAdmin = currentUser.rol === 'super_admin';
-  const isDirector = currentUser.rol === 'director';
-  const isEditing = !!usuario;
+  console.log("Rol detectado en el Modal:", userRol);
 
   useEffect(() => {
     if (usuario) {
@@ -187,7 +199,7 @@ const UsuarioModal = ({ usuario, onClose, onGuardar }) => {
           {/* Rol */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
-              Rol * {!isSuperAdmin && <span className="text-xs text-gray-500">(Solo Super Admin puede cambiar roles)</span>}
+              Rol * {!canManageRoles && <span className="text-xs text-gray-500">(Solo Super Admin y Finanzas pueden cambiar roles)</span>}
             </label>
             <div className="relative">
               <Shield className="absolute left-3 top-3.5 text-gray-400 w-5 h-5 pointer-events-none" />
@@ -195,8 +207,8 @@ const UsuarioModal = ({ usuario, onClose, onGuardar }) => {
                 name="rol"
                 value={formData.rol}
                 onChange={handleChange}
-                disabled={!isSuperAdmin}
-                className={`w-full pl-10 pr-4 py-3 bg-black/40 border ${errors.rol ? 'border-red-500/50' : 'border-white/10'} rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all ${!isSuperAdmin ? 'opacity-60 cursor-not-allowed' : ''}`}
+                disabled={!canManageRoles}
+                className={`w-full pl-10 pr-4 py-3 bg-black/40 border ${errors.rol ? 'border-red-500/50' : 'border-white/10'} rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all ${!canManageRoles ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 {ROL_OPTIONS.map(rol => (
                   <option key={rol.value} value={rol.value}>
@@ -225,7 +237,7 @@ const UsuarioModal = ({ usuario, onClose, onGuardar }) => {
                 onChange={handleChange}
                 className={`w-full px-4 py-3 bg-black/40 border ${errors.estado_cuenta ? 'border-red-500/50' : 'border-white/10'} rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all`}
               >
-                {ESTADO_OPTIONS.map(estado => (
+                {opcionesVisibles.map(estado => (
                   <option key={estado.value} value={estado.value}>
                     {estado.label} - {estado.description}
                   </option>

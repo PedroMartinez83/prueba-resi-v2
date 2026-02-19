@@ -11,6 +11,7 @@ import VehiculosTable from '../../components/vehiculos/VehiculosTable';
 import VehiculosGrid from '../../components/vehiculos/VehiculosGrid';
 import VehiculoDrawer from '../../components/vehiculos/VehiculoDrawer';
 import { VehiculoFormProvider } from '../../contexts/VehiculoFormContext.jsx';
+import { useAuth } from '../../contexts/AuthContext';
 
 // Componente Toast
 const Toast = ({ message, type = 'success', onClose }) => {
@@ -36,6 +37,10 @@ const Toast = ({ message, type = 'success', onClose }) => {
 };
 
 const Vehiculos = () => {
+  const { user } = useAuth();
+  const rolUsuario = (user?.rol || user?.role || '').toLowerCase();
+  const puedeProcesarSolicitudesBaja = ['super_admin', 'direccion', 'gerente_ops'].includes(rolUsuario);
+
   const [vehiculos, setVehiculos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [textoBusqueda, setTextoBusqueda] = useState('');
@@ -469,12 +474,33 @@ const Vehiculos = () => {
     }
   };
 
+  // Función para aprobar o rechazar bajas
+  const handleProcesarBaja = async (id, accion) => {
+    // Confirmación opcional (ya la tienes en el hijo, pero por seguridad)
+    // if (!window.confirm(`¿Confirmar ${accion.toUpperCase()}?`)) return;
+    if (!puedeProcesarSolicitudesBaja) {
+      mostrarToast('No tienes permisos para procesar solicitudes de baja', 'error');
+      return;
+    }
+
+    try {
+      await adminService.gestionarBajaVehiculo(id, accion);
+      mostrarToast(`Solicitud ${accion === 'aprobar' ? 'aprobada' : 'rechazada'} correctamente`, 'success');
+      
+      // Recargamos la lista para ver el cambio de estado
+      await cargarVehiculos();
+    } catch (error) {
+      console.error('Error:', error);
+      mostrarToast(error.message || 'Error al procesar la solicitud', 'error');
+    }
+  };
+
   const handleDelete = async (id) => {
     if (!window.confirm('¿Estás seguro de eliminar este vehículo?')) return;
     
     try {
-      await adminService.deleteVehiculo(id);
-      mostrarToast('Vehículo eliminado exitosamente', 'success');
+      const response = await adminService.deleteVehiculo(id);
+      mostrarToast(response?.message || 'Vehículo eliminado exitosamente', 'success');
       cargarVehiculos();
     } catch (error) {
       console.error('Error:', error);
@@ -572,28 +598,54 @@ const Vehiculos = () => {
     }).format(amount || 0);
   };
 
-  const vehiculosFiltrados = useMemo(() => {
-    return vehiculos.filter(vehiculo => {
+const vehiculosFiltrados = useMemo(() => {
+    // PASO 1: FILTRADO (Buscador + Dropdown)
+    const filtrados = vehiculos.filter(vehiculo => {
+      const estado = vehiculo.Estado || vehiculo.estado;
+      if (estado === 'Baja' && filterEstado !== 'Baja') return false;
+      // Normalización
       const numeroVehiculo = (vehiculo.NumeroVehiculo || '').toString().toLowerCase();
       const marca = (vehiculo.Marca || '').toLowerCase();
       const modelo = (vehiculo.Modelo || '').toLowerCase();
       const placa = (vehiculo.Placa || '').toLowerCase();
       const searchLower = searchTerm.toLowerCase();
       
+      // Coincidencia Buscador
       const matchSearch = 
         numeroVehiculo.includes(searchLower) ||
         marca.includes(searchLower) ||
         modelo.includes(searchLower) ||
         placa.includes(searchLower);
       
+      // Coincidencia Dropdown
+      // Nota: Aquí permitimos que pasen las 'Solicitud_baja' si el filtro es 'todos'
       const matchFilter = 
         filterEstado === 'todos' ||
         (filterEstado === 'problemas' && (vehiculo.Estado === 'Siniestro' || vehiculo.Estado === 'Baja')) ||
-        (filterEstado === 'Rentado' && (vehiculo.Estado === 'Rentado' || vehiculo.Estado === 'Asignado')) ||
-        vehiculo.Estado === filterEstado;
-      
+        vehiculo.Estado === filterEstado || 
+        (filterEstado === 'todos' && vehiculo.Estado === 'Solicitud_baja'); // Aseguramos que se vean en "todos"
+
       return matchSearch && matchFilter;
     });
+
+    // PASO 2: ORDENAMIENTO (Prioridad a Solicitudes)
+    return filtrados.sort((a, b) => {
+      const estadoA = a.Estado || a.estado;
+      const estadoB = b.Estado || b.estado;
+
+      const esSolicitudA = estadoA === 'Solicitud_baja';
+      const esSolicitudB = estadoB === 'Solicitud_baja';
+
+      // Si A es solicitud y B no -> A va primero (-1)
+      if (esSolicitudA && !esSolicitudB) return -1;
+      
+      // Si A no es solicitud y B sí -> B va primero (1)
+      if (!esSolicitudA && esSolicitudB) return 1;
+
+      // Si ambos son iguales (ambos solicitud o ninguno), mantenemos el orden original (por ID o como venga)
+      return 0; 
+    });
+
   }, [vehiculos, searchTerm, filterEstado]);
 
   const estadisticas = useMemo(() => ({
@@ -601,7 +653,7 @@ const Vehiculos = () => {
     disponibles: vehiculos.filter(v => v.Estado === 'Disponible').length,
     rentados: vehiculos.filter(v => v.Estado === 'Rentado' || v.Estado === 'Asignado').length,
     mantenimiento: vehiculos.filter(v => v.Estado === 'Mantenimiento').length,
-    problemas: vehiculos.filter(v => v.Estado === 'Siniestro' || v.Estado === 'Baja').length,
+    problemas: vehiculos.filter(v => v.Estado === 'Siniestro' || v.Estado === 'Solicitud_baja').length,
   }), [vehiculos]);
 
   const totalPages = useMemo(() => {
@@ -772,6 +824,8 @@ const Vehiculos = () => {
           vehiculos={paginatedVehiculos}
           onEdit={abrirDrawer}
           onDelete={handleDelete}
+          onProcesarBaja={handleProcesarBaja}
+          puedeProcesarSolicitudesBaja={puedeProcesarSolicitudesBaja}
         />
       ) : (
         <VehiculosGrid
@@ -890,20 +944,6 @@ const Vehiculos = () => {
         />
       )}
       
-      {/* Footer */}
-      <div className="glass rounded-lg border border-primary/20 p-4 text-center mt-8">
-        <p className="text-sm text-gray-400">
-          Desarrollado por{" "}
-          <a 
-            href="https://somoslazaro.marketing"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:text-primary-light transition-colors font-semibold"
-          >
-            somoslazaro.marketing
-          </a>
-        </p>
-      </div>
     </div>
   );
 };

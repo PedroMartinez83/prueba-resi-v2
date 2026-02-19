@@ -91,6 +91,8 @@ export const AuthProvider = ({ children }) => {
       // Redirigir según rol
       if (userData.rol === 'conductor') {
         window.location.href = '/conductor/dashboard';
+      } else if (userData.rol === 'coordinador') {
+        window.location.href = '/admin/rentas';
       } else {
         window.location.href = '/admin/dashboard';
       }
@@ -126,7 +128,12 @@ export const AuthProvider = ({ children }) => {
   // Verificar roles
   const isAdmin = () => {
     const userRole = user?.role || user?.rol;
-    return ['admin', 'super_admin', 'director', 'gerente_ops', 'finanzas', 'secretaria'].includes(userRole);
+    return ['admin', 'super_admin', 'direccion', 'gerente_ops', 'finanzas', 'coordinador', 'secretaria'].includes(userRole);
+  };
+
+    const isSuperAdmin = () => {
+    const userRole = user?.role || user?.rol;
+    return userRole === 'super_admin';
   };
 
   const isConductor = () => {
@@ -139,10 +146,20 @@ export const AuthProvider = ({ children }) => {
     return userRole === 'finanzas';
   };
 
-  const isGestorFlota = () => {
+  const isJefeTaller = () => {
     const userRole = user?.role || user?.rol;
-    return userRole === 'gestor_flota';
+    return userRole === 'jefe_taller';
   };
+
+  const isGerenteOps = () => {
+    const userRole = user?.role || user?.rol;
+    return userRole === 'gerente_ops';
+  }
+
+  const isDirector = () => {
+    const userRole = user?.role || user?.rol;
+    return userRole === 'direccion';
+  }
 
   const hasRole = (roles) => {
     const userRole = user?.role || user?.rol;
@@ -161,9 +178,12 @@ export const AuthProvider = ({ children }) => {
     isAdmin,
     isConductor,
     isContador,
-    isGestorFlota,
+    isJefeTaller,
     hasRole,
     isAuthenticated,
+    isSuperAdmin,
+    isGerenteOps,
+    isDirector,
   };
 
   return (

@@ -1144,21 +1144,6 @@ const PortalSolicitud = () => {
           </div>
         </div>
 
-        {/* 🆕 MEJORA #3: FOOTER */}
-        <div className="text-center py-6 mt-8">
-          <p className="text-sm text-gray-500">
-            Desarrollado por{" "}
-            <a 
-              href="https://somoslazaro.marketing" 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="font-semibold text-cyan-400 hover:text-cyan-300 transition-colors"
-            >
-              somoslazaro.marketing
-            </a>
-          </p>
-        </div>
-
       </div>
     </div>
   );

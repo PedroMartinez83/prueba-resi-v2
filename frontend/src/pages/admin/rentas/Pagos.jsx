@@ -3,6 +3,7 @@ import adminService from '../../../services/adminService';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
 import ModalRegistrarPago from '../../../components/pagos/ModalRegistrarPago';
 import ModalDetalles from './components/ModalDetalles';
+import { useAuth } from "../../../contexts/AuthContext";
 import { 
   FileText, 
   Plus, 
@@ -165,41 +166,141 @@ const handleKeyDown = (e) => {
     setShowModal(true);
   };
 
+  const { user } = useAuth();
+
   const handleEliminarPago = async (id) => {
-    // 1. Buscamos el pago completo para saber su status
+    // 1. Buscamos el pago completo
     const pago = rentas.find(r => r.id === id);
     if (!pago) return;
 
-    // 2. Validación inicial
-    if (!window.confirm('¿Estás seguro de que deseas eliminar este registro?')) return;
+    // =====================================================================
+    // 🛑 CANDADO DE SEGURIDAD (Validaciones de Integridad)
+    // =====================================================================
+    
+    // Solo validamos si el pago que quieres borrar ya es "oficial" (Confirmado/Pagada)
+    if (['Confirmado', 'Pagada'].includes(pago.status)) {
 
-    let motivoBaja = '';
+      // A. CANDADO DE PENDIENTES (NUEVO) 🔒
+      // "Si hay CUALQUIER pago pendiente de este coche, no toques nada confirmado."
+      const existePendiente = rentas.find(r => 
+        r.asignacion_id === pago.asignacion_id && 
+        r.status === 'Pendiente'
+      );
 
-    // 🟢 3. SI ESTÁ CONFIRMADO, OBLIGAMOS A DAR UN MOTIVO
-    if (pago.status === 'Confirmado') {
-      motivoBaja = window.prompt("⚠️ Este pago ya fue aprobado. Escribe la razón de la eliminación:");
-      
-      // Si da cancelar o lo deja vacío, detenemos todo
-      if (motivoBaja === null || motivoBaja.trim() === '') {
-        return alert("❌ Cancelado: Debes escribir un motivo para eliminar un pago confirmado.");
+      if (existePendiente) {
+        const fechaPendiente = new Date(existePendiente.fecha_pago).toLocaleDateString('es-MX');
+        alert(
+          `⛔ ACCIÓN BLOQUEADA\n\n` +
+          `No puedes eliminar pagos históricos mientras exista una solicitud PENDIENTE (del ${fechaPendiente}).\n\n` +
+          `Primero debes Resolver (Validar o Rechazar) los pagos pendientes antes de modificar el historial.`
+        );
+        return; // 🚪 SE CIERRA LA PUERTA
+      }
+
+      // B. FRENO DE MANO (LIFO - El que ya tenías) 🛑
+      // "No borres el pasado si hay futuro confirmado."
+      const fechaPagoActual = new Date(pago.fecha_pago).toISOString().split('T')[0];
+
+      const existePosteriorConfirmado = rentas.find(r => {
+        if (r.asignacion_id !== pago.asignacion_id) return false;
+        if (r.id === pago.id) return false;
+        // Solo nos preocupan los confirmados futuros
+        if (!['Confirmado', 'Pagada', 'Solicitud_borrado'].includes(r.status)) return false;
+
+        const fechaR = new Date(r.fecha_pago).toISOString().split('T')[0];
+        return fechaR > fechaPagoActual; 
+      });
+
+      if (existePosteriorConfirmado) {
+        const fechaBloqueo = new Date(existePosteriorConfirmado.fecha_pago).toLocaleDateString('es-MX');
+        alert(
+          `⛔ OPERACIÓN DENEGADA (Orden Cronológico)\n\n` +
+          `No puedes eliminar este registro porque existe un pago POSTERIOR confirmado (del ${fechaBloqueo}).\n\n` +
+          `Debes eliminar los pagos en orden inverso: desde el más reciente hacia atrás.`
+        );
+        return; 
       }
     }
+    // =====================================================================
 
-    try {
+
+// =====================================================================
+    // 📝 LÓGICA DE INTERACCIÓN (PROMPTS)
+    // =====================================================================
+    let motivoBaja = '';
+    const esAprobacion = pago.status === 'Solicitud_borrado';
+
+    // --- CASO A: GERENTE (Siempre pide motivo) ---
+    if (user?.rol === 'gerente_ops') {
+       motivoBaja = window.prompt("📝 SOLICITUD DE BAJA\n\nComo Gerente, justifica esta eliminación:\nEscribe el motivo:");
+       if (motivoBaja === null || motivoBaja.trim().length < 5) return;
+    } 
+    
+    // --- CASO B: ADMIN / SUPER_ADMIN ---
+    else {
+       
+       if (esAprobacion) {
+           // 🟢 NUEVA LÓGICA: Si es una SOLICITUD, NO pedimos motivo.
+           // Simplemente confirmamos la acción.
+           const confirmar = window.confirm(
+               `✅ APROBACIÓN DE BAJA\n\n` +
+               `Estás a punto de aprobar la eliminación solicitada por Operaciones.\n` +
+               `Observaciones actuales: "${pago.observaciones}"\n\n` +
+               `¿Confirmar eliminación definitiva?`
+           );
+           
+           if (!confirmar) return;
+           
+           // Enviamos vacío para que el backend use la lógica de "[✅ Solicitud Aprobada]"
+           motivoBaja = ''; 
+
+       } else {
+           // 🔴 LÓGICA NORMAL: Si es un pago normal, pedimos motivo opcional
+           motivoBaja = window.prompt("Escribe el motivo de la eliminación (Opcional):");
+           if (motivoBaja === null) return; // Cancelar
+
+           if (!window.confirm('⚠️ ¿Estás seguro de eliminar este pago permanentemente? Se revertirán los saldos.')) {
+               return;
+           }
+       }
+    }
+
+    // =====================================================================
+    // 🚀 PASO 3: EJECUCIÓN
+    // =====================================================================
+try {
       setLoadingAction(true);
-      // Enviamos el ID y el Motivo (si existe)
-      await adminService.eliminarPagoRenta(id, motivoBaja);
-      
-      alert('✅ Pago eliminado correctamente');
-      cargarDatos(); // Recargamos la tabla
-
+      const response = await adminService.eliminarPagoRenta(id, motivoBaja);
+      alert(response.message || '✅ Acción completada correctamente');
+      await cargarDatos(); 
     } catch (error) {
-      alert(error.message);
-      console.error('Error eliminando:', error);
+      console.error(error);
+      const msg = error.response?.data?.message || error.message;
+      alert(`❌ Error: ${msg}`);
     } finally {
       setLoadingAction(false);
     }
   };
+
+  const handleRestaurarPago = async (id) => {
+    if (!window.confirm('¿Deseas cancelar la solicitud de baja y restaurar este pago como Confirmado?')) return;
+
+    try {
+      setLoadingAction(true);
+      
+      // Llamamos al servicio (necesitarás crear este endpoint o usar uno genérico de update)
+      await adminService.cambiarStatusPago(id, 'Confirmado');
+      
+      alert('✅ Solicitud rechazada. El pago sigue activo.');
+      cargarDatos(); // Recargar tabla
+    } catch (error) {
+      console.error(error);
+      alert('Error al restaurar el pago');
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
   const handleViewRenta = (renta) => {
     setSelectedRenta(renta);
     setModalType('view');
@@ -221,44 +322,114 @@ const handleKeyDown = (e) => {
     }
   };
 
-const handleValidarPago = async (pagoId) => {
-    if (!window.confirm('¿Confirmar que este pago fue recibido?')) return;
-    
-    // 1. Buscamos el pago actual en tu estado para rescatar sus notas viejas
-    const pagoActual = rentas.find(p => p.id === pagoId);
-    const observacionesViejas = pagoActual?.observaciones || '';
+  const handleValidarPago = async (pagoId) => {
+      // 1. Buscamos el pago que queremos validar
+      const pagoSeleccionado = rentas.find(p => p.id === pagoId);
+      if (!pagoSeleccionado) return;
 
-    try {
-      setLoadingAction(true);
-      
-      await adminService.validarPagoRenta(pagoId, {
-        // 2. Aquí decidimos qué enviar:
-        observaciones: observacionesViejas
+      // 2. 🛡️ VALIDACIÓN FIFO EN FRONTEND
+      // Buscamos si hay algún pago del mismo conductor, que sea Pendiente y sea MAS VIEJO
+      const existeAnteriorPendiente = rentas.find(p => {
+          // Mismo conductor
+          if (String(p.conductor_id) !== String(pagoSeleccionado.conductor_id)) return false;
+          
+          // Mismo pago (ignorar)
+          if (p.id === pagoSeleccionado.id) return false;
+
+          // Solo nos importan los pendientes
+          if (p.status !== 'Pendiente') return false;
+
+          // Comparar fechas: Si fechaP < fechaSel, hay uno más viejo pendiente
+          const fechaP = new Date(p.fecha_pago).toISOString().split('T')[0];
+          const fechaSel = new Date(pagoSeleccionado.fecha_pago).toISOString().split('T')[0];
+          
+          return fechaP < fechaSel;
       });
 
-      await cargarDatos();
-      // Usamos un toast o alert simple
-      alert('Pago validado exitosamente');
-    } catch (error) {
-      console.error('Error validando pago:', error);
-      alert('Error al validar el pago');
-    } finally {
-      setLoadingAction(false);
-    }
-  };
+      if (existeAnteriorPendiente) {
+          const fechaPendiente = new Date(existeAnteriorPendiente.fecha_pago).toLocaleDateString('es-MX');
+          
+          alert(
+            `⚠️ ACCIÓN BLOQUEADA\n\n` +
+            `Existe un pago ANTERIOR pendiente (del día ${fechaPendiente}) de este conductor.\n\n` +
+            `Por seguridad, debes validar los pagos en orden cronológico: primero los más antiguos.`
+          );
+          return; // 🛑 Detenemos aquí
+      }
 
-  const handleRechazarPago = async (pagoId) => {
+      // 3. Confirmación Normal
+      if (!window.confirm(`¿Confirmar pago del día ${new Date(pagoSeleccionado.fecha_pago).toLocaleDateString()}?`)) return;
+      
+      const observacionesViejas = pagoSeleccionado.observaciones || '';
+
+      try {
+        setLoadingAction(true);
+        
+        await adminService.validarPagoRenta(pagoId, {
+          observaciones: observacionesViejas
+        });
+
+        await cargarDatos();
+        alert('✅ Pago validado exitosamente');
+        
+      } catch (error) {
+        console.error('Error validando pago:', error);
+        // Capturamos el mensaje del backend por si acaso falló la validación local
+        const mensaje = error.response?.data?.message || 'Error al validar el pago';
+        alert(`❌ Error: ${mensaje}`);
+      } finally {
+        setLoadingAction(false);
+      }
+    };
+
+const handleRechazarPago = async (pagoId) => {
+    // 1. Buscamos el pago seleccionado
+    const pagoSeleccionado = rentas.find(r => r.id === pagoId);
+    if (!pagoSeleccionado) return; 
+
+    // 2. 🛡️ VALIDACIÓN (Ahora solo mira los PENDIENTES)
+    const existePosterior = rentas.find(p => {
+        // A. Mismo conductor
+        if (String(p.conductor_id) !== String(pagoSeleccionado.conductor_id)) return false;
+        
+        // B. Ignoramos el mismo pago
+        if (p.id === pagoSeleccionado.id) return false;
+
+        // 🟢 C. CRUCIAL: Solo nos importa si el pago futuro TAMBIÉN es PENDIENTE.
+        // Si ya está confirmado, no estorba para rechazar este.
+        if (p.status !== 'Pendiente') return false;
+
+        // D. Comparación de Fechas
+        const fechaP = new Date(p.fecha_pago).toISOString().split('T')[0];
+        const fechaSel = new Date(pagoSeleccionado.fecha_pago).toISOString().split('T')[0];
+        
+        return fechaP > fechaSel;
+    });
+
+    if (existePosterior) {
+        const fechaConflicto = new Date(existePosterior.fecha_pago).toLocaleDateString('es-MX');
+        
+        alert(
+          `⚠️ ACCIÓN BLOQUEADA\n\n` +
+          `Existe una solicitud PENDIENTE posterior (del día ${fechaConflicto}).\n\n` +
+          `Para mantener el orden, debes rechazar primero la solicitud más reciente.`
+        );
+        return; 
+    }
+
+    // 3. 📝 FLUJO NORMAL
     const motivo = window.prompt('Motivo del rechazo:');
-    if (!motivo) return;
+    if (!motivo) return; 
     
     try {
       setLoadingAction(true);
       await adminService.rechazarPagoRenta(pagoId, motivo);
       await cargarDatos();
-      alert('Pago rechazado');
+      alert('✅ Pago rechazado correctamente');
     } catch (error) {
       console.error('Error rechazando pago:', error);
-      alert('Error al rechazar el pago');
+      const mensajeBackend = error.response?.data?.error || error.message || 'Error al procesar';
+      alert(`❌ No se pudo rechazar:\n${mensajeBackend}`);
     } finally {
       setLoadingAction(false);
     }
@@ -882,6 +1053,29 @@ const rentasFiltradas = rentas.filter(renta => {
                               <History className="w-4 h-4" />
                             </button>
 
+                            {/* SECCIÓN: GESTIÓN DE SOLICITUDES DE BORRADO */}
+                            {renta.status === 'Solicitud_borrado' && (user.rol === 'super_admin' || user.rol === 'finanzas' || user.rol === 'direccion') && (
+                              <>
+                                {/* 1. APROBAR BAJA (Borrar definitivamente) */}
+                                {/* Reutilizamos handleEliminarPago porque ahora el backend sabe que si eres Admin es borrado real */}
+                                <button
+                                  onClick={() => handleEliminarPago(renta.id)} 
+                                  className="p-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors animate-pulse shadow-lg shadow-red-900/50"
+                                  title="🚨 APROBAR ELIMINACIÓN (Revisar motivo en observaciones)"
+                                >
+                                  <CheckCircle className="w-4 h-4" />
+                                </button>
+
+                                {/* 2. RECHAZAR BAJA (Restaurar a Confirmado) */}
+                                <button
+                                  onClick={() => handleRestaurarPago(renta.id)}
+                                  className="p-2 bg-gray-600/50 text-gray-300 rounded hover:bg-gray-600 transition-colors border border-gray-500"
+                                  title="Cancelar solicitud y mantener el pago"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
                             {renta.comprobante_url && (
                               <a
                                 href={renta.comprobante_url}
@@ -1283,16 +1477,23 @@ const ModalFormulario = ({ type, renta, opciones, onClose, onSuccess }) => {
       // 🟢 2. VALIDACIÓN ESTRICTA (BLOQUEO)
       try {
         const chequeo = await adminService.verificarPagosPendientes(conductorId);
+
         
         if (chequeo.existe) {
           // 🛑 AQUI CAMBIAMOS LA LÓGICA:
           // En lugar de confirm(), usamos alert() y cortamos el flujo.
+          const formatFecha = new Date(chequeo.pago.fecha_pago).toLocaleDateString('es-MX', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              timeZone: 'UTC' // Importante para que no salga un día antes
+          });
           
           alert(
             `⛔ ACCIÓN DENEGADA\n\n` +
-            `Este conductor ya tiene un pago PENDIENTE de autorización por $${chequeo.pago.monto_total} (Fecha: ${new Date(chequeo.pago.fecha_pago).toLocaleDateString()}).\n\n` +
+            `Este conductor ya tiene un pago PENDIENTE/SOLICITUD DE BORRADO esperando autorización por $${chequeo.pago.monto_total} (Fecha: ${formatFecha}\n\n` +
             `>> No puedes crear un pago manual nuevo.\n` +
-            `>> Primero debes Validar o Rechazar el pago que ya envió el conductor.`
+            `>> Primero debes Validar o Rechazar la solicitud pendiente actual desde la sección de Pagos Pendientes.`
           );
 
           // 3. "Lo regresamos para atrás": Limpiamos la selección

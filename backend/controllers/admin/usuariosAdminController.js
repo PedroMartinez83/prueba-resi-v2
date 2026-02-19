@@ -1,9 +1,19 @@
 const postgresService = require('../../services/postgresService');
 const auditService = require('../../services/auditService');
 const bcrypt = require('bcryptjs');
+const emailService = require('../../utils/emailService');
 
 // Obtener db de postgresService
 const { db, TABLES } = postgresService;
+
+// Roles que coordinador no puede modificar por jerarquia
+const COORDINADOR_ROLES_BLOQUEADOS = new Set([
+  'super_admin',
+  'gerente_ops',
+  'direccion',
+  'director',
+  'finanzas'
+]);
 
 /**
  * Genera una contraseña temporal memorable
@@ -27,7 +37,7 @@ const generarPasswordTemporal = () => {
 /**
  * Listar todos los usuarios con filtros, búsqueda y paginación
  * GET /api/admin/usuarios
- * Permisos: super_admin, director
+ * Permisos: super_admin, direccion
  */
 exports.getUsuarios = async (req, res) => {
   try {
@@ -115,7 +125,7 @@ exports.getUsuarios = async (req, res) => {
 /**
  * Obtener detalle de un usuario específico
  * GET /api/admin/usuarios/:id
- * Permisos: super_admin, director
+ * Permisos: super_admin, direccion
  */
 exports.getUsuarioById = async (req, res) => {
   try {
@@ -218,9 +228,10 @@ exports.createUsuario = async (req, res) => {
     // Validar que el rol sea válido
       const rolesValidos = [
         'super_admin',
-        'director',
+        'direccion',
         'gerente_ops',
         'finanzas',
+        'coordinador',
         'reclutador',
       'jefe_taller',
       'secretaria'
@@ -325,103 +336,157 @@ exports.createUsuario = async (req, res) => {
 /**
  * Actualizar usuario existente
  * PUT /api/admin/usuarios/:id
- * Permisos: super_admin (todos los campos), director (solo estado)
+ * Permisos: super_admin (todos los campos), direccion (solo estado)
  */
 exports.updateUsuario = async (req, res) => {
-  const trx = await db.transaction();
-  
+  // Iniciamos la transacción
+  const trx = await db.transaction(); 
+
   try {
     const { id } = req.params;
     const { nombre_completo, rol, estado_cuenta } = req.body;
+    
+    // Validamos qué campos vienen en el body
     const hasNombreCompleto = Object.prototype.hasOwnProperty.call(req.body, 'nombre_completo');
     const hasRol = Object.prototype.hasOwnProperty.call(req.body, 'rol');
     const hasEstadoCuenta = Object.prototype.hasOwnProperty.call(req.body, 'estado_cuenta');
 
-    // Verificar que no se edite a sí mismo
+    // 1. VALIDACIONES DE SEGURIDAD
     if (parseInt(id) === req.user.id) {
       await trx.rollback();
-      return res.status(403).json({
-        success: false,
-        message: 'No puedes editar tu propio usuario'
-      });
+      return res.status(403).json({ success: false, message: 'No puedes editar tu propio usuario' });
     }
 
-    // Establecer contexto de auditoría
+    // Establecer contexto de auditoría (Log en BD)
     await auditService.setUserContext(trx, req.user);
 
-    // Obtener usuario actual
-    const usuarioActual = await trx(TABLES.USUARIOS)
-      .where('id', id)
-      .first();
+    // 2. OBTENER USUARIO ACTUAL (Para comparar y validar)
+    const usuarioActual = await trx(TABLES.USUARIOS).where('id', id).first();
 
     if (!usuarioActual) {
       await trx.rollback();
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    // Finanzas no puede editar usuarios de direccion o super admin
+    if (req.user?.rol === 'finanzas' && ['super_admin', 'direccion'].includes(usuarioActual.rol)) {
+      await trx.rollback();
+      return res.status(403).json({
         success: false,
-        message: 'Usuario no encontrado'
+        message: 'No puedes editar usuarios de direccion o super admin'
+      });
+    }
+
+    if (req.user?.rol === 'coordinador' && COORDINADOR_ROLES_BLOQUEADOS.has(usuarioActual.rol)) {
+      await trx.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'No puedes editar usuarios con rol superior al tuyo'
       });
     }
 
     // Protección: no permitir cambiar rol de otro super_admin
     if (usuarioActual.rol === 'super_admin' && rol && rol !== 'super_admin') {
       await trx.rollback();
-      return res.status(403).json({
-        success: false,
-        message: 'No puedes cambiar el rol de un super administrador'
-      });
+      return res.status(403).json({ success: false, message: 'No puedes cambiar el rol de un super administrador' });
     }
 
-    // Preparar campos a actualizar
-    const updateData = {
-      updated_at: new Date()
-    };
+    // 3. PREPARAR DATOS (Lógica original manteniendo compatibilidad)
+    const updateData = { updated_at: new Date() };
 
-    // Si el usuario es super_admin, puede cambiar todo
-    if (req.user.rol === 'super_admin') {
+    const puedeEditarNombre = ['super_admin', 'finanzas', 'coordinador', 'gerente_ops'].includes(req.user.rol);
+    const puedeEditarRol = ['super_admin', 'finanzas'].includes(req.user.rol);
+
+    // Super admin y finanzas pueden cambiar nombre y rol (coordinador solo nombre)
+    if (puedeEditarNombre) {
       if (hasNombreCompleto) {
         const nombreFinal = nombre_completo?.toString().trim();
         updateData.nombre_completo = nombreFinal || null;
-        updateData.name = nombreFinal || null; // Actualizar ambos campos
+        updateData.name = nombreFinal || null; 
       }
-      if (hasRol && rol) {
+      if (puedeEditarRol && hasRol && rol) {
         updateData.rol = rol;
       }
     }
 
-    // Ambos roles pueden cambiar el estado
     if (hasEstadoCuenta && estado_cuenta) {
       updateData.estado_cuenta = estado_cuenta;
-      updateData.estado = estado_cuenta; // Actualizar ambos campos
+      updateData.estado = estado_cuenta;
     }
 
-    // Verificar que haya algo que actualizar
-    if (Object.keys(updateData).length === 1) { // Solo updated_at
+    if (Object.keys(updateData).length <= 1) { // Solo updated_at
       await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        message: 'No hay campos para actualizar'
-      });
+      return res.status(400).json({ success: false, message: 'No hay campos para actualizar' });
     }
 
-    // Actualizar usuario
+    // 4. EJECUTAR UPDATE EN BD
     const [usuarioActualizado] = await trx(TABLES.USUARIOS)
       .where('id', id)
       .update(updateData)
       .returning('*');
 
-    // Registrar en auditoría
+    // 5. LOG EN BD (Audit Service)
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'UPDATE_USER',
-      descripcion: `Usuario ${usuarioActualizado.email} actualizado`,
-      datos_sensibles: {
-        usuario_editado_id: id,
-        cambios: req.body
-      },
+      descripcion: `Usuario ${usuarioActualizado.email} actualizado por ${req.user.rol}`,
+      datos_sensibles: { usuario_editado_id: id, cambios: req.body },
       ip_address: auditService.getClientIp(req)
     });
 
-    await trx.commit();
+    // Confirmamos la transacción
+    await trx.commit(); 
+
+    // =====================================================================
+    // 📧 6. AUDITORÍA POR CORREO (SOLO GERENTE_OPS)
+    // =====================================================================
+    // Ejecutamos esto DESPUÉS del commit para no bloquear la respuesta si el correo falla.
+    if (req.user.rol === 'gerente_ops') {
+      
+      let detalleHtml = '<ul style="padding-left: 20px;">';
+      let huboCambiosReales = false;
+
+      // Comparamos lo que envió vs lo que había
+      // Nota: Usamos usuarioActual (antes del cambio) vs updateData (lo nuevo)
+      
+      if (updateData.nombre_completo && updateData.nombre_completo !== usuarioActual.nombre_completo) {
+          detalleHtml += `<li><strong>Nombre:</strong> De "<em>${usuarioActual.nombre_completo}</em>" a "<em>${updateData.nombre_completo}</em>"</li>`;
+          huboCambiosReales = true;
+      }
+      if (updateData.rol && updateData.rol !== usuarioActual.rol) {
+          detalleHtml += `<li><strong>Rol:</strong> De "<em>${usuarioActual.rol}</em>" a "<em>${updateData.rol}</em>"</li>`;
+          huboCambiosReales = true;
+      }
+if (updateData.estado_cuenta !== undefined && updateData.estado_cuenta != usuarioActual.estado_cuenta) {
+          console.log('   👉 Cambio detectado en ESTADO');
+          
+          // Función auxiliar para formatear bonito el valor de la BD o del Front
+          const formatEstado = (val) => {
+              if (val === true || val === 1 || val === 'Activo') return 'Activo';
+              if (val === 'suspendido') return 'Suspendido';
+              if (val === 'prohibido') return 'Prohibido';
+              if (val === false || val === 0 || val === 'Inactivo') return 'Inactivo';
+              return val; // Por si llega algo raro, lo mostramos tal cual
+          };
+
+          const estadoAnterior = formatEstado(usuarioActual.estado_cuenta);
+          const estadoNuevo = formatEstado(updateData.estado_cuenta);
+
+          detalleHtml += `<li><strong>Estado:</strong> De "<em>${estadoAnterior}</em>" a "<em>${estadoNuevo}</em>"</li>`;
+          huboCambiosReales = true;
+      }
+
+      if (huboCambiosReales) {
+        // Llamamos al servicio de correo sin await (fire and forget)
+        emailService.sendAuditNotification({
+            usuarioAfectado: usuarioActual, // Enviamos el objeto usuario original
+            accion: 'EDICIÓN DE PERFIL',
+            detallesCambio: detalleHtml,
+            actorNombre: req.user.nombre || req.user.email
+        }).catch(err => console.error('Error enviando correo auditoría:', err));
+      }
+    }
+    // =====================================================================
 
     res.json({
       success: true,
@@ -438,36 +503,21 @@ exports.updateUsuario = async (req, res) => {
   } catch (error) {
     await trx.rollback();
     console.error('❌ Error al actualizar usuario:', error);
-    
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'error',
-      mensaje: `Error actualizando usuario ${req.params.id}: ${error.message}`,
-      stack_trace: error.stack,
-      contexto: req.body,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
-    });
-    
-    res.status(500).json({
-      success: false,
-      message: 'Error al actualizar usuario',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    // ... (Tu manejo de errores original) ...
+    res.status(500).json({ success: false, message: 'Error al actualizar usuario' });
   }
 };
-
 /**
  * Resetear contraseña de un usuario
  * POST /api/admin/usuarios/:id/resetear-password
- * Permisos: super_admin, director
+ * Permisos: super_admin, direccion
  */
 exports.resetearPassword = async (req, res) => {
   const trx = await db.transaction();
   
   try {
     const { id } = req.params;
+    const { rol: rolSolicitante, nombre: nombreSolicitante, email: emailSolicitante } = req.user;
 
     // Verificar que no resetee su propia contraseña
     if (parseInt(id) === req.user.id) {
@@ -484,7 +534,7 @@ exports.resetearPassword = async (req, res) => {
     // Verificar que el usuario exista
     const usuario = await trx(TABLES.USUARIOS)
       .where('id', id)
-      .select('id', 'email', 'nombre_completo')
+      .select('id', 'email', 'name')
       .first();
 
     if (!usuario) {
@@ -520,6 +570,32 @@ exports.resetearPassword = async (req, res) => {
     });
 
     await trx.commit();
+
+    // =====================================================================
+    // 📧 3. AUDITORÍA POR CORREO (SOLO GERENTE_OPS)
+    // =====================================================================
+    if (rolSolicitante === 'gerente_ops') {
+      
+      const detalleHtml = `
+        <p>Se ha realizado un reseteo manual de contraseña.</p>
+        <ul style="padding-left: 20px;">
+           <li><strong>Usuario Afectado:</strong> ${usuario.name || 'Sin nombre'} (${usuario.email})</li>
+           <li><strong>Acción:</strong> Generación de nueva contraseña temporal.</li>
+        </ul>
+        <div style="background-color: #fff3cd; padding: 10px; border-radius: 4px; font-size: 12px; color: #856404;">
+           ⚠️ <strong>Nota de Seguridad:</strong> El Gerente ha recibido la nueva contraseña temporal en su pantalla para compartirla con el usuario.
+        </div>
+      `;
+
+      // Enviamos correo (fire and forget)
+      emailService.sendAuditNotification({
+          usuarioAfectado: usuario,
+          accion: 'RESETEO DE CONTRASEÑA',
+          detallesCambio: detalleHtml,
+          actorNombre: nombreSolicitante || emailSolicitante
+      }).catch(err => console.error('❌ Error enviando correo auditoría reset:', err));
+    }
+    // =====================================================================
 
     res.json({
       success: true,
@@ -557,7 +633,7 @@ exports.resetearPassword = async (req, res) => {
 /**
  * Cambiar estado de un usuario (Activar/Suspender/Prohibir)
  * PUT /api/admin/usuarios/:id/cambiar-estado
- * Permisos: super_admin (todos los estados), director (solo Activo/Suspendido)
+ * Permisos: super_admin (todos los estados), direccion (solo Activo/Suspendido)
  */
 exports.cambiarEstado = async (req, res) => {
   const trx = await db.transaction();
@@ -565,6 +641,7 @@ exports.cambiarEstado = async (req, res) => {
   try {
     const { id } = req.params;
     const { nuevo_estado } = req.body;
+    const { rol: rolSolicitante, nombre: nombreSolicitante, email: emailSolicitante } = req.user;
 
     // Validar que el estado sea válido
     const estadosValidos = ['Activo', 'suspendido', 'prohibido'];
@@ -576,8 +653,8 @@ exports.cambiarEstado = async (req, res) => {
       });
     }
 
-    // Si es director y quiere cambiar a prohibido, no puede
-    if (req.user.rol === 'director' && nuevo_estado === 'prohibido') {
+    // Si es direccion y quiere cambiar a prohibido, no puede
+    if (req.user.rol === 'direccion' && nuevo_estado === 'prohibido') {
       await trx.rollback();
       return res.status(403).json({
         success: false,
@@ -619,6 +696,14 @@ exports.cambiarEstado = async (req, res) => {
       });
     }
 
+    if (req.user?.rol === 'coordinador' && COORDINADOR_ROLES_BLOQUEADOS.has(usuario.rol)) {
+      await trx.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'No puedes modificar usuarios con rol superior al tuyo'
+      });
+    }
+
     const estadoAnterior = usuario.estado_cuenta;
 
     // Actualizar estado
@@ -656,6 +741,45 @@ exports.cambiarEstado = async (req, res) => {
     });
 
     await trx.commit();
+
+    // =====================================================================
+    // 📧 6. AUDITORÍA POR CORREO (SOLO GERENTE_OPS)
+    // =====================================================================
+    if (rolSolicitante === 'gerente_ops') {
+      
+      // Definimos el título de la acción según el estado nuevo
+      let accionTitulo = '';
+      let colorEstilo = '';
+      
+      if (nuevo_estado === 'Activo') {
+          accionTitulo = 'REACTIVACIÓN DE CUENTA';
+          colorEstilo = 'color: #2e7d32;'; // Verde
+      } else if (nuevo_estado === 'suspendido') {
+          accionTitulo = 'SUSPENSIÓN DE CUENTA';
+          colorEstilo = 'color: #f57c00;'; // Naranja
+      } else if (nuevo_estado === 'prohibido') {
+          accionTitulo = 'BLOQUEO PERMANENTE (PROHIBIDO)';
+          colorEstilo = 'color: #d32f2f;'; // Rojo
+      }
+
+      // Preparamos el HTML del detalle
+      const detalleHtml = `
+        <p>El estado de la cuenta ha cambiado:</p>
+        <ul style="padding-left: 20px;">
+           <li><strong>Anterior:</strong> ${estadoAnterior || 'Desconocido'}</li>
+           <li><strong>Nuevo:</strong> <span style="font-weight: bold; ${colorEstilo}">${nuevo_estado}</span></li>
+        </ul>
+      `;
+
+      // Enviamos correo (fire and forget)
+      emailService.sendAuditNotification({
+          usuarioAfectado: usuario,
+          accion: accionTitulo,
+          detallesCambio: detalleHtml,
+          actorNombre: nombreSolicitante || emailSolicitante
+      }).catch(err => console.error('❌ Error enviando correo auditoría cambio estado:', err));
+    }
+    // =====================================================================
 
     res.json({
       success: true,
@@ -732,7 +856,7 @@ exports.deleteUsuario = async (req, res) => {
     }
 
     // Finanzas no puede eliminar usuarios de direcciÃ³n
-    if (req.user?.rol === 'finanzas' && usuario.rol === 'director') {
+    if (req.user?.rol === 'finanzas' && usuario.rol === 'direccion') {
       await trx.rollback();
       return res.status(403).json({
         success: false,

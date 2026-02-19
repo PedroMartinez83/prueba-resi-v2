@@ -101,6 +101,10 @@ router.get('/',
   pagosRentasController.getPagosRentas
 );
 
+router.patch('/:id/status', 
+  requirePermission('pagos_rentas.update'),
+  pagosRentasController.cambiarStatus
+);
 
 console.log('--- DEBUGGING CONTROLLER ---');
 console.log('Tipo de dato:', typeof pagosRentasController);

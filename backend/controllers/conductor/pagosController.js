@@ -321,7 +321,6 @@ const registrarPago = async (req, res) => {
     const conductorId = req.user.conductorId;
     const { fecha_inicio, fecha_fin, notas, metodo_pago } = req.body;
 
-
     // Validaciones
     if (!req.file) {
       await trx.rollback();
@@ -341,6 +340,55 @@ const registrarPago = async (req, res) => {
     const fInicio = toDateString(fecha_inicio);
     const fFin = toDateString(fecha_fin || fecha_inicio); 
 
+    // --- 🛡️ 1. VALIDACIÓN DE CONTINUIDAD (CORREGIDA) ---
+    const ultimoPagoRegistrado = await trx('pagos_diarios')
+      .where('asignacion_id', asignacion.id)
+      .whereIn('status', ['Aprobado', 'Pendiente', 'Confirmado', 'Solicitud_borrado'])
+      .orderByRaw('COALESCE(fecha_pago_fin, fecha_pago) DESC')
+      .first();
+
+let fechaEsperada;
+
+    if (ultimoPagoRegistrado) {
+        // Si ya hay pagos, seguimos la cadena normal
+        const rawFecha = ultimoPagoRegistrado.fecha_pago_fin || ultimoPagoRegistrado.fecha_pago;
+        const fechaUltima = toDateString(rawFecha);
+        fechaEsperada = addDaysToDate(fechaUltima, 1);
+    } else {
+        // 🚨 AQUÍ ESTÁ LA CORRECCIÓN 🚨
+        // Si es el PRIMER pago, definimos desde cuándo debe empezar a pagar.
+        
+        const fechaAsignacion = toDateString(asignacion.fecha_inicio);
+        const fechaArranqueSistema = '2026-01-01'; // 👈 TU FECHA DE CORTE
+
+        // LÓGICA:
+        // 1. Si la asignación es vieja (ej. 2025), empezamos a cobrar desde el 2026-01-01.
+        // 2. Si la asignación es nueva (ej. Feb 2026), empezamos desde la fecha de asignación.
+        
+        if (fechaAsignacion < fechaArranqueSistema) {
+             fechaEsperada = fechaArranqueSistema;
+        } else {
+             fechaEsperada = fechaAsignacion;
+        }
+    }
+
+    // Validación: Si intenta pagar después de lo esperado (dejando hueco)
+    if (fInicio > fechaEsperada) {
+        const finHueco = addDaysToDate(fInicio, -1);
+        
+        
+        // Verificamos si los días en el hueco son cobrables (si son domingos, se permite el salto)
+        const diasHueco = contarDiasCobrables(fechaEsperada, finHueco);
+        
+        if (diasHueco > 0) {
+             await trx.rollback();
+             return res.status(400).json({ 
+                message: `Error de continuidad: No puedes dejar huecos. Tu último pago cubre hasta ${toDateString(addDaysToDate(fechaEsperada, -1))}. Debes pagar los ${diasHueco} días hábiles pendientes comenzando desde ${fechaEsperada}.` 
+             });
+        }
+    }
+    // -----------------------------------------------------------
+
     // Cálculo de Días a Cobrar
     const diasACobrar = contarDiasCobrables(fInicio, fFin);
 
@@ -354,18 +402,38 @@ const registrarPago = async (req, res) => {
     // Validación de Traslape
     const traslape = await trx('pagos_diarios')
       .where('asignacion_id', asignacion.id)
-      .whereIn('status', ['Aprobado', 'Pendiente', 'Confirmado'])
+      .whereIn('status', ['Aprobado', 'Pendiente', 'Confirmado', 'Solicitud_borrado'])
       .andWhere(function() {
         this.whereRaw('fecha_pago <= ?', [fFin])
             .andWhereRaw('COALESCE(fecha_pago_fin, fecha_pago) >= ?', [fInicio]);
       })
       .first();
 
-    if (traslape) {
+if (traslape) {
        await trx.rollback();
-       const fechaConflicto = toDateString(traslape.fecha_pago);
+
+       // 1. Configuración para formato largo (ej: "10 de enero de 2026")
+       const opcionesFecha = { 
+           year: 'numeric', 
+           month: 'long', 
+           day: 'numeric',
+           timeZone: 'UTC' // ⚠️ IMPORTANTE: Usamos UTC para que no te reste un día por la zona horaria
+       };
+       
+       // 2. Convertimos la fecha
+       const fechaConflicto = new Date(traslape.fecha_pago)
+           .toLocaleDateString('es-MX', opcionesFecha);
+       
+       let mensajeError = `Conflicto de fechas: El periodo seleccionado choca con un pago ya registrado del día ${fechaConflicto}.`;
+       
+       // Mensaje específico si es una solicitud de borrado
+       if (traslape.status === 'Solicitud_borrado') {
+           mensajeError = `⛔ FECHA BLOQUEADA: Existe una Solicitud de Eliminación en proceso para el día ${fechaConflicto}. Hasta que Dirección no la apruebe definitivamente, esa fecha sigue ocupada.`;
+       }
+
        return res.status(400).json({ 
-         message: `Conflicto de fechas: El periodo seleccionado choca con un pago ya registrado del día o pago pendiente ${fechaConflicto}.` 
+         success: false,
+         message: mensajeError
        });
     }
 
@@ -380,7 +448,6 @@ const registrarPago = async (req, res) => {
     const rentaDiaria = parseFloat(asignacion.renta_diaria || 0);
     const polizaDiaria = getPolizaDiaria(asignacion.abono_poliza_mantenimiento);
     
-    // SUMAMOS TODO AQUÍ (Multiplicamos por el número de días)
     const totalRenta = rentaDiaria * diasACobrar;
     const totalPoliza = polizaDiaria * diasACobrar;
     const granTotal = totalRenta + totalPoliza;
@@ -389,14 +456,13 @@ const registrarPago = async (req, res) => {
         ? `Pago por rango de ${diasACobrar} días hábiles.` 
         : `Pago del día ${fInicio}`);
 
-    // ¡UN SOLO INSERT! 🛑 (No hay bucle for aquí)
     const [nuevoId] = await trx('pagos_diarios').insert({
         asignacion_id: asignacion.id,
-        monto_total: granTotal,          // Suma total
-        monto_renta_pagado: totalRenta,  // Suma total renta
-        monto_poliza_pagado: totalPoliza,// Suma total póliza
+        monto_total: granTotal,
+        monto_renta_pagado: totalRenta,
+        monto_poliza_pagado: totalPoliza,
         fecha_pago: fInicio,
-        fecha_pago_fin: fFin,            // Guardamos el fin del rango
+        fecha_pago_fin: fFin,
         metodo_pago: metodo_pago || 'Transferencia',
         comprobante_url: result.secure_url,
         observaciones: textoObservacion,

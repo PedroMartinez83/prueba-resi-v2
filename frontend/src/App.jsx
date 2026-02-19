@@ -5,9 +5,10 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
-const CORE_ADMIN_ROLES = ['super_admin', 'director', 'gerente_ops', 'gestor_flota', 'finanzas', 'admin'];
-const SOLICITUDES_ROLES = ['super_admin', 'director', 'gerente_ops', 'reclutador', 'secretaria', 'finanzas', 'admin'];
-const PAGOS_ROLES = ['super_admin', 'director', 'gerente_ops', 'finanzas', 'secretaria', 'admin'];
+const CORE_ADMIN_ROLES = ['super_admin', 'direccion', 'gerente_ops', 'gestor_flota', 'finanzas', 'admin'];
+const SOLICITUDES_ROLES = ['super_admin', 'direccion', 'gerente_ops', 'reclutador', 'secretaria', 'finanzas', 'coordinador', 'admin'];
+const PAGOS_ROLES = ['super_admin', 'direccion', 'gerente_ops', 'finanzas', 'secretaria', 'coordinador', 'admin'];
+const RENTAS_ROLES = [...CORE_ADMIN_ROLES, 'secretaria', 'coordinador'];
 import Layout from './components/layout/Layout.jsx';
 import Login from './pages/auth/Login';
 import ForgotPassword from './pages/auth/ForgotPassword';
@@ -179,7 +180,7 @@ function App() {
             <Route
               path="admin/vehiculos"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador', 'jefe_taller']}>
                   <Vehiculos />
                 </ProtectedRoute>
               }
@@ -188,7 +189,7 @@ function App() {
             <Route
               path="admin/vehiculos/:id"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador', 'jefe_taller']}>
                   <VehicleDetail3D />
                 </ProtectedRoute>
               }
@@ -197,7 +198,7 @@ function App() {
             <Route
               path="admin/vehiculos/:id/historial"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador', 'jefe_taller']}>
                   <VehiculoHistorial />
                 </ProtectedRoute>
               }
@@ -215,7 +216,7 @@ function App() {
             <Route
               path="admin/conductores"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador', 'jefe_taller']}>
                   <Conductores />
                 </ProtectedRoute>
               }
@@ -224,7 +225,7 @@ function App() {
             <Route
               path="admin/conductores/:id"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador', 'jefe_taller']}>
                   <ConductorDetail />
                 </ProtectedRoute>
               }
@@ -233,7 +234,7 @@ function App() {
             <Route
               path="admin/usuarios"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'finanzas']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'finanzas', 'coordinador', 'gerente_ops']}>
                   <Usuarios />
                 </ProtectedRoute>
               }
@@ -279,7 +280,7 @@ function App() {
             <Route
               path="admin/inversiones/crear"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin']}>
                   <HubInversiones />
                 </ProtectedRoute>
               }
@@ -288,7 +289,7 @@ function App() {
             <Route
               path="admin/inversiones/:id/detalle"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin']}>
                   <ContratoDetalle />
                 </ProtectedRoute>
               }
@@ -297,7 +298,7 @@ function App() {
             <Route
               path="admin/inversiones/hub"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin']}>
                   <HubInversionesLista />
                 </ProtectedRoute>
               }
@@ -307,7 +308,7 @@ function App() {
             <Route
               path="admin/rentas"
               element={
-                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'secretaria']}>
+                <ProtectedRoute allowedRoles={RENTAS_ROLES}>
                   <RentasDashboard />
                 </ProtectedRoute>
               }
@@ -325,7 +326,7 @@ function App() {
             <Route
               path="admin/rentas/reportes"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador']}>
                   <RentasReportes />
                 </ProtectedRoute>
               }
@@ -334,7 +335,7 @@ function App() {
             <Route
               path="admin/rentas/estadisticas"
               element={
-                <ProtectedRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'coordinador']}>
                   <RentasEstadisticas />
                 </ProtectedRoute>
               }
@@ -399,7 +400,7 @@ function App() {
             <Route
               path="/admin/siniestros/vehiculo/:id/historial"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <SiniestrosHistorialVehiculo />
                 </ProtectedRoute>
               }
@@ -408,7 +409,7 @@ function App() {
             <Route
               path="/admin/siniestros/conductor/:id/historial"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <SiniestrosHistorialConductor />
                 </ProtectedRoute>
               }
@@ -417,7 +418,7 @@ function App() {
             <Route
               path="/admin/siniestros"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <SiniestrosDashboard />
                 </ProtectedRoute>
               }
@@ -426,7 +427,7 @@ function App() {
             <Route
               path="/admin/siniestros/lista"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <SiniestrosLista />
                 </ProtectedRoute>
               }
@@ -435,7 +436,7 @@ function App() {
             <Route
               path="/admin/siniestros/registrar"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <SiniestrosRegistrar />
                 </ProtectedRoute>
               }
@@ -444,7 +445,7 @@ function App() {
             <Route
               path="/admin/siniestros/:id"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <SiniestroDetalle />
                 </ProtectedRoute>
               }
@@ -453,7 +454,7 @@ function App() {
             <Route
               path="/admin/siniestros/reportes"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'director', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
                   <ReportesSiniestros />
                 </ProtectedRoute>
               }

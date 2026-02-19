@@ -124,6 +124,8 @@ exports.getPagosRentas = async (req, res) => {
       vehiculo_id,
       fecha_desde,
       fecha_hasta,
+      fecha_registro_desde,
+      fecha_registro_hasta,
       metodo_pago,
       status,
       tipo_socio,
@@ -158,12 +160,18 @@ exports.getPagosRentas = async (req, res) => {
       });
     }
 
-    if (fecha_desde) {
+    if (fecha_registro_desde) {
+      queryBuilder = queryBuilder.where('created_at', '>=', `${fecha_registro_desde} 00:00:00`);
+      countQuery = countQuery.where('created_at', '>=', `${fecha_registro_desde} 00:00:00`);
+    } else if (fecha_desde) {
       queryBuilder = queryBuilder.where('fecha_pago', '>=', fecha_desde);
       countQuery = countQuery.where('fecha_pago', '>=', fecha_desde);
     }
 
-    if (fecha_hasta) {
+    if (fecha_registro_hasta) {
+      queryBuilder = queryBuilder.where('created_at', '<=', `${fecha_registro_hasta} 23:59:59`);
+      countQuery = countQuery.where('created_at', '<=', `${fecha_registro_hasta} 23:59:59`);
+    } else if (fecha_hasta) {
       queryBuilder = queryBuilder.where('fecha_pago', '<=', fecha_hasta);
       countQuery = countQuery.where('fecha_pago', '<=', fecha_hasta);
     }
@@ -287,12 +295,15 @@ exports.getEstadisticasPagos = async (req, res) => {
     const tzOffsetMinutes = Number.isFinite(Number(tz_offset)) ? Number(tz_offset) : 0;
 
     let baseQuery = db('pagos_diarios');
+    const baseConfirmados = db('pagos_diarios').where('status', 'Confirmado');
 
     if (fecha_desde) {
       baseQuery = baseQuery.where('fecha_pago', '>=', fecha_desde);
+      baseConfirmados.andWhere('fecha_pago', '>=', fecha_desde);
     }
     if (fecha_hasta) {
       baseQuery = baseQuery.where('fecha_pago', '<=', fecha_hasta);
+      baseConfirmados.andWhere('fecha_pago', '<=', fecha_hasta);
     }
 
     // Estadísticas generales
@@ -433,13 +444,46 @@ exports.getEstadisticasPagos = async (req, res) => {
     const diasRestantes = ultimoDia - diaActual;
     const proyeccionPoliza = polizaMes + (promedioDiarioPoliza * diasRestantes);
 
-    // Por método de pago
-    const porMetodo = await db('pagos_diarios')
-      .where('status', 'Confirmado')
+    // Por metodo de pago
+    const porMetodo = await baseConfirmados.clone()
       .select('metodo_pago')
-      .sum('monto_renta_pagado as total')
+      .sum('monto_total as total')
       .count('id as cantidad')
       .groupBy('metodo_pago');
+
+    // Indicadores avanzados (mejor dia, hora pico, metodo preferido)
+    const rangoBase = baseConfirmados.clone();
+    const mejorDiaResult = await rangoBase.clone()
+      .select(db.raw('EXTRACT(DOW FROM fecha_pago)::int as dow'))
+      .sum('monto_total as total')
+      .groupBy('dow')
+      .orderBy('total', 'desc')
+      .first();
+
+    const horaPicoResult = await rangoBase.clone()
+      .select(db.raw("EXTRACT(HOUR FROM (created_at AT TIME ZONE 'UTC') - (? || ' minutes')::interval)::int as hour", [tzOffsetMinutes]))
+      .count('id as total')
+      .groupBy('hour')
+      .orderBy('total', 'desc')
+      .first();
+
+    const metodoPreferidoResult = await rangoBase.clone()
+      .select('metodo_pago')
+      .count('id as total')
+      .groupBy('metodo_pago')
+      .orderBy('total', 'desc')
+      .first();
+
+    const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'];
+    const mejorDia = mejorDiaResult?.dow !== undefined && mejorDiaResult?.dow !== null
+      ? diasSemana[mejorDiaResult.dow]
+      : null;
+
+    const horaPico = horaPicoResult?.hour !== undefined && horaPicoResult?.hour !== null
+      ? `${String(horaPicoResult.hour).padStart(2, '0')}:00`
+      : null;
+
+    const metodoPreferido = metodoPreferidoResult?.metodo_pago || null;
 
     // Top 10 conductores
     const topConductores = await db('vista_pagos_rentas')
@@ -483,7 +527,16 @@ exports.getEstadisticasPagos = async (req, res) => {
         cambio_mes: 0
       },
       por_metodo: porMetodo,
-      top_conductores: topConductores
+      top_conductores: topConductores,
+      insights: {
+        mejor_dia: mejorDia,
+        hora_pico: horaPico,
+        metodo_preferido: metodoPreferido,
+        rango: {
+          fecha_desde: fecha_desde || null,
+          fecha_hasta: fecha_hasta || null
+        }
+      }
     });
 
   } catch (error) {
@@ -603,8 +656,36 @@ exports.validarPago = async (req, res) => {
     }
 
     if (pago.status !== 'Pendiente') {
-      throw new Error(`El pago no está pendiente (Estado actual: ${pago.status})`);
+        await trx.rollback();
+        throw new Error(`El pago no está pendiente (Estado actual: ${pago.status})`);
     }
+
+    // =====================================================================
+    // 🛡️ VALIDACIÓN FIFO (First In, First Out)
+    // =====================================================================
+    // Buscamos si existe algún pago PENDIENTE con fecha ANTERIOR a este.
+    // Si existe, significa que te estás saltando la fila.
+    const pagoAnteriorPendiente = await trx('pagos_diarios')
+      .where('asignacion_id', pago.asignacion_id) // Mismo conductor/vehículo
+      .where('status', 'Pendiente')               // Que esté pendiente
+      .andWhere(function() {
+         // Buscamos fechas MENORES a la fecha de este pago
+         this.where('fecha_pago', '<', pago.fecha_pago)
+      })
+      .orderBy('fecha_pago', 'asc') // El más antiguo primero
+      .first();
+
+    if (pagoAnteriorPendiente) {
+        await trx.rollback();
+        
+        const fechaPendiente = new Date(pagoAnteriorPendiente.fecha_pago).toISOString().split('T')[0];
+        
+        return res.status(400).json({
+            success: false,
+            message: `⚠️ ORDEN INCORRECTO: No puedes validar este pago porque existe uno ANTERIOR (del día ${fechaPendiente}) que aún está pendiente.\n\nDebes validar los pagos en orden cronológico (del más antiguo al más nuevo).`
+        });
+    }
+    // =====================================================================
 
     // 2. Obtener Asignación y Vehículo
     const asignacion = await trx('asignaciones').where('id', pago.asignacion_id).first();
@@ -721,6 +802,7 @@ exports.rechazarPago = async (req, res) => {
 
     await auditService.setUserContext(trx, req.user);
 
+    // 1. Buscamos el pago que queremos rechazar
     const pago = await trx('pagos_diarios')
       .where('id', id)
       .first();
@@ -733,6 +815,33 @@ exports.rechazarPago = async (req, res) => {
       });
     }
 
+    // =====================================================================
+    // 🛡️ VALIDACIÓN DE ORDEN CRONOLÓGICO (LIFO - Last In, First Out)
+    // =====================================================================
+    // Buscamos si existe algún pago posterior que esté "VIVO" (Pendiente, Aprobado o Confirmado)
+    const pagoPosterior = await trx('pagos_diarios')
+      .where('asignacion_id', pago.asignacion_id)
+      .where('status', 'Pendiente') // 🟢 CORRECCIÓN AQUÍ
+      .andWhere(function() {
+         // Buscamos fechas mayores a la fecha de este pago
+         this.where('fecha_pago', '>', pago.fecha_pago)
+      })
+      .orderBy('fecha_pago', 'asc')
+      .first();
+
+    if (pagoPosterior) {
+        await trx.rollback();
+        
+        const fechaConflicto = new Date(pagoPosterior.fecha_pago).toISOString().split('T')[0];
+        
+        return res.status(400).json({
+            success: false,
+            error: `⚠️ BLOQUEO DE INTEGRIDAD: No puedes rechazar este pago porque existe una solicitud PENDIENTE posterior del día ${fechaConflicto}.\n\nPara mantener el orden, debes rechazar primero la solicitud más reciente.`
+        });
+    }
+    // =====================================================================
+
+    // 2. Si pasó la validación, procedemos a rechazar
     await trx('pagos_diarios')
       .where('id', id)
       .update({
@@ -749,7 +858,8 @@ exports.rechazarPago = async (req, res) => {
       datos_sensibles: {
         pago_id: id,
         monto: pago.monto_total,
-        motivo: motivo_rechazo
+        motivo: motivo_rechazo,
+        fecha_pago: pago.fecha_pago
       },
       ip_address: auditService.getClientIp(req),
       requiere_revision: true
@@ -759,7 +869,7 @@ exports.rechazarPago = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Pago rechazado'
+      message: 'Pago rechazado correctamente'
     });
 
   } catch (error) {
@@ -1500,117 +1610,189 @@ exports.editarPago = async (req, res) => {
 // ========== ELIMINAR PAGO DE RENTA ==========
 exports.eliminarPago = async (req, res) => {
   const { id } = req.params;
-  const { motivo } = req.body;
+  const motivoBaja = req.body.motivoBaja || req.body.motivo; 
+  const { rol } = req.user;
+  const rolesSupremos = ['super_admin', 'direccion', 'finanzas']; 
 
   try {
-    let pagoEliminado = null;
-    console.log(`🗑️ Eliminando pago ID: ${id}. Motivo: ${motivo || 'No especificado'}`);
+    console.log(`🗑️ Procesando eliminación ID: ${id}. Rol: ${rol}. Motivo: ${motivoBaja || 'Sin motivo'}`);
 
-    await db.transaction(async (trx) => {
-      // 1. BUSCAR EL PAGO Y DATOS RELACIONADOS
-      // Usamos tu query original con JOINS porque es eficiente para traer todo junto
-      const pago = await trx('pagos_diarios as p')
-        .leftJoin('asignaciones as a', 'p.asignacion_id', 'a.id')
-        .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
-        .leftJoin('conductores as c', 'a.conductor_id', 'c.id')
-        .where('p.id', id)
-        .select(
-          'p.*', 
-          'v.id as vehiculo_id', // Si esto viene null, es el dato corrupto
-          'v.total_pagado_corrida', 
-          'v.total_corrida',
-          'v.saldo_pendiente_corrida',
-          'c.nombre_conductor as conductor_nombre'
-        )
-        .first();
-
-      if (!pago) throw new Error('El pago no existe o ya fue eliminado.');
-
-      // 2. REGLA DE CONTINUIDAD (Lógica Original)
-      // Si el pago afecta saldos (Confirmado), validamos que sea el último
-      if (pago.status === 'Confirmado') {
-        
-        // Buscamos si hay un pago MÁS NUEVO
-        const ultimoConfirmado = await trx('pagos_diarios')
-          .where('asignacion_id', pago.asignacion_id)
-          .where('status', 'Confirmado')
-          .where('id', '>', pago.id) // Buscamos cualquier ID mayor (posterior)
-          .first();
-
-        // Si existe uno posterior, bloqueamos
-        if (ultimoConfirmado) {
-          throw new Error(
-            `⛔ No se puede eliminar este pago porque existen pagos posteriores. Debes eliminar el último registrado primero para mantener la coherencia contable.`
-          );
-        }
-
-        console.log('✅ Es el último pago confirmado. Procediendo a reversión...');
-
-        // 3. BLINDAJE "ANTI-CRASH" (Lo nuevo que te di) 🛡️
-        // Antes de intentar actualizar el vehículo, verificamos si existe.
-        // Si 'pago.vehiculo_id' es NULL (dato corrupto), saltamos la actualización de saldos.
-        if (!pago.vehiculo_id) {
-            console.warn(`⚠️ ALERTA: El pago ${id} se eliminará, pero NO se actualizó el saldo del vehículo porque la asignación no tiene vehículo vinculado (Data corrupta).`);
-        } 
-        else {
-            // 4. ACTUALIZACIÓN DE SALDOS (Solo si existe vehículo)
-            const montoAEliminar = parseFloat(pago.monto_total || 0);
-            const pagadoActual = parseFloat(pago.total_pagado_corrida || 0);
-            const totalCorrida = parseFloat(pago.total_corrida || 0);
-
-            // Revertimos la operación matemática
-            const nuevoTotalPagado = Math.max(0, pagadoActual - montoAEliminar);
-            const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoTotalPagado);
-            
-            let nuevoPorcentaje = 0;
-            if (totalCorrida > 0) {
-                nuevoPorcentaje = (nuevoTotalPagado / totalCorrida) * 100;
-            }
-
-            // Actualizamos el vehículo
-            await trx('vehiculos')
-              .where('id', pago.vehiculo_id)
-              .update({
-                total_pagado_corrida: nuevoTotalPagado.toFixed(2),
-                saldo_pendiente_corrida: nuevoSaldoPendiente.toFixed(2),
-                porcentaje_pagado: nuevoPorcentaje.toFixed(2),
-                updated_at: new Date()
-              });
-        }
+    // =====================================================================
+    // 🕵️ CASO A: GERENTE DE OPERACIONES (MODO SOLICITUD)
+    // =====================================================================
+    if (rol === 'gerente_ops') {
+      if (!motivoBaja || motivoBaja.trim().length < 5) {
+        return res.status(400).json({ 
+          success: false, 
+          message: '⚠️ Es obligatorio escribir un motivo detallado.' 
+        });
       }
 
-      // 5. BORRADO LÓGICO (Lógica Original)
-      // No usamos .del(), sino que actualizamos el estado y agregamos nota
-      const textoEliminacion = motivo ? `[Pago Eliminado: ${motivo}]` : '[Pago Eliminado sin motivo]';
+      const pagoActual = await db('pagos_diarios').where('id', id).select('observaciones').first();
+      const fechaHoy = new Date().toLocaleDateString('es-MX');
+      const textoSolicitud = `[Solicitud Baja: ${motivoBaja}] - Solicitado el ${fechaHoy}`;
       
-      const nuevasObservaciones = [pago.observaciones, textoEliminacion]
-        .filter(Boolean) // Quita nulls o vacíos
-        .join(' | ');
+      const observacionesViejas = pagoActual?.observaciones || '';
+      const nuevasObservaciones = observacionesViejas 
+        ? `${observacionesViejas} | ${textoSolicitud}`
+        : textoSolicitud;
 
-      await trx('pagos_diarios')
+      await db('pagos_diarios')
         .where('id', id)
         .update({
-          status: 'Eliminado',
-          updated_at: new Date(),
-          observaciones: `${nuevasObservaciones} - Borrado el ${new Date().toLocaleDateString('es-MX')}`
+          status: 'Solicitud_borrado',
+          observaciones: nuevasObservaciones,
+          updated_at: new Date()
         });
 
-      pagoEliminado = {
-        ...pago,
-        status: 'Eliminado',
-        observaciones: `${nuevasObservaciones} - Borrado el ${new Date().toLocaleDateString('es-MX')}`
-      };
-    });
+      return res.json({ 
+        success: true, 
+        message: '📩 Solicitud enviada a aprobación.' 
+      });
+    }
 
-    res.json({
-      success: true,
-      message: 'Registro eliminado (logico) y saldo revertido correctamente.',
-      data: pagoEliminado
-    });
+    // =====================================================================
+    // 🦸‍♂️ CASO B: ADMIN/DIRECCIÓN (MODO EJECUCIÓN REAL)
+    // =====================================================================
+    if (rolesSupremos.includes(rol)) {
+
+      let pagoEliminado = null;
+
+      await db.transaction(async (trx) => {
+        // 1. BUSCAR DATOS
+        const pago = await trx('pagos_diarios as p')
+          .leftJoin('asignaciones as a', 'p.asignacion_id', 'a.id')
+          .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
+          .where('p.id', id)
+          .select(
+            'p.*', 
+            'v.id as vehiculo_id', 
+            'v.total_pagado_corrida', 
+            'v.total_corrida',
+            'v.saldo_pendiente_corrida'
+          )
+          .first();
+
+        if (!pago) throw new Error('El pago no existe o ya fue eliminado.');
+
+        const statusConDinero = ['Confirmado', 'Pagada', 'Solicitud_borrado'];
+        const esOrigenRechazado = pago.status === 'Solicitud_borrado' && 
+                                  (pago.observaciones || '').includes('RECHAZADO:');
+
+        if (statusConDinero.includes(pago.status) && !esOrigenRechazado) {
+          
+          // --- A. VALIDACIONES DE INTEGRIDAD ---
+          
+          // A1. Candado de Pendientes
+          const tienePendientes = await trx('pagos_diarios')
+            .where('asignacion_id', pago.asignacion_id)
+            .where('status', 'Pendiente')
+            .first();
+
+          if (tienePendientes) {
+             const fechaPendiente = new Date(tienePendientes.fecha_pago).toLocaleDateString('es-MX');
+             throw new Error(`⛔ BLOQUEO: Existen solicitudes PENDIENTES (ej. ${fechaPendiente}). Resuélvelas primero.`);
+          }
+
+          // A2. Freno de Mano (LIFO)
+          const ultimoConfirmado = await trx('pagos_diarios')
+            .where('asignacion_id', pago.asignacion_id)
+            .whereIn('status', statusConDinero)
+            .andWhere(function() {
+                this.where('fecha_pago', '>', pago.fecha_pago)
+            })
+            .first();
+
+          if (ultimoConfirmado) {
+             const fechaConflicto = new Date(ultimoConfirmado.fecha_pago).toLocaleDateString('es-MX');
+             throw new Error(`⛔ ORDEN INCORRECTO: Existe un pago POSTERIOR confirmado (${fechaConflicto}). Elimina en orden inverso.`);
+          }
+
+          // --- B. REVERSIÓN DE SALDOS (BLINDAJE EXTREMO) 🛡️ ---
+          if (!pago.vehiculo_id) {
+             console.warn(`⚠️ ALERTA: Pago ${id} sin vehículo vinculado.`);
+          } else {
+             // 🛠️ HELPER NUCLEAR: Limpia basura, símbolos ($) y fuerza Número
+             const cleanNumber = (val) => {
+                if (val === null || val === undefined || val === '') return 0;
+                // Convertimos a string, quitamos todo lo que NO sea número, punto o guión
+                const strLimpio = String(val).replace(/[^0-9.-]/g, '');
+                const num = parseFloat(strLimpio);
+                return isFinite(num) ? num : 0;
+             };
+
+             // 1. Obtenemos valores ultra limpios
+             const montoAEliminar = cleanNumber(pago.monto_total); 
+             const pagadoActual = cleanNumber(pago.total_pagado_corrida);
+             const totalCorrida = cleanNumber(pago.total_corrida);
+
+             // 2. Operaciones Matemáticas
+             let nuevoTotalPagado = pagadoActual - montoAEliminar;
+             if (nuevoTotalPagado < 0) nuevoTotalPagado = 0;
+
+             let nuevoSaldoPendiente = totalCorrida - nuevoTotalPagado;
+             if (nuevoSaldoPendiente < 0) nuevoSaldoPendiente = 0;
+             
+             let nuevoPorcentaje = 0;
+             if (totalCorrida > 0) {
+                nuevoPorcentaje = (nuevoTotalPagado / totalCorrida) * 100;
+             }
+
+             // 3. Objeto Final (Garantizando Numbers puros)
+             const datosUpdate = {
+                 total_pagado_corrida: Number(nuevoTotalPagado.toFixed(2)),
+                 saldo_pendiente_corrida: Number(nuevoSaldoPendiente.toFixed(2)),
+                 porcentaje_pagado: Number(nuevoPorcentaje.toFixed(2)),
+                 updated_at: new Date()
+             };
+
+             console.log('📉 Datos BLINDADOS para Update:', datosUpdate);
+
+             // 4. Update
+             await trx('vehiculos')
+               .where('id', pago.vehiculo_id)
+               .update(datosUpdate);
+          }
+        }
+
+        // 3. BORRADO LÓGICO
+        let notaEliminacion = '';
+        const fechaBorrado = new Date().toLocaleDateString('es-MX');
+
+        if (motivoBaja) {
+            notaEliminacion = ` | [Eliminado por: ${motivoBaja}] - ${fechaBorrado}`;
+        } else if (pago.status === 'Solicitud_borrado') {
+            notaEliminacion = ` | [✅ Solicitud de Baja Aprobada] - ${fechaBorrado}`;
+        } else {
+            notaEliminacion = ` | [Eliminado sin motivo] - ${fechaBorrado}`;
+        }
+
+        const nuevasObservaciones = (pago.observaciones || '') + notaEliminacion;
+
+        await trx('pagos_diarios')
+          .where('id', id)
+          .update({
+            status: 'Eliminado',
+            observaciones: nuevasObservaciones,
+            updated_at: new Date()
+          });
+
+        pagoEliminado = { ...pago, status: 'Eliminado' };
+      });
+
+      return res.json({ 
+        success: true, 
+        message: '✅ Pago eliminado y saldos revertidos correctamente.',
+        data: pagoEliminado
+      });
+    }
+
+    return res.status(403).json({ success: false, message: '⛔ Sin permisos.' });
 
   } catch (error) {
     console.error('❌ Error en eliminarPago:', error.message);
-    res.status(400).json({ success: false, message: error.message });
+    const statusCode = error.message.includes('No puedes eliminar') || error.message.includes('BLOQUEO') ? 400 : 500;
+    res.status(statusCode).json({ success: false, message: error.message });
   }
 };
 
@@ -1623,14 +1805,13 @@ exports.verificarPagosPendientes = async (req, res) => {
     const pagoPendiente = await db('pagos_diarios')
       .join('asignaciones', 'pagos_diarios.asignacion_id', 'asignaciones.id')
       .where('asignaciones.conductor_id', conductorId)
-      .where('pagos_diarios.status', 'Pendiente')
+      .whereIn('pagos_diarios.status', ['Pendiente', 'Solicitud_borrado'])
       .select('pagos_diarios.id', 'pagos_diarios.fecha_pago', 'pagos_diarios.monto_total')
       .first();
 
     if (pagoPendiente) {
       return res.json({ 
         existe: true, 
-        mensaje: `⚠️ ATENCIÓN: Este conductor ya tiene un pago PENDIENTE de autorización por $${pagoPendiente.monto_total} (Fecha: ${new Date(pagoPendiente.fecha_pago).toLocaleDateString()}). \n\n¿Seguro que quieres crear otro manual?`,
         pago: pagoPendiente
       });
     }
@@ -1640,6 +1821,64 @@ exports.verificarPagosPendientes = async (req, res) => {
   } catch (error) {
     console.error('Error verificando pendientes:', error);
     res.status(500).json({ error: 'Error al verificar pagos pendientes' });
+  }
+};
+
+// ========== CAMBIAR STATUS DE PAGO A 'CONFIRMADO' Y LIMPIAR OBSERVACIONES ==========
+exports.cambiarStatus = async (req, res) => {
+  const { id } = req.params;
+  const { status, motivo } = req.body; // status será 'Confirmado'
+
+  try {
+    console.log(`🔄 Restaurando pago ${id} a ${status}`);
+
+    // 1. Buscamos el pago actual para obtener sus observaciones sucias
+    const pago = await db('pagos_diarios').where('id', id).first();
+    
+    if (!pago) {
+        return res.status(404).json({ success: false, message: 'Pago no encontrado' });
+    }
+
+    let observacionesLimpias = pago.observaciones || '';
+
+    // 2. Lógica de Limpieza 🧼
+    // El texto que agregó el gerente empieza con " | [Solicitud Baja:" o "[Solicitud Baja:"
+    const separador = " | [Solicitud Baja:";
+    const separadorInicio = "[Solicitud Baja:";
+
+    if (observacionesLimpias.includes(separador)) {
+        // Cortamos el string justo donde empieza la solicitud
+        observacionesLimpias = observacionesLimpias.split(separador)[0];
+    } 
+    else if (observacionesLimpias.startsWith(separadorInicio)) {
+        // Si era la única observación, lo dejamos vacío
+        observacionesLimpias = ""; 
+    }
+
+    // 3. Preparamos la nota del Admin (Opcional: Si quieres que quede registro del rechazo)
+    // Si NO quieres que quede rastro de nada, deja notaAdmin vacío: const notaAdmin = '';
+    const notaAdmin = motivo 
+
+    // 4. Concatenamos: Observaciones Originales + Nota del Admin
+    // Si estaba vacío, quitamos el separador inicial " | " para que se vea bien
+    let observacionesFinales = observacionesLimpias 
+        ? `${observacionesLimpias}${notaAdmin}`
+        : notaAdmin.startsWith(' | ') ? notaAdmin.substring(3) : notaAdmin;
+
+    // 5. Guardamos en BD
+    await db('pagos_diarios')
+      .where('id', id)
+      .update({
+        status: status,
+        observaciones: observacionesFinales, // 👈 Texto limpio y corregido
+        updated_at: db.fn.now()
+      });
+
+    res.json({ success: true, message: '✅ Solicitud rechazada. Observaciones restauradas.' });
+
+  } catch (error) {
+    console.error('Error al cambiar status:', error);
+    res.status(500).json({ success: false, message: 'Error al actualizar el estado.' });
   }
 };
 

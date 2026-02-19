@@ -88,43 +88,12 @@ const VehicleDetail3D = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isSuperAdmin = user.rol === 'super_admin' || user.role === 'super_admin';
 
-  // ========== GENERAR QR CODE ==========
-  useEffect(() => {
-    const generarQR = async () => {
-      try {
-        const qrDataUrl = await QRCode.toDataURL('https://somoslazaro.marketing', {
-          width: 200,
-          margin: 2,
-          color: {
-            dark: '#FFFFFF',
-            light: '#0F172A'
-          }
-        });
-        setImagenesGraficos(prev => ({ ...prev, qrCode: qrDataUrl }));
-      } catch (error) {
-        console.error('Error generando QR:', error);
-      }
-    };
-    generarQR();
-  }, []);
 
   // ========== CARGAR DATOS DEL HISTORIAL PARA PDF ==========
   const cargarDatosParaPDF = async () => {
     try {
       setLoadingPDFData(true);
-      const token = localStorage.getItem('token');
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/admin/asignaciones/vehiculo/${id}/historial`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }
-      );
-
-      if (!response.ok) throw new Error('Error al cargar historial');
-      
-      const data = await response.json();
+      const data = await adminService.getHistorialVehiculoById(id);
       setHistorialData(data);
       setShowPDFModal(true);
     } catch (error) {

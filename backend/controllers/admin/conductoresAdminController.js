@@ -747,7 +747,7 @@ exports.updateConductor = async (req, res) => {
       .update(datosPostgres)
       .returning('*');
     
-    // Registrar cambios críticos
+    // Registrar cambios críticos.
     const cambiosCriticos = [];
     
     if (conductorAnterior.status !== conductorActualizado.status) {
@@ -805,90 +805,121 @@ exports.updateConductor = async (req, res) => {
 };
 
 // ========== ELIMINAR CONDUCTOR CON AUDITORÍA ==========
+// 1. MODIFICAMOS EL DELETE ACTUAL (Para pedir la baja o borrar directo)
 exports.deleteConductor = async (req, res) => {
-  // ... (Tu código sin cambios)
   const trx = await db.transaction();
   
   try {
-    const { id } = req.params;
-    
-    // Establecer contexto de usuario
+    // 1. BLINDAJE DE DATOS Y CONTEXTO
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+        await trx.rollback();
+        return res.status(400).json({ error: 'ID de conductor inválido' });
+    }
+
+    if (!req.user || !req.user.id) {
+        await trx.rollback();
+        return res.status(401).json({ error: 'Usuario no autenticado o sin ID válido' });
+    }
+
+    // Establecer contexto para que los Triggers de la BD no fallen (Error "invalid input syntax for type integer")
     await auditService.setUserContext(trx, req.user);
 
-    // Obtener datos del conductor y validar estado
-    const conductor = await trx(TABLES.CONDUCTORES)
-      .where('id', id)
-      .first();
+    const { rol } = req.user; 
+
+    // 2. OBTENER DATOS DEL CONDUCTOR
+    const conductor = await trx(TABLES.CONDUCTORES).where('id', id).first();
     
     if (!conductor) {
       await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'Conductor no encontrado'
-      });
+      return res.status(404).json({ success: false, error: 'Conductor no encontrado' });
     }
+
+    // ==========================================
+    // 🚦 LÓGICA 1: JEFE DE TALLER (SOLICITUD)
+    // ==========================================
+    if (rol === 'jefe_taller') {
+          // Guardamos el estado actual para poder restaurarlo si se rechaza
+          const estadoActual = conductor.status;
+
+          // Actualizamos a 'Solicitud_baja'
+          await trx(TABLES.CONDUCTORES)
+              .where('id', id)
+              .update({ 
+                  status: 'Solicitud_baja',
+                  updated_at: new Date()
+              });
+
+          // GUARDAMOS LA MEMORIA EN EL LOG DE AUDITORÍA
+          await auditService.logCriticalChange({
+              usuario_id: req.user.id,
+              tipo_cambio: 'solicitud_baja_conductor', 
+              descripcion: `Solicitud de baja para conductor ${conductor.nombre_conductor}`,
+              datos_sensibles: { 
+                  conductor_id: id,
+                  nombre: conductor.nombre_conductor,
+                  status_previo: estadoActual // <--- Aquí guardamos la memoria ("Activo", "Inactivo", etc.)
+              },
+              ip_address: auditService.getClientIp(req)
+          });
+
+          await trx.commit();
+          return res.json({ success: true, message: 'Solicitud de baja enviada a Dirección' });
+    }
+
+    // ==========================================
+    // 🗑️ LÓGICA 2: ADMINS (BORRADO REAL/APROBACIÓN)
+    // ==========================================
     
     const statusNormalizado = (conductor.status || '').toString().trim().toLowerCase();
-    const estadosPermitidos = new Set(['inactivo', 'rechazado', 'suspendido']);
+    
+    // Permitimos borrar si está Inactivo, Rechazado, Suspendido O EN SOLICITUD
+    const estadosPermitidos = new Set(['inactivo', 'rechazado', 'suspendido', 'solicitud_baja']);
     
     if (!estadosPermitidos.has(statusNormalizado)) {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'Solo se puede eliminar un conductor en estado Inactivo, Rechazado o Suspendido',
-        status_actual: conductor.status || null,
-        status_trabajo_actual: conductor.status_trabajo || null
+        error: 'El conductor debe estar Inactivo, Rechazado, Suspendido o en Solicitud de Baja.'
       });
     }
     
-    // Verificar relaciones antes de eliminar
+    // --- VALIDACIÓN DE RELACIONES ACTIVAS (Copiado de tu lógica original) ---
     const [asignaciones, rentas, siniestros] = await Promise.all([
-      trx('asignaciones')
-        .where('conductor_id', id)
-        .where('activa', true)
-        .count('id as count')
-        .first(),
-      
-      trx('rentas')
-        .where('conductor_id', id)
-        .whereIn('estado', ['Pendiente', 'Vencida'])
-        .count('id as count')
-        .first(),
-      
-      trx('siniestros')
-        .where('conductor_id', id)
-        .whereNotIn('estado', ['Cerrado', 'Cancelado'])
-        .count('id as count')
-        .first()
+        trx('asignaciones').where('conductor_id', id).where('activa', true).count('id as count').first(),
+        trx('rentas').where('conductor_id', id).whereIn('estado', ['Pendiente', 'Vencida']).count('id as count').first(),
+        trx('siniestros').where('conductor_id', id).whereNotIn('estado', ['Cerrado', 'Cancelado']).count('id as count').first()
     ]);
     
     const relacionesActivas = {
-      asignaciones_activas: parseInt(asignaciones?.count || 0),
-      rentas_pendientes: parseInt(rentas?.count || 0),
-      siniestros_abiertos: parseInt(siniestros?.count || 0)
+        asignaciones_activas: parseInt(asignaciones?.count || 0),
+        rentas_pendientes: parseInt(rentas?.count || 0),
+        siniestros_abiertos: parseInt(siniestros?.count || 0)
     };
     
-    if (relacionesActivas.asignaciones_activas > 0 || 
-        relacionesActivas.rentas_pendientes > 0 || 
-        relacionesActivas.siniestros_abiertos > 0) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'No se puede eliminar el conductor porque tiene registros activos',
-        relaciones: relacionesActivas
-      });
+    // Si hay deudas o siniestros, NO dejamos borrar
+    if (relacionesActivas.rentas_pendientes > 0 || relacionesActivas.siniestros_abiertos > 0) {
+        await trx.rollback();
+        return res.status(400).json({
+            success: false,
+            error: 'No se puede eliminar: tiene rentas pendientes o siniestros abiertos.',
+            relaciones: relacionesActivas
+        });
     }
     
-    // Desactivar asignaciones históricas
+    // --- EJECUCIÓN DEL BORRADO ---
+
+    // 1. Desactivar asignaciones históricas (Ahora sí es seguro hacerlo)
+    // Nota: El 'setUserContext' del principio evitará que esto falle por el trigger
     await trx('asignaciones')
       .where('conductor_id', id)
       .update({ 
-        activa: false, 
-        fecha_fin: new Date(),
-        updated_at: new Date() 
+          activa: false, 
+          fecha_fin: new Date(),
+          updated_at: new Date()
       });
     
-    // Borrado lÃ³gico del conductor
+    // 2. Borrado lógico del conductor
     await trx(TABLES.CONDUCTORES)
       .where('id', id)
       .update({
@@ -897,70 +928,161 @@ exports.deleteConductor = async (req, res) => {
         updated_at: new Date()
       });
     
-    // Si tiene usuario asociado, desactivarlo
+    // 3. Desactivar usuario asociado (si existe)
     if (conductor.usuario_id) {
-      await trx('usuarios')
-        .where('id', conductor.usuario_id)
-        .update({ 
-          estado_cuenta: 'suspendido',
-          updated_at: new Date()
-        });
+       await trx('usuarios')
+           .where('id', conductor.usuario_id)
+           .update({ 
+               estado_cuenta: 'suspendido',
+               updated_at: new Date()
+           });
     }
-    
-    // Registrar como cambio crítico
+
+    // 4. Registro final en auditoría
     await auditService.logCriticalChange({
-      usuario_id: req.user.id,
-      tipo_cambio: 'eliminacion_conductor',
-      descripcion: `Conductor ${conductor.nombre_conductor} eliminado lÃ³gicamente del sistema`,
-      datos_sensibles: conductor,
-      ip_address: auditService.getClientIp(req),
-      requiere_revision: true
+       usuario_id: req.user.id,
+       tipo_cambio: 'eliminacion_conductor',
+       descripcion: `Conductor ${conductor.nombre_conductor} eliminado lógicamente`,
+       datos_sensibles: { id, nombre: conductor.nombre_conductor },
+       ip_address: auditService.getClientIp(req)
     });
     
     await trx.commit();
-    
-    res.json({
-      success: true,
-      message: 'Conductor eliminado lÃ³gicamente exitosamente'
-    });
+    res.json({ success: true, message: 'Conductor eliminado exitosamente' });
     
   } catch (error) {
     await trx.rollback();
+    console.error("Error en deleteConductor:", error); // Log detallado para debug
     
-    await auditService.logError({
-      usuario_id: req.user?.id,
-      nivel: 'critical',
-      mensaje: `Error eliminando conductor ${req.params.id}: ${error.message}`,
-      stack_trace: error.stack,
-      ip_address: auditService.getClientIp(req),
-      url: req.originalUrl,
-      metodo_http: req.method
-    });
-    
+    // Auditoría de error
+    try {
+        await auditService.logError({
+            usuario_id: req.user?.id,
+            nivel: 'critical',
+            mensaje: `Error eliminando conductor ${req.params.id}: ${error.message}`,
+            stack_trace: error.stack,
+            ip_address: auditService.getClientIp(req),
+            url: req.originalUrl,
+            metodo_http: req.method
+        });
+    } catch(e) { /* Ignorar error de log */ }
+
     res.status(500).json({ 
-      success: false,
-      error: 'Error al eliminar el conductor',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        success: false, 
+        error: 'Error al eliminar el conductor',
+        detalle: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
+// 2. NUEVA FUNCIÓN: GESTIONAR BAJA (Aprobar/Rechazar)
+exports.gestionarBajaConductor = async (req, res) => {
+    const { id } = req.params;
+    const { accion } = req.body;
 
-// ========== ASIGNAR VEHÍCULO A CONDUCTOR ==========
+    // 1. SI ES APROBAR: Delegamos directo a deleteConductor (que ya está arreglado)
+    // Lo ponemos al principio para no abrir transacciones innecesarias aquí
+    if (accion === 'aprobar') {
+        return exports.deleteConductor(req, res);
+    }
+
+    // 2. SI ES RECHAZAR: Necesitamos Transacción + Contexto para que no falle el Trigger
+    const trx = await db.transaction();
+
+    try {
+        // --- 🛡️ BLINDAJE (LA SOLUCIÓN AL ERROR) ---
+        if (!req.user || !req.user.id) {
+            await trx.rollback();
+            return res.status(401).json({ error: 'Usuario no autenticado' });
+        }
+        // Esto evita el error: "invalid input syntax for type integer: «»"
+        await auditService.setUserContext(trx, req.user);
+        // ------------------------------------------
+
+        // Validamos que el conductor existe
+        const conductor = await trx(TABLES.CONDUCTORES).where('id', id).first();
+        if (!conductor) {
+            await trx.rollback();
+            return res.status(404).json({ error: 'Conductor no encontrado' });
+        }
+
+        if (accion === 'rechazar') {
+            let estadoRestaurado = 'Suspendido'; // Valor por defecto (seguridad)
+
+            try {
+                // 🔍 CONSULTA A critical_changes_log (Usamos trx para consistencia)
+                const ultimoLog = await trx('critical_changes_log')
+                    .where('tipo_cambio', 'solicitud_baja_conductor')
+                    .whereRaw("datos_sensibles->>'conductor_id' = ?", [id])
+                    .orderBy('id', 'desc')
+                    .first();
+
+                // Recuperamos el status_previo del JSON
+                if (ultimoLog && ultimoLog.datos_sensibles) {
+                    const datos = typeof ultimoLog.datos_sensibles === 'string' 
+                        ? JSON.parse(ultimoLog.datos_sensibles) 
+                        : ultimoLog.datos_sensibles;
+
+                    if (datos.status_previo) {
+                        estadoRestaurado = datos.status_previo;
+                    }
+                }
+            } catch (error) {
+                console.error('⚠️ No se pudo leer historial, usando default:', error);
+            }
+
+            // 📝 RESTAURAMOS EL ESTADO (Aquí era donde fallaba antes)
+            await trx(TABLES.CONDUCTORES)
+                .where('id', id)
+                .update({ 
+                    status: estadoRestaurado,
+                    updated_at: new Date()
+                });
+            
+            // Registramos el rechazo en auditoría también
+            await auditService.logCriticalChange({
+                usuario_id: req.user.id,
+                tipo_cambio: 'rechazo_baja_conductor',
+                descripcion: `Solicitud de baja rechazada para ${conductor.nombre_conductor}. Restaurado a ${estadoRestaurado}`,
+                datos_sensibles: { id, estado_restaurado: estadoRestaurado },
+                ip_address: auditService.getClientIp(req)
+            });
+
+            await trx.commit();
+            
+            return res.json({ 
+                success: true, 
+                message: `Solicitud rechazada. El conductor regresó al estado: ${estadoRestaurado}` 
+            });
+        }
+        
+        // Si la acción no es ni aprobar ni rechazar
+        await trx.rollback();
+        return res.status(400).json({ error: 'Acción no válida' });
+
+    } catch (error) {
+        await trx.rollback();
+        console.error("Error en gestionarBajaConductor:", error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Error al procesar la solicitud',
+            detalle: error.message 
+        });
+    }
+};
+// ========== ASIGNAR VEHICULO A CONDUCTOR ==========
 exports.asignarVehiculo = async (req, res) => {
-  // ... (Tu código sin cambios)
   const trx = await db.transaction();
-  
+
   try {
     const { id } = req.params; // ID del conductor
     const { vehiculoId, rentaDiaria, abonoPoliza, fechaInicio, urlContrato } = req.body;
-    
+
     await auditService.setUserContext(trx, req.user);
-    
-    // Verificar conductor
+
     const conductor = await trx('conductores')
       .where('id', id)
       .first();
-    
+
     if (!conductor) {
       await trx.rollback();
       return res.status(404).json({
@@ -968,41 +1090,48 @@ exports.asignarVehiculo = async (req, res) => {
         error: 'Conductor no encontrado'
       });
     }
-    
-   // Verificar que el conductor esté activo o aprobado
-const statusPermitidos = ['Aprobado', 'Activo'];
-if (!statusPermitidos.includes(conductor.status)) {
-  await trx.rollback();
-  return res.status(400).json({
-    success: false,
-    error: `El conductor debe estar Aprobado o Activo para asignar un vehículo. Status actual: ${conductor.status}`
-  });
-}
-    
-    // Verificar vehículo
+
+    const statusPermitidos = ['Aprobado', 'Activo', 'Inactivo'];
+    if (!statusPermitidos.includes(conductor.status)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: `El conductor debe estar Aprobado, Activo o Inactivo para asignar un vehiculo. Status actual: ${conductor.status}`
+      });
+    }
+
     const vehiculo = await trx('vehiculos')
       .where('id', vehiculoId)
       .first();
-    
+
     if (!vehiculo) {
       await trx.rollback();
       return res.status(404).json({
         success: false,
-        error: 'Vehículo no encontrado'
+        error: 'Vehiculo no encontrado'
       });
     }
-    
-    // Verificar disponibilidad del vehículo
-    if (vehiculo.estado !== 'Disponible') {
+
+    const asignacionConductorActiva = await trx('asignaciones')
+      .where('conductor_id', id)
+      .where('activa', true)
+      .first();
+
+    const asignacionVehiculoActiva = await trx('asignaciones')
+      .where('vehiculo_id', vehiculoId)
+      .where('activa', true)
+      .first();
+
+    const vehiculoOcupadoPorOtro = asignacionVehiculoActiva && String(asignacionVehiculoActiva.conductor_id) !== String(id);
+    if (vehiculo.estado !== 'Disponible' && vehiculoOcupadoPorOtro) {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'El vehículo no está disponible',
+        error: 'El vehiculo no esta disponible',
         estadoActual: vehiculo.estado
       });
     }
-    
-    // Desactivar asignaciones anteriores del conductor
+
     await trx('asignaciones')
       .where('conductor_id', id)
       .where('activa', true)
@@ -1011,8 +1140,7 @@ if (!statusPermitidos.includes(conductor.status)) {
         fecha_fin: new Date(),
         updated_at: new Date()
       });
-    
-    // Desactivar asignaciones anteriores del vehículo
+
     await trx('asignaciones')
       .where('vehiculo_id', vehiculoId)
       .where('activa', true)
@@ -1021,8 +1149,27 @@ if (!statusPermitidos.includes(conductor.status)) {
         fecha_fin: new Date(),
         updated_at: new Date()
       });
-    
-    // Crear nueva asignación
+
+    if (asignacionConductorActiva && String(asignacionConductorActiva.vehiculo_id) !== String(vehiculoId)) {
+      await trx('vehiculos')
+        .where('id', asignacionConductorActiva.vehiculo_id)
+        .update({
+          estado: 'Disponible',
+          conductor_asignado_id: null,
+          updated_at: new Date()
+        });
+    }
+
+    if (asignacionVehiculoActiva && String(asignacionVehiculoActiva.conductor_id) !== String(id)) {
+      await trx('conductores')
+        .where('id', asignacionVehiculoActiva.conductor_id)
+        .update({
+          status: 'Inactivo',
+          status_trabajo: 'inactivo',
+          updated_at: new Date()
+        });
+    }
+
     const [nuevaAsignacion] = await trx('asignaciones')
       .insert({
         conductor_id: id,
@@ -1036,8 +1183,7 @@ if (!statusPermitidos.includes(conductor.status)) {
         updated_at: new Date()
       })
       .returning('*');
-    
-    // Actualizar estado del vehículo
+
     await trx('vehiculos')
       .where('id', vehiculoId)
       .update({
@@ -1045,20 +1191,19 @@ if (!statusPermitidos.includes(conductor.status)) {
         conductor_asignado_id: id,
         updated_at: new Date()
       });
-    
-    // Actualizar estado de trabajo del conductor
+
     await trx('conductores')
       .where('id', id)
       .update({
+        status: 'Activo',
         status_trabajo: 'activo',
         updated_at: new Date()
       });
-    
-    // Registrar cambio crítico
+
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'asignacion_vehiculo_conductor',
-      descripcion: `Vehículo ${vehiculo.numero_vehiculo} asignado a conductor ${conductor.nombre_conductor}`,
+      descripcion: `Vehiculo ${vehiculo.numero_vehiculo} asignado a conductor ${conductor.nombre_conductor}`,
       datos_sensibles: {
         conductor_id: id,
         vehiculo_id: vehiculoId,
@@ -1068,12 +1213,12 @@ if (!statusPermitidos.includes(conductor.status)) {
       },
       ip_address: auditService.getClientIp(req)
     });
-    
+
     await trx.commit();
-    
+
     res.json({
       success: true,
-      message: 'Vehículo asignado exitosamente',
+      message: 'Vehiculo asignado exitosamente',
       asignacion: {
         id: nuevaAsignacion.id,
         conductor: conductor.nombre_conductor,
@@ -1083,60 +1228,56 @@ if (!statusPermitidos.includes(conductor.status)) {
         abonoPoliza: nuevaAsignacion.abono_poliza_mantenimiento
       }
     });
-    
+
   } catch (error) {
     await trx.rollback();
-    
+
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error asignando vehículo a conductor: ${error.message}`,
+      mensaje: `Error asignando vehiculo a conductor: ${error.message}`,
       stack_trace: error.stack,
       contexto: req.body,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
       metodo_http: req.method
     });
-    
+
     res.status(500).json({
       success: false,
-      error: 'Error al asignar vehículo',
+      error: 'Error al asignar vehiculo',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
-// ========== DESASIGNAR VEHÍCULO DE CONDUCTOR ==========
+// ========== DESASIGNAR VEHICULO DE CONDUCTOR ==========
 exports.desasignarVehiculo = async (req, res) => {
-  // ... (Tu código sin cambios)
   const trx = await db.transaction();
-  
+
   try {
     const { id } = req.params; // ID del conductor
-    
+
     await auditService.setUserContext(trx, req.user);
-    
-    // Buscar asignación activa
+
     const asignacion = await trx('asignaciones')
       .where('conductor_id', id)
       .where('activa', true)
       .first();
-    
+
     if (!asignacion) {
       await trx.rollback();
       return res.status(404).json({
         success: false,
-        error: 'El conductor no tiene vehículo asignado'
+        error: 'El conductor no tiene vehiculo asignado'
       });
     }
-    
-    // Obtener información para auditoría
+
     const [conductor, vehiculo] = await Promise.all([
       trx('conductores').where('id', id).first(),
       trx('vehiculos').where('id', asignacion.vehiculo_id).first()
     ]);
-    
-    // Desactivar asignación
+
     await trx('asignaciones')
       .where('id', asignacion.id)
       .update({
@@ -1144,8 +1285,7 @@ exports.desasignarVehiculo = async (req, res) => {
         fecha_fin: new Date(),
         updated_at: new Date()
       });
-    
-    // Actualizar vehículo
+
     await trx('vehiculos')
       .where('id', asignacion.vehiculo_id)
       .update({
@@ -1153,20 +1293,19 @@ exports.desasignarVehiculo = async (req, res) => {
         conductor_asignado_id: null,
         updated_at: new Date()
       });
-    
-    // Actualizar conductor
+
     await trx('conductores')
       .where('id', id)
       .update({
+        status: 'Inactivo',
         status_trabajo: 'inactivo',
         updated_at: new Date()
       });
-    
-    // Registrar cambio crítico
+
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'desasignacion_vehiculo_conductor',
-      descripcion: `Vehículo ${vehiculo.numero_vehiculo} desasignado de conductor ${conductor.nombre_conductor}`,
+      descripcion: `Vehiculo ${vehiculo.numero_vehiculo} desasignado de conductor ${conductor.nombre_conductor}`,
       datos_sensibles: {
         conductor_id: id,
         vehiculo_id: asignacion.vehiculo_id,
@@ -1175,30 +1314,30 @@ exports.desasignarVehiculo = async (req, res) => {
       },
       ip_address: auditService.getClientIp(req)
     });
-    
+
     await trx.commit();
-    
+
     res.json({
       success: true,
-      message: 'Vehículo desasignado exitosamente'
+      message: 'Vehiculo desasignado exitosamente'
     });
-    
+
   } catch (error) {
     await trx.rollback();
-    
+
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error desasignando vehículo de conductor: ${error.message}`,
+      mensaje: `Error desasignando vehiculo de conductor: ${error.message}`,
       stack_trace: error.stack,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
       metodo_http: req.method
     });
-    
+
     res.status(500).json({
       success: false,
-      error: 'Error al desasignar vehículo',
+      error: 'Error al desasignar vehiculo',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

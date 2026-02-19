@@ -74,8 +74,11 @@ class AdminService {
 
         // Buscamos el mensaje en 'message', 'error' o usamos el status text por defecto
         const mensajeFinal = errorData.message || errorData.error || `Error ${response.status}: ${response.statusText}`;
-        
-        throw new Error(mensajeFinal);
+        const error = new Error(mensajeFinal);
+        error.status = response.status;
+        error.response = errorData;
+        error.details = errorData.details || null;
+        throw error;
       }
 
       // Manejar respuestas vacías (204 No Content)
@@ -1328,9 +1331,10 @@ async getConductoresMorosos() {
     
     const permisos = {
       'super_admin': ['all'],
-      'director': ['view', 'create', 'edit', 'delete'],
+      'direccion': ['view', 'create', 'edit', 'delete'],
       'gerente_ops': ['view', 'create', 'edit'],
       'finanzas': ['view', 'create', 'edit', 'delete'],
+      'coordinador': ['view', 'create', 'edit'],
       'gestor_flota': ['view', 'edit'],
       'reclutador': ['view'],
       'jefe_taller': ['view', 'edit'],
@@ -1377,10 +1381,22 @@ async getHistorialVehiculo(numeroSerie) {
   if (!numeroSerie) throw new Error('Número de serie requerido');
   
   try {
-    const data = await this.fetchWithAuth(`/admin/asignaciones/vehiculo/${numeroSerie}/historial`);
+    const data = await this.fetchWithAuth(`/admin/asignaciones/vehiculo/serie/${encodeURIComponent(numeroSerie)}/historial`);
     return data;
   } catch (error) {
-    console.error('Error al obtener historial del vehículo:', error);
+    console.error('Error al obtener historial del vehículo por serie:', error);
+    throw error;
+  }
+}
+
+async getHistorialVehiculoById(vehiculoId) {
+  if (!vehiculoId) throw new Error('ID de vehículo requerido');
+
+  try {
+    const data = await this.fetchWithAuth(`/admin/asignaciones/vehiculo/id/${vehiculoId}/historial`);
+    return data;
+  } catch (error) {
+    console.error('Error al obtener historial del vehículo por ID:', error);
     throw error;
   }
 }
@@ -1667,6 +1683,46 @@ async getPolizasSeguro() {
       return { existe: false }; // En caso de error, dejamos pasar por defecto
     }
   }
+
+/**
+   * Gestiona la aprobación o rechazo de una baja
+   * @param {string|number} id - ID del vehículo
+   * @param {string} accion - 'aprobar' o 'rechazar'
+   * @returns {Promise<Object>} Resultado
+   */
+  async gestionarBajaVehiculo(id, accion) {
+    if (!id) throw new Error('ID de vehículo requerido');
+    
+    try {
+      const data = await this.fetchWithAuth(`/admin/vehiculos/${id}/gestionar-baja`, {
+        method: 'POST',
+        body: JSON.stringify({ accion })
+      });
+      return data;
+    } catch (error) {
+      console.error('Error al gestionar baja:', error);
+      throw error;
+    }
+  }
+    // Función para aprobar/rechazar solicitudes o cambiar estados
+  async cambiarStatusPago(id, status, motivo = '') {
+    return this.fetchWithAuth(`/admin/pagos-rentas/${id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ status, motivo })
+    });
+  }
+
+  async gestionarBajaConductor(id, accion) {
+    // Si la acción es aprobar, podemos llamar al delete o al endpoint de gestión
+    // Dado mi código backend arriba, el endpoint 'gestionar-baja' con 'aprobar' llama al delete.
+    return this.fetchWithAuth(`/admin/conductores/${id}/gestionar-baja`, {
+        method: 'POST',
+        body: JSON.stringify({ accion })
+    });
+}
   
 } // ← Cierre de la clase
 

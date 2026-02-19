@@ -1,7 +1,9 @@
 // frontend/src/pages/admin/Conductores.jsx
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ConductorModalWizard from '../../components/admin/ConductorModalWizard';
+import { useAuth } from '../../contexts/AuthContext';
+import { Check, X } from 'lucide-react';
 
 import { 
   Users, 
@@ -88,9 +90,15 @@ const ConductorAvatar = ({ conductor, size = 'md' }) => {
 };
 
 // Componente de Tarjeta de Conductor Mejorado
-const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros }) => {
+const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros, onProcesarBaja }) => {
+  const { user } = useAuth();
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef(null);
+
+  // 1. Detección de Solicitud y Permisos
+  const esSolicitud = conductor.status === 'Solicitud_baja';
+  const rolesJefes = ['super_admin', 'direccion', 'gerente_ops'];
+  const soyJefe = rolesJefes.includes(user?.rol);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -109,6 +117,16 @@ const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros }
         icon: CheckCircle,
         bgGlow: 'bg-green-500/10'
       },
+      'Activo': {
+        color: 'from-green-500/20 to-emerald-500/20 border-green-500/30 text-green-400',
+        icon: CheckCircle,
+        bgGlow: 'bg-green-500/10'
+      },
+      'Inactivo': {
+        color: 'from-gray-500/20 to-slate-500/20 border-gray-500/30 text-gray-300',
+        icon: Clock,
+        bgGlow: 'bg-gray-500/10'
+      },
       'Pendiente': {
         color: 'from-yellow-500/20 to-amber-500/20 border-yellow-500/30 text-yellow-400',
         icon: Clock,
@@ -118,7 +136,17 @@ const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros }
         color: 'from-red-500/20 to-rose-500/20 border-red-500/30 text-red-400',
         icon: XCircle,
         bgGlow: 'bg-red-500/10'
-      }
+      },
+      'Suspendido': {
+        color: 'from-orange-500/20 to-amber-500/20 border-orange-500/30 text-orange-400',
+        icon: AlertTriangle,
+        bgGlow: 'bg-orange-500/10'
+      },
+      'Solicitud_baja': {
+         color: 'from-orange-500/20 to-red-500/20 border-orange-500/30 text-orange-400',
+         icon: AlertTriangle,
+         bgGlow: 'bg-orange-500/10'
+       },
     };
     return statusConfig[status] || statusConfig['Pendiente'];
   };
@@ -127,9 +155,12 @@ const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros }
     const statusConfig = {
       'activo': { label: 'Activo', color: 'bg-green-500', pulse: true },
       'ocupado': { label: 'Ocupado', color: 'bg-blue-500', pulse: false },
+      'en_servicio': { label: 'En servicio', color: 'bg-blue-500', pulse: false },
+      'conectado': { label: 'Conectado', color: 'bg-emerald-500', pulse: false },
+      'desconectado': { label: 'Desconectado', color: 'bg-gray-500', pulse: false },
       'inactivo': { label: 'Inactivo', color: 'bg-gray-500', pulse: false }
     };
-    return statusConfig[status] || statusConfig['inactivo'];
+    return statusConfig[status] || statusConfig['Pendiente'];
   };
 
   const statusInfo = getStatusInfo(conductor.status);
@@ -140,14 +171,20 @@ const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros }
   const hasGoodMetrics = conductor.calificacion_promedio >= 4.5 && conductor.tasa_completacion > 90;
   const hasAlerts = conductor.licencia_vencimiento && new Date(conductor.licencia_vencimiento) < new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-  return (
-    <div className="group relative bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 hover:border-cyan-500/30 transition-all duration-300 overflow-hidden">
-      {/* Efecto de brillo al hover */}
+return (
+    <div className={`group relative bg-black/40 backdrop-blur-xl rounded-xl border transition-all duration-300 overflow-hidden
+      ${esSolicitud 
+         ? 'border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.15)]' // 🟠 Estilo Solicitud (Naranja + Sombra)
+         : 'border-white/10 hover:border-cyan-500/30' // 🟣 Estilo Original (El que te gusta)
+      }
+    `}>
+      
+      {/* ✨ EFECTO DE BRILLO (ESTE ES EL QUE DABA EL COLOR MORADITO) ✨ */}
       <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/0 via-purple-500/0 to-pink-500/0 group-hover:from-cyan-500/10 group-hover:via-purple-500/10 group-hover:to-pink-500/10 transition-all duration-500"></div>
       
       {/* Indicadores de estado */}
       <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
-        {hasAlerts && (
+        {(hasAlerts || esSolicitud) && (
           <div className="p-1.5 bg-orange-500/20 rounded-lg" title="Documentos próximos a vencer">
             <AlertTriangle className="w-4 h-4 text-orange-400" />
           </div>
@@ -181,50 +218,76 @@ const ConductorCard = ({ conductor, onEdit, onDelete, onView, onViewSiniestros }
             </div>
           </div>
 
-          {/* Menu de opciones */}
+{/* Menu de opciones (MODIFICADO) */}
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setShowMenu(!showMenu)}
-              className="p-2 rounded-lg hover:bg-white/5 transition-colors"
+              className={`p-2 rounded-lg transition-colors ${esSolicitud ? 'bg-orange-500/10 text-orange-400' : 'hover:bg-white/5 text-gray-400'}`}
             >
-              <MoreVertical className="w-5 h-5 text-gray-400" />
+              <MoreVertical className="w-5 h-5" />
             </button>
             
             {showMenu && (
               <div className="absolute right-0 mt-2 w-48 bg-gray-900/95 backdrop-blur-xl rounded-lg shadow-xl border border-white/10 overflow-hidden z-20">
-                <button
-                  onClick={() => { onView(conductor); setShowMenu(false); }}
-                  className="w-full px-4 py-2.5 text-left text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2 transition-colors"
-                >
-                  <Eye className="w-4 h-4" />
-                  Ver detalles
+                
+                {/* 1. OPCIONES DE GESTIÓN (SOLO JEFES Y SI ES SOLICITUD) */}
+                {esSolicitud && soyJefe && (
+                    <div className="border-b border-white/10 pb-1 mb-1">
+                        <button
+                          onClick={() => { onProcesarBaja(conductor.id, 'aprobar'); setShowMenu(false); }}
+                          className="w-full px-4 py-2.5 text-left text-sm text-green-400 hover:bg-green-500/10 flex items-center gap-2"
+                        >
+                          <Check className="w-4 h-4" /> Aprobar Baja
+                        </button>
+                        <button
+                          onClick={() => { onProcesarBaja(conductor.id, 'rechazar'); setShowMenu(false); }}
+                          className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2"
+                        >
+                          <X className="w-4 h-4" /> Rechazar
+                        </button>
+                    </div>
+                )}
+
+                {/* 2. OPCIONES NORMALES (Ver, Editar, Siniestros) */}
+                <button onClick={() => { onView(conductor); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
+                  <Eye className="w-4 h-4" /> Ver detalles
                 </button>
-                {/* 🆕 BOTÓN DE SINIESTROS AGREGADO */}
-                <button
-                  onClick={() => { onViewSiniestros(conductor); setShowMenu(false); }}
-                  className="w-full px-4 py-2.5 text-left text-sm text-orange-400 hover:bg-orange-500/10 flex items-center gap-2 transition-colors"
-                >
-                  <FileWarning className="w-4 h-4" />
-                  Ver siniestros
+                
+                <button onClick={() => { onViewSiniestros(conductor); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-orange-400 hover:bg-orange-500/10 flex items-center gap-2">
+                  <FileWarning className="w-4 h-4" /> Ver siniestros
                 </button>
-                <button
-                  onClick={() => { onEdit(conductor); setShowMenu(false); }}
-                  className="w-full px-4 py-2.5 text-left text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2 transition-colors"
-                >
-                  <Edit className="w-4 h-4" />
-                  Editar
-                </button>
-                <button
-                  onClick={() => { onDelete(conductor.id); setShowMenu(false); }}
-                  className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Eliminar
-                </button>
+                
+                {/* Editar (Bloqueado si es solicitud) */}
+                {!esSolicitud && (
+                    <button onClick={() => { onEdit(conductor); setShowMenu(false); }} className="w-full px-4 py-2.5 text-left text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
+                      <Edit className="w-4 h-4" /> Editar
+                    </button>
+                )}
+
+                {/* 3. OPCIÓN ELIMINAR (Oculta si ya es solicitud y soy jefe, porque ya salen los botones de arriba) */}
+                {!(esSolicitud && soyJefe) && (
+                    <button
+                      onClick={() => { 
+                          if(esSolicitud) return; // Si ya es solicitud y no soy jefe, no hago nada (o podrías mostrar alerta)
+                          onDelete(conductor.id); 
+                          setShowMenu(false); 
+                      }}
+                      className={`w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors ${
+                          esSolicitud 
+                            ? 'text-gray-500 cursor-not-allowed' // Deshabilitado visualmente
+                            : 'text-red-400 hover:bg-red-500/10'
+                      }`}
+                      disabled={esSolicitud}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      {esSolicitud ? 'Esperando Aprobación' : 'Eliminar'}
+                    </button>
+                )}
               </div>
             )}
           </div>
         </div>
+        
 
         {/* Información de contacto */}
         <div className="space-y-2 mb-4">
@@ -368,21 +431,43 @@ const Conductores = () => {
     setRefreshing(false);
   };
 
+  const normalizarTexto = (valor) => (valor || '').toString().trim().toLowerCase();
+
+  const getVehiculosConductor = (conductor) => {
+    const vehiculos = conductor?.vehiculos || conductor?.VEHICULOS || [];
+    if (Array.isArray(vehiculos) && vehiculos.length > 0) return vehiculos;
+    if (conductor?.vehiculo_asignado) return [conductor.vehiculo_asignado];
+    if (Array.isArray(conductor?.asignaciones) && conductor.asignaciones.length > 0) return conductor.asignaciones;
+    return [];
+  };
+
+  const esAprobado = (conductor) => {
+    const status = normalizarTexto(conductor?.status);
+    return status === 'aprobado' || status === 'activo' || status === 'inactivo';
+  };
+
+  const esPendiente = (conductor) => normalizarTexto(conductor?.status) === 'pendiente';
+
+  const estaActivo = (conductor) => {
+    const statusTrabajo = normalizarTexto(conductor?.status_trabajo);
+    const statusConductor = normalizarTexto(conductor?.status);
+    return statusTrabajo === 'activo' || statusConductor === 'activo';
+  };
+
   const calcularEstadisticas = (conductoresData) => {
-    const getVehiculos = (conductor) => conductor.vehiculos || conductor.VEHICULOS || [];
+    const conductoresConCalificacion = conductoresData.filter(
+      (c) => Number(c?.calificacion_promedio || 0) > 0
+    );
 
     const stats = {
       total: conductoresData.length,
-      aprobados: conductoresData.filter((c) => c.status === 'Aprobado').length,
-      pendientes: conductoresData.filter((c) => c.status === 'Pendiente').length,
-      // Para alinear con el dashboard, solo contamos como activos los aprobados con status de trabajo activo
-      activos: conductoresData.filter(
-        (c) => c.status === 'Aprobado' && c.status_trabajo === 'activo'
-      ).length,
-      conVehiculo: conductoresData.filter((c) => getVehiculos(c).length > 0).length,
+      aprobados: conductoresData.filter(esAprobado).length,
+      pendientes: conductoresData.filter(esPendiente).length,
+      activos: conductoresData.filter((c) => esAprobado(c) && estaActivo(c)).length,
+      conVehiculo: conductoresData.filter((c) => getVehiculosConductor(c).length > 0).length,
       calificacionPromedio:
-        conductoresData.length > 0
-          ? conductoresData.reduce((acc, c) => acc + (c.calificacion_promedio || 0), 0) / conductoresData.length
+        conductoresConCalificacion.length > 0
+          ? conductoresConCalificacion.reduce((acc, c) => acc + Number(c?.calificacion_promedio || 0), 0) / conductoresConCalificacion.length
           : 0
     };
     setEstadisticas(stats);
@@ -403,20 +488,46 @@ const Conductores = () => {
   };
   
   // Filtrado de conductores
-  const conductoresFiltrados = conductores.filter(conductor => {
-    const busqueda = filtros.busqueda.toLowerCase();
-    const coincideBusqueda = !busqueda || 
-      conductor.nombre_conductor?.toLowerCase().includes(busqueda) ||
-      conductor.numero_telefono?.toLowerCase().includes(busqueda) ||
-      conductor.email?.toLowerCase().includes(busqueda);
-    
-    const coincideStatus = !filtros.status || conductor.status === filtros.status;
-    const coincideStatusTrabajo = !filtros.statusTrabajo || conductor.status_trabajo === filtros.statusTrabajo;
-    const coincideVehiculo = !filtros.conVehiculo || (conductor.VEHICULOS && conductor.VEHICULOS.length > 0);
-    const coincideBot = !filtros.conBot || conductor.bot_configurado;
-    
-    return coincideBusqueda && coincideStatus && coincideStatusTrabajo && coincideVehiculo && coincideBot;
-  });
+const conductoresFiltrados = useMemo(() => {
+    return conductores
+      // 1. TU FILTRO ACTUAL (Lo dejamos casi igual)
+      .filter(conductor => {
+        const busqueda = filtros.busqueda.toLowerCase();
+        const coincideBusqueda = !busqueda || 
+          conductor.nombre_conductor?.toLowerCase().includes(busqueda) ||
+          conductor.numero_telefono?.toLowerCase().includes(busqueda) ||
+          conductor.email?.toLowerCase().includes(busqueda);
+        
+        const coincideStatus = !filtros.status || (
+          filtros.status === 'Aprobado'
+            ? esAprobado(conductor) // Asumo que tienes esta función
+            : normalizarTexto(conductor.status) === normalizarTexto(filtros.status)
+        );
+
+        const coincideStatusTrabajo = !filtros.statusTrabajo || conductor.status_trabajo === filtros.statusTrabajo;
+        const coincideVehiculo = !filtros.conVehiculo || getVehiculosConductor(conductor).length > 0;
+        const coincideBot = !filtros.conBot || conductor.bot_configurado;
+        
+        return coincideBusqueda && coincideStatus && coincideStatusTrabajo && coincideVehiculo && coincideBot;
+      })
+      // 2. EL ORDENAMIENTO MAGICO (Prioridad a Solicitudes) 👇
+      .sort((a, b) => {
+        const statusA = (a.status || '').toString().toLowerCase();
+        const statusB = (b.status || '').toString().toLowerCase();
+        const esSolicitudA = statusA === 'solicitud_baja';
+        const esSolicitudB = statusB === 'solicitud_baja';
+
+        // Regla 1: Si A es solicitud y B no, A va primero (-1)
+        if (esSolicitudA && !esSolicitudB) return -1;
+        
+        // Regla 2: Si B es solicitud y A no, B va primero (1)
+        if (!esSolicitudA && esSolicitudB) return 1;
+
+        // Regla 3: Si ambos son iguales, mantén el orden original (0)
+        return 0;
+      });
+      
+  }, [conductores, filtros]);
 
   const handleSubmitConductor = async (formData) => {
     try {
@@ -446,7 +557,10 @@ const Conductores = () => {
       console.log('Conductor guardado exitosamente');
     } catch (error) {
       console.error('Error al guardar conductor:', error);
-      toast.error(error?.message || 'Error al guardar conductor');
+      if (!error?.details && !error?.response?.details) {
+        toast.error(error?.message || 'Error al guardar conductor');
+      }
+      throw error;
     }
   };
 
@@ -463,6 +577,32 @@ const Conductores = () => {
       } catch (error) {
         console.error('Error al eliminar conductor:', error);
       }
+    }
+  };
+
+  const handleProcesarBaja = async (id, accion) => {
+    const mensaje = accion === 'aprobar' 
+      ? '¿Confirmas que deseas APROBAR la baja definitiva de este conductor?' 
+      : '¿Deseas RECHAZAR la solicitud? El conductor volverá a estar Suspendido.';
+
+    if (!window.confirm(mensaje)) return;
+
+    try {
+      // 1. Llamamos al servicio
+      await adminService.gestionarBajaConductor(id, accion);
+      
+      // 2. Mensaje de éxito
+      // Si usas toast: toast.success(`Solicitud ${accion}da correctamente`);
+      alert(`Solicitud ${accion === 'aprobar' ? 'aprobada' : 'rechazada'} con éxito`);
+
+      // 3. RECARGAR LA LISTA (Muy importante)
+      // Usa el nombre de la función que usas para cargar los datos, 
+      // suele ser fetchConductores() o loadConductores()
+      cargarConductores(); 
+
+    } catch (error) {
+      console.error(error);
+      alert('Error al procesar la solicitud: ' + (error.message || 'Desconocido'));
     }
   };
 
@@ -601,6 +741,7 @@ const Conductores = () => {
               <option value="Aprobado">Aprobado</option>
               <option value="Pendiente">Pendiente</option>
               <option value="Rechazado">Rechazado</option>
+              <option value="Solicitud_baja">Solicitud de Baja</option>
             </select>
             
             <select
@@ -668,6 +809,7 @@ const Conductores = () => {
                 onDelete={handleDelete}
                 onView={handleView}
                 onViewSiniestros={handleViewSiniestros} // 🆕 Nueva prop
+                onProcesarBaja={handleProcesarBaja}
               />
             ))}
           </div>

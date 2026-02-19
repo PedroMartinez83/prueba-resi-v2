@@ -167,19 +167,29 @@ const handleUploadDocument = async () => {
     setTimeout(() => setRefreshing(false), 500);
   };
 
-  const handleDelete = async () => {
+const handleDelete = async () => {
+    // 1. Confirmación simple (igual que en la tabla)
+    if (!window.confirm('¿Estás seguro de que deseas eliminar este conductor permanentemente?')) {
+      return;
+    }
+
     try {
-      const response = await adminService.deleteConductor(id);
-      if (response.success) {
-        navigate('/admin/conductores');
-      } else {
-        alert('Error al eliminar el conductor');
-      }
+      // 2. Llamada al servicio (Asegúrate que el método deleteConductor exista en tu adminService)
+      // Si en la tabla usas deleteUsuario, cámbialo aquí también.
+      await adminService.deleteConductor(conductor.id); 
+
+      // 3. Feedback visual
+      alert('Conductor eliminado correctamente'); // O usa un toast si tienes uno
+
+      // 4. REDIRECCIÓN (La parte clave)
+      navigate('/admin/conductores');
+      
     } catch (error) {
-      console.error('Error:', error);
-      alert('Error al eliminar el conductor');
+      console.error('Error al eliminar:', error);
+      alert('Error al eliminar el conductor: ' + (error.message || 'Error desconocido'));
     }
   };
+
 const fetchVehiculosDisponibles = async () => {
   try {
     setLoadingVehiculos(true);
@@ -485,8 +495,9 @@ const fetchVehiculosDisponibles = async () => {
               </button>
 
               <button
-                onClick={() => setShowDeleteModal(true)}
+                onClick={handleDelete} // ✅ Ahora llama a la función directa
                 className="p-3 rounded-xl backdrop-blur-xl bg-red-500/20 border border-red-500/30 text-red-400 hover:bg-red-500/30 transition-all"
+                title="Eliminar Conductor"
               >
                 <Trash2 className="w-5 h-5" />
               </button>
@@ -1615,6 +1626,7 @@ const fetchVehiculosDisponibles = async () => {
           } catch (error) {
             console.error('Error:', error);
             toast.error(error?.message || 'Error al actualizar conductor');
+            throw error;
           }
         }}
       />

@@ -6,6 +6,42 @@ const { getVehiculosEnumValues } = require('../utils/enumHelper');
 // Obtener db y TABLES
 const { db, TABLES } = postgresService;
 
+const construirNumeroVehiculoEstandar = (tipoSocio, numeroUnidad, idFallback) => {
+  const tipo = (tipoSocio || 'SD').toString().trim() || 'SD';
+  const unidadNumerica = parseInt(numeroUnidad, 10);
+  const unidadFallback = parseInt(idFallback, 10);
+
+  const unidadFinal = Number.isInteger(unidadNumerica) && unidadNumerica > 0
+    ? unidadNumerica
+    : (Number.isInteger(unidadFallback) && unidadFallback > 0 ? unidadFallback : 0);
+
+  return `${tipo}-${String(unidadFinal).padStart(4, '0')}`;
+};
+
+const obtenerNumeroVehiculoNormalizado = (record) => {
+  const numeroActual = (record?.numero_vehiculo || '').toString().trim();
+  const tipoSocio = record?.tipo_socio || 'SD';
+  const numeroUnidad = record?.numero_unidad;
+  const estandar = construirNumeroVehiculoEstandar(tipoSocio, numeroUnidad, record?.id);
+  const unidadNumerica = parseInt(numeroUnidad, 10);
+
+  if (Number.isInteger(unidadNumerica) && unidadNumerica > 0) {
+    return estandar;
+  }
+
+  const matchEstandar = numeroActual.match(/^([A-Za-z]{2,})-(\d+)$/);
+  if (matchEstandar) {
+    return `${matchEstandar[1].toUpperCase()}-${String(parseInt(matchEstandar[2], 10)).padStart(4, '0')}`;
+  }
+
+  const matchSoloDigitos = numeroActual.match(/(\d+)/);
+  if (matchSoloDigitos) {
+    return `${(tipoSocio || 'SD').toString().trim()}-${String(parseInt(matchSoloDigitos[1], 10)).padStart(4, '0')}`;
+  }
+
+  return estandar;
+};
+
 // ========== MAPEO DE CAMPOS ==========
 const mapearCamposVehiculo = (data) => {
   const mapeo = {
@@ -62,7 +98,7 @@ const mapearCamposRespuestaVehiculo = (record) => {
   id: record.id,
   TipoSocio: record.tipo_socio || 'SD',
   NumeroUnidad: record.numero_unidad,
-  NumeroVehiculo: record.numero_vehiculo || `${record.tipo_socio}-${record.numero_unidad}`,
+  NumeroVehiculo: obtenerNumeroVehiculoNormalizado(record),
   Marca: record.marca,
   Modelo: record.modelo,
   TipoVehiculo: record.tipo_vehiculo,
@@ -120,7 +156,10 @@ exports.getVehiculos = async (req, res) => {
         'a.renta_diaria',
         'a.abono_poliza_mantenimiento'
       )
-      .orderBy('v.numero_vehiculo');
+      .orderBy('v.tipo_socio')
+      .orderBy('v.numero_unidad');
+
+    
     
     if (vehiculos.length === 0) {
       return res.json({
@@ -193,20 +232,35 @@ exports.getVehiculoById = async (req, res) => {
       });
     }
     
-    if (!existeVehiculo.numero_vehiculo || 
-        existeVehiculo.numero_vehiculo.startsWith('-') || 
-        !existeVehiculo.numero_vehiculo.includes('-')) {
-      
+    const numeroVehiculoActual = (existeVehiculo.numero_vehiculo || '').trim();
+    const numeroVehiculoInvalido = !numeroVehiculoActual ||
+      numeroVehiculoActual.startsWith('-') ||
+      !numeroVehiculoActual.includes('-');
+
+    if (numeroVehiculoInvalido) {
       const tipoSocio = existeVehiculo.tipo_socio || 'SD';
       const numeroUnidad = existeVehiculo.numero_unidad || vehiculoId;
       const numeroCorregido = `${tipoSocio}-${String(numeroUnidad).padStart(4, '0')}`;
-      
-      await db('vehiculos')
-        .where('id', vehiculoId)
-        .update({ 
-          numero_vehiculo: numeroCorregido,
-          updated_at: new Date()
-        });
+
+      try {
+        const numeroEnUso = await db('vehiculos')
+          .where('numero_vehiculo', numeroCorregido)
+          .whereNot('id', vehiculoId)
+          .first('id');
+
+        if (!numeroEnUso) {
+          await db('vehiculos')
+            .where('id', vehiculoId)
+            .update({
+              numero_vehiculo: numeroCorregido,
+              updated_at: new Date()
+            });
+        }
+      } catch (errorCorreccion) {
+        console.warn(
+          `[vehiculos] No se pudo autocorregir numero_vehiculo del vehiculo ${vehiculoId}: ${errorCorreccion.message}`
+        );
+      }
     }
     
     const vehiculo = await db('vehiculos as v')
@@ -282,11 +336,7 @@ exports.getVehiculoById = async (req, res) => {
       });
     }
 
-    const numeroVehiculoFinal = vehiculo.numero_vehiculo && 
-                                vehiculo.numero_vehiculo.includes('-') && 
-                                !vehiculo.numero_vehiculo.startsWith('-')
-      ? vehiculo.numero_vehiculo 
-      : `${vehiculo.tipo_socio || 'SD'}-${String(vehiculo.numero_unidad || vehiculo.id).padStart(4, '0')}`;
+    const numeroVehiculoFinal = obtenerNumeroVehiculoNormalizado(vehiculo);
 
     const vehiculoMapeado = {
       id: vehiculo.id,
@@ -423,8 +473,11 @@ exports.createVehiculo = async (req, res) => {
       });
     }
     
-    if (!datosPostgres.numero_vehiculo && datosPostgres.tipo_socio && datosPostgres.numero_unidad) {
-      datosPostgres.numero_vehiculo = `${datosPostgres.tipo_socio}-${String(datosPostgres.numero_unidad).padStart(4, '0')}`;
+    if (datosPostgres.tipo_socio && datosPostgres.numero_unidad) {
+      datosPostgres.numero_vehiculo = construirNumeroVehiculoEstandar(
+        datosPostgres.tipo_socio,
+        datosPostgres.numero_unidad
+      );
     }
     
     const camposRequeridos = ['tipo_socio', 'numero_unidad', 'marca', 'modelo', 'placa'];
@@ -483,9 +536,20 @@ exports.createVehiculo = async (req, res) => {
     });
     
     if (error.code === '23505') {
+      const constraint = (error.constraint || '').toLowerCase();
+      let mensaje = 'Ya existe un vehículo con esa placa o número de serie';
+
+      if (constraint.includes('vehiculos_numero_vehiculo_unique')) {
+        mensaje = 'Ya existe un vehículo con ese número de vehículo';
+      } else if (constraint.includes('placa')) {
+        mensaje = 'Ya existe un vehículo con esa placa';
+      } else if (constraint.includes('serie')) {
+        mensaje = 'Ya existe un vehículo con ese número de serie';
+      }
+
       return res.status(400).json({
         success: false,
-        error: 'Ya existe un vehículo con esa placa o número de serie'
+        error: mensaje
       });
     }
     
@@ -591,98 +655,209 @@ exports.updateVehiculo = async (req, res) => {
 };
 
 // ========== ELIMINAR VEHÍCULO CON AUDITORÍA ==========
+// backend/controllers/vehiculosController.js
 exports.deleteVehiculo = async (req, res) => {
   const trx = await db.transaction();
   
   try {
     const { id } = req.params;
-    
-    await auditService.setUserContext(trx, req.user);
-    
-    const asignaciones = await trx('asignaciones')
-      .where('vehiculo_id', id)
-      .count('id as count')
-      .first();
-    
-    const rentas = await trx('rentas')
-      .where('vehiculo_id', id)
-      .count('id as count')
-      .first();
-    
-    const mantenimientos = await trx('mantenimientos')
-      .where('vehiculo_id', id)
-      .count('id as count')
-      .first();
-    
-    const relacionesCount = {
-      asignaciones: parseInt(asignaciones?.count || 0),
-      rentas: parseInt(rentas?.count || 0),
-      mantenimientos: parseInt(mantenimientos?.count || 0)
-    };
-    
-    if (relacionesCount.asignaciones > 0 || 
-        relacionesCount.rentas > 0 || 
-        relacionesCount.mantenimientos > 0) {
-      await trx.rollback();
-      return res.status(400).json({
-        success: false,
-        error: 'No se puede eliminar el vehículo porque tiene registros relacionados',
-        relaciones: relacionesCount
-      });
+
+    // 👇 AQUÍ VALIDAMOS QUE ESTEMOS AUTENTICADOS Y OBTENEMOS EL ROL
+    // Si req.user no existe, es porque el middleware de auth falló o no se usó en la ruta
+    if (!req.user || !req.user.rol) {
+        await trx.rollback();
+        return res.status(401).json({ error: 'No autorizado. Rol no identificado.' });
     }
-    
-    const vehiculo = await trx(TABLES.VEHICULOS)
-      .where('id', id)
-      .first();
-    
+
+    const rol = (req.user.rol || '').toLowerCase(); // Extraemos el rol normalizado
+    console.log(`[DELETE] Usuario ${req.user.id} con rol ${rol} intenta borrar vehículo ${id}`);
+    await auditService.setUserContext(trx, req.user);
+
+    // 1. Validar existencia
+    const vehiculo = await trx('vehiculos').where('id', id).first();
     if (!vehiculo) {
       await trx.rollback();
-      return res.status(404).json({
-        success: false,
-        error: 'Vehículo no encontrado'
+      return res.status(404).json({ error: 'Vehículo no encontrado' });
+    }
+
+    if (vehiculo.estado === 'Baja') {
+      await trx.rollback();
+      return res.status(400).json({ error: 'El vehículo ya se encuentra en estado Baja.' });
+    }
+
+    if (vehiculo.estado === 'Solicitud_baja') {
+      await trx.rollback();
+      return res.status(400).json({ error: 'El vehículo ya tiene una solicitud de baja pendiente.' });
+    }
+
+    // 2. Validar relaciones (Igual que antes)
+    const relacionesCount = await trx.raw(`
+      SELECT 
+        (SELECT COUNT(*) FROM asignaciones WHERE vehiculo_id = ? AND activa = true) as asignaciones,
+        (SELECT COUNT(*) FROM rentas WHERE vehiculo_id = ? AND estado = 'Pendiente') as rentas,
+        (SELECT COUNT(*) FROM mantenimientos WHERE vehiculo_id = ? AND estado != 'Completado') as mantenimientos
+    `, [id, id, id]);
+
+    const counts = relacionesCount.rows[0];
+    const numAsignaciones = parseInt(counts.asignaciones);
+    const numRentas = parseInt(counts.rentas);
+    const numMantenimientos = parseInt(counts.mantenimientos);
+
+    if (numAsignaciones > 0 || numRentas > 0 || numMantenimientos > 0) {
+      await trx.rollback();
+      return res.status(400).json({ 
+        error: `No se puede procesar: Tiene ${numAsignaciones} asignación, ${numRentas} rentas o ${numMantenimientos} mantenimientos activos.` 
       });
     }
+
+    // 3. LÓGICA DE ROLES 🚦
     
-    await trx(TABLES.VEHICULOS)
-      .where('id', id)
-      .delete();
-    
-    await auditService.logCriticalChange({
-      usuario_id: req.user.id,
-      tipo_cambio: 'eliminacion_vehiculo',
-      descripcion: `Vehículo ${vehiculo.numero_vehiculo} eliminado del sistema`,
-      datos_sensibles: vehiculo,
-      ip_address: auditService.getClientIp(req),
-      requiere_revision: true
-    });
-    
-    await trx.commit();
-    
-    res.json({
-      success: true,
-      message: 'Vehículo eliminado exitosamente'
-    });
+    // Coordinador elimina directamente (Baja). Solo jefe_taller genera solicitud.
+    const rolesSolicitudBaja = new Set(['jefe_taller']);
+
+    if (rolesSolicitudBaja.has(rol)) {
+        // CASO A: Jefe de Taller -> SOLICITUD
+        await trx('vehiculos')
+          .where('id', id)
+          .update({
+            estado: 'Solicitud_baja', 
+            updated_at: new Date()
+          });
+
+        if (typeof auditService !== 'undefined') {
+            await auditService.logCriticalChange({
+              usuario_id: req.user.id,
+              tipo_cambio: 'SOLICITUD_BAJA_VEHICULO',
+              descripcion: `Solicitud de baja para vehículo ${vehiculo.placa || vehiculo.placas}`,
+              datos_sensibles: { vehiculo_id: id, estado_nuevo: 'Solicitud_baja' },
+              ip_address: req.ip 
+            });
+        }
+        
+        await trx.commit();
+        // Mensaje específico para el frontend sepa que fue solicitud
+        return res.json({ success: true, message: 'Solicitud de baja enviada para aprobacion.' });
+
+    } else {
+        // CASO B: Admin, Director, etc. -> BAJA DIRECTA
+        await trx('vehiculos')
+          .where('id', id)
+          .update({
+            estado: 'Baja',
+            updated_at: new Date()
+          });
+
+        if (typeof auditService !== 'undefined') {
+            await auditService.logCriticalChange({
+              usuario_id: req.user.id,
+              tipo_cambio: 'DELETE_VEHICULO_LOGICO',
+              descripcion: `Vehículo ${vehiculo.placa || vehiculo.placas} dado de BAJA DIRECTA.`,
+              datos_sensibles: { vehiculo_id: id, estado_nuevo: 'Baja' },
+              ip_address: req.ip 
+            });
+        }
+
+        await trx.commit();
+        return res.json({ success: true, message: 'Vehículo dado de baja exitosamente.' });
+    }
+
   } catch (error) {
     await trx.rollback();
-    
     await auditService.logError({
       usuario_id: req.user?.id,
-      nivel: 'critical',
-      mensaje: `Error eliminando vehículo ${req.params.id}: ${error.message}`,
+      nivel: 'error',
+      mensaje: `Error procesando baja vehiculo ${req.params?.id}: ${error.message}`,
       stack_trace: error.stack,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
       metodo_http: req.method
     });
-    
-    res.status(500).json({ 
-      success: false,
-      error: 'Error al eliminar el vehículo',
-      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    console.error('Error al procesar baja:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: 'No fue posible procesar la baja del vehiculo.',
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
+// ========== PROCESAR SOLICITUD DE BAJA (APROBAR/RECHAZAR) ==========
+exports.procesarSolicitudBaja = async (req, res) => {
+  const trx = await db.transaction();
+  try {
+    if (!req.user || !req.user.rol) {
+      await trx.rollback();
+      return res.status(401).json({ error: 'No autorizado. Rol no identificado.' });
+    }
+
+    const { id } = req.params;
+    const accion = (req.body?.accion || '').toLowerCase().trim(); // Esperamos 'aprobar' o 'rechazar'
+    await auditService.setUserContext(trx, req.user);
+
+    const vehiculo = await trx('vehiculos').where('id', id).first();
+    
+    if (!vehiculo || vehiculo.estado !== 'Solicitud_baja') {
+      await trx.rollback();
+      return res.status(400).json({ error: 'El vehículo no tiene una solicitud de baja pendiente.' });
+    }
+
+    let nuevoEstado = '';
+    let mensaje = '';
+
+    if (accion === 'aprobar') {
+        nuevoEstado = 'Baja';
+        mensaje = 'Solicitud APROBADA. Vehículo dado de baja.';
+    } else if (accion === 'rechazar') {
+        // Regresamos al estado seguro 'Disponible' (ya que deleteVehiculo verificó que no tenía asignaciones)
+        nuevoEstado = 'Disponible'; 
+        mensaje = 'Solicitud RECHAZADA. El vehículo vuelve a estar Disponible.';
+    } else {
+        await trx.rollback();
+        return res.status(400).json({ error: 'Acción inválida' });
+    }
+
+    // Actualizamos
+    await trx('vehiculos')
+      .where('id', id)
+      .update({
+        estado: nuevoEstado,
+        updated_at: new Date()
+      });
+
+    // Auditoría de la decisión
+    if (typeof auditService !== 'undefined') {
+        await auditService.logCriticalChange({
+          usuario_id: req.user.id,
+          tipo_cambio: accion === 'aprobar' ? 'APROBACION_BAJA' : 'RECHAZO_BAJA',
+          descripcion: `Solicitud de baja ${accion === 'aprobar' ? 'APROBADA' : 'RECHAZADA'} para ${vehiculo.placas}`,
+          datos_sensibles: { vehiculo_id: id, decision: accion, estado_final: nuevoEstado },
+          ip_address: req.ip 
+        });
+    }
+
+    await trx.commit();
+    res.json({ success: true, message: mensaje });
+
+  } catch (error) {
+    await trx.rollback();
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error procesando solicitud de baja vehiculo ${req.params?.id}: ${error.message}`,
+      stack_trace: error.stack,
+      contexto: req.body,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+    console.error('Error procesando solicitud:', error);
+    res.status(500).json({
+      error: 'Error interno',
+      message: 'No fue posible procesar la solicitud de baja.',
+      debug: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 // ========== OTRAS FUNCIONES ==========
 exports.getOpcionesVehiculos = async (req, res) => {
   try {
@@ -806,7 +981,26 @@ exports.asignarConductor = async (req, res) => {
         error: 'Conductor no encontrado'
       });
     }
-    
+
+    const statusPermitidos = ['Aprobado', 'Activo', 'Inactivo'];
+    if (!statusPermitidos.includes(conductor.status)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: `El conductor debe estar Aprobado, Activo o Inactivo para asignar un vehiculo. Status actual: ${conductor.status}`
+      });
+    }
+
+    const asignacionVehiculoActiva = await trx('asignaciones')
+      .where('vehiculo_id', id)
+      .where('activa', true)
+      .first();
+
+    const asignacionConductorActiva = await trx('asignaciones')
+      .where('conductor_id', conductorId)
+      .where('activa', true)
+      .first();
+
     await trx('asignaciones')
       .where('vehiculo_id', id)
       .where('activa', true)
@@ -815,6 +1009,25 @@ exports.asignarConductor = async (req, res) => {
         fecha_fin: new Date(),
         updated_at: new Date()
       });
+
+    await trx('asignaciones')
+      .where('conductor_id', conductorId)
+      .where('activa', true)
+      .update({
+        activa: false,
+        fecha_fin: new Date(),
+        updated_at: new Date()
+      });
+
+    if (asignacionConductorActiva && String(asignacionConductorActiva.vehiculo_id) !== String(id)) {
+      await trx('vehiculos')
+        .where('id', asignacionConductorActiva.vehiculo_id)
+        .update({
+          estado: 'Disponible',
+          conductor_asignado_id: null,
+          updated_at: new Date()
+        });
+    }
     
     const [nuevaAsignacion] = await trx('asignaciones')
       .insert({
@@ -836,6 +1049,24 @@ exports.asignarConductor = async (req, res) => {
         conductor_asignado_id: conductorId,
         updated_at: new Date()
       });
+
+    await trx('conductores')
+      .where('id', conductorId)
+      .update({
+        status: 'Activo',
+        status_trabajo: 'activo',
+        updated_at: new Date()
+      });
+
+    if (asignacionVehiculoActiva && String(asignacionVehiculoActiva.conductor_id) !== String(conductorId)) {
+      await trx('conductores')
+        .where('id', asignacionVehiculoActiva.conductor_id)
+        .update({
+          status: 'Inactivo',
+          status_trabajo: 'inactivo',
+          updated_at: new Date()
+        });
+    }
     
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
@@ -916,6 +1147,14 @@ exports.desasignarConductor = async (req, res) => {
         conductor_asignado_id: null,
         updated_at: new Date()
       });
+
+    await trx('conductores')
+      .where('id', asignacion.conductor_id)
+      .update({
+        status: 'Inactivo',
+        status_trabajo: 'inactivo',
+        updated_at: new Date()
+      });
     
     await trx.commit();
     
@@ -985,6 +1224,7 @@ exports.getVehiculosDisponibles = async (req, res) => {
       .select(
         'v.id',
         'v.numero_vehiculo',
+        'v.numero_unidad',
         'v.marca',
         'v.modelo',
         'v.año_del_vehiculo as año',
@@ -995,12 +1235,18 @@ exports.getVehiculosDisponibles = async (req, res) => {
         'v.estado',
         'v.kilometraje_actual'
       )
-      .orderBy('v.numero_vehiculo');
+      .orderBy('v.tipo_socio')
+      .orderBy('v.numero_unidad');
     
+    const vehiculosNormalizados = vehiculos.map(v => ({
+      ...v,
+      numero_vehiculo: obtenerNumeroVehiculoNormalizado(v)
+    }));
+
     res.json({
       success: true,
-      vehiculos,
-      total: vehiculos.length
+      vehiculos: vehiculosNormalizados,
+      total: vehiculosNormalizados.length
     });
     
   } catch (error) {

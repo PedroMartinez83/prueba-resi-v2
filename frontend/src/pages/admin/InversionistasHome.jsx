@@ -328,14 +328,6 @@ const InversionistasHome = () => {
 
         </div>
 
-        {/* Footer */}
-        <div className="glass rounded-2xl p-4 border border-white/10">
-          <p className="text-gray-400 text-center text-sm">
-            Módulo de Inversionistas - Auto Manager · Desarrollado por{' '}
-            <span className="text-cyan-400">somoslazaro.marketing</span> 
-          </p>
-        </div>
-
       </div>
     </div>
   );

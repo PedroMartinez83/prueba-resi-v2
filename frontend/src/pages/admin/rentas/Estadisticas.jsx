@@ -13,7 +13,9 @@ import GraficaTendencias from './components/GraficaTendencias';
 import GraficaPorTipoSocio from './components/GraficaPorTipoSocio';
 import TopConductores from './components/TopConductores';
 import EstadisticasCards from './components/EstadisticasCards';
-import adminService from '../../../services/adminService';const Estadisticas = () => {
+import adminService from '../../../services/adminService';
+
+const Estadisticas = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [estadisticas, setEstadisticas] = useState(null);
@@ -23,13 +25,33 @@ import adminService from '../../../services/adminService';const Estadisticas = (
     cargarEstadisticas();
   }, [periodo]);
 
+  const toDateParam = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const calcularRangoPeriodo = (dias) => {
+    const totalDias = Number(dias) || 30;
+    const hoy = new Date();
+    const desde = new Date(hoy);
+    desde.setDate(hoy.getDate() - (totalDias - 1));
+    return {
+      fecha_desde: toDateParam(desde),
+      fecha_hasta: toDateParam(hoy)
+    };
+  };
+
   const cargarEstadisticas = async () => {
     try {
       setLoading(true);
-      const data = await adminService.getEstadisticasPagosRentas({
-        periodo
+      const rango = calcularRangoPeriodo(periodo);
+      const data = await adminService.getEstadisticasPagosRentas(rango);
+      setEstadisticas({
+        ...(data.estadisticas || {}),
+        insights: data.insights || data.estadisticas?.insights || null
       });
-      setEstadisticas(data.estadisticas);
     } catch (error) {
       console.error('Error al cargar estadísticas:', error);
     } finally {
@@ -110,7 +132,7 @@ import adminService from '../../../services/adminService';const Estadisticas = (
       </div>
 
       {/* Cards de Estadísticas */}
-      <EstadisticasCards estadisticas={estadisticas} loading={loading} />
+      <EstadisticasCards estadisticas={estadisticas} loading={loading} periodo={periodo} />
 
       {/* Gráfica de Cobranza Diaria */}
       <div className="glass border border-white/10 rounded-2xl p-6">
@@ -157,34 +179,41 @@ import adminService from '../../../services/adminService';const Estadisticas = (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="glass border border-emerald-500/20 bg-emerald-500/5 rounded-xl p-6">
           <h3 className="text-emerald-400 font-semibold mb-2">
-            📈 Mejor Día de Cobro
+            Mejor dia de cobro
           </h3>
-          <p className="text-white text-2xl font-bold mb-1">Lunes</p>
+          <p className="text-white text-2xl font-bold mb-1">
+            {estadisticas?.insights?.mejor_dia || '-'}
+          </p>
           <p className="text-gray-400 text-sm">
-            Promedio: $43,500 por día
+            {periodo ? `Periodo: ultimos ${periodo} dias` : 'Periodo seleccionado'}
           </p>
         </div>
 
         <div className="glass border border-blue-500/20 bg-blue-500/5 rounded-xl p-6">
           <h3 className="text-blue-400 font-semibold mb-2">
-            ⏰ Hora Pico
+            Hora pico
           </h3>
-          <p className="text-white text-2xl font-bold mb-1">9:00 - 11:00 AM</p>
+          <p className="text-white text-2xl font-bold mb-1">
+            {estadisticas?.insights?.hora_pico || '-'}
+          </p>
           <p className="text-gray-400 text-sm">
-            60% de los pagos diarios
+            {periodo ? `Periodo: ultimos ${periodo} dias` : 'Periodo seleccionado'}
           </p>
         </div>
 
         <div className="glass border border-purple-500/20 bg-purple-500/5 rounded-xl p-6">
           <h3 className="text-purple-400 font-semibold mb-2">
-            💳 Método Preferido
+            Metodo preferido
           </h3>
-          <p className="text-white text-2xl font-bold mb-1">Efectivo</p>
+          <p className="text-white text-2xl font-bold mb-1">
+            {estadisticas?.insights?.metodo_preferido || '-'}
+          </p>
           <p className="text-gray-400 text-sm">
-            75% de las transacciones
+            {periodo ? `Periodo: ultimos ${periodo} dias` : 'Periodo seleccionado'}
           </p>
         </div>
       </div>
+
     </div>
   );
 };

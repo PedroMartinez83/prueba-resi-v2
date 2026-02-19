@@ -203,8 +203,3 @@ cp .env.example .env
 
 # 4. Iniciar la aplicación (en http://localhost:5173)
 npm run dev
-📜 Licencia
-
-Este es un software comercial y propietario con licencia de uso restringida. Copyright (c) 2025 somoslazaro.marketing. Todos los derechos reservados.
-
-Consulte el archivo LICENSE.md para más detalles sobre los términos de uso.

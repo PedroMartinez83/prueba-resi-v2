@@ -27,7 +27,7 @@ const ProtectedRouteConductor = () => {
   }
 
   // Verificar que sea conductor o admin
-  const rolesPermitidos = ['conductor', 'super_admin', 'director', 'gerente_ops'];
+  const rolesPermitidos = ['conductor', 'super_admin', 'direccion', 'gerente_ops'];
   const tieneAcceso = rolesPermitidos.includes(user.rol);
 
   if (!tieneAcceso) {

@@ -223,15 +223,6 @@ const DriverLogin = () => {
             })}
           </div>
         </div>
-
-        {/* Footer */}
-        <div className="flex items-center gap-6 text-sm text-gray-500">
-          <span>© 2025 AutoManager</span>
-          <span>•</span>
-          <span>Hecho con ❤️ por somoslazaro.marketing</span>
-          <span>•</span>
-          <a href="#" className="hover:text-cyan-400 transition-colors">Soporte</a>
-        </div>
       </div>
 
       {/* Panel derecho - Formulario de login */}
@@ -386,11 +377,6 @@ const DriverLogin = () => {
               </div>
             </div>
           </div>
-
-          {/* Footer móvil */}
-          <p className="text-center text-gray-500 text-sm mt-6 lg:hidden">
-            © 2025 AutoManager • Hecho con ❤️ por somoslazaro.marketing
-          </p>
         </div>
       </div>
 

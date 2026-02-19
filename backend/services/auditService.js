@@ -1,9 +1,26 @@
 ﻿// backend/services/auditService.js
 const { db } = require('../config/database');
-const { sendEmail, isEmailConfigured } = require('../utils/emailService');
+const { sendAuditNotification, isEmailConfigured } = require('../utils/emailService');
 const os = require('os');
 
 class AuditService {
+  getAuditSubtitleByRole(role) {
+    switch ((role || '').toString().toLowerCase()) {
+      case 'finanzas':
+        return 'Actividad de Finanzas';
+      case 'coordinador':
+        return 'Actividad del Coordinador de Zona';
+      case 'gerente_ops':
+        return 'Actividad del Gerente de Operaciones';
+      case 'direccion':
+      case 'direccion':
+        return 'Actividad de Direccion';
+      case 'super_admin':
+        return 'Actividad de Super Admin';
+      default:
+        return 'Actividad Administrativa';
+    }
+  }
   /**
    * Registra una acciÃ³n en la tabla audit_logs
    */
@@ -219,17 +236,20 @@ class AuditService {
       if (!isEmailConfigured()) return;
 
       const destinatarios = await db('usuarios')
-        .whereIn('rol', ['super_admin', 'director'])
+        .whereIn('rol', ['super_admin', 'direccion'])
         .whereNotNull('email')
         .pluck('email');
 
       if (!destinatarios || destinatarios.length === 0) return;
 
-      const subject = 'Notificacion de accion';
+      const subject = 'Notificacion de Auditoria';
       const actorNombre = actor.nombre || actor.nombre_completo || actor.name || actor.email || 'N/A';
+      const subtitle = this.getAuditSubtitleByRole(actor?.rol);
       const objetivoNombre = datos_registro?.nombre_completo ||
         datos_registro?.nombre_conductor ||
         datos_registro?.nombre ||
+        datos_registro?.numero_vehiculo ||
+        datos_registro?.folio_renta ||
         datos_registro?.name ||
         datos_registro?.email ||
         (registro_id ? `ID ${registro_id}` : 'N/A');
@@ -254,27 +274,130 @@ class AuditService {
         }
       })();
 
-      const text = [
-        'Se registro una accion.',
-        `Accion: ${accionEspecifica}`,
-        `Usuario que realizo la accion: ${actorNombre}`,
-        `Usuario afectado: ${objetivoNombre}`,
+      const usuarioAfectado = tabla_afectada === 'vehiculos'
+        ? {
+            tipo: 'vehiculo',
+            numero_vehiculo:
+              datos_registro?.numero_vehiculo ||
+              datos_registro?.nombre ||
+              (registro_id ? `ID ${registro_id}` : 'N/A'),
+            placa: datos_registro?.placa || 'N/A'
+          }
+        : {
+            name: objetivoNombre,
+            email:
+              datos_registro?.email ||
+              datos_registro?.usuario_email ||
+              datos_registro?.conductor_email ||
+              'N/A'
+          };
+
+      const detallesCambio = [
+        `Tabla: ${tabla_afectada || 'N/A'}`,
+        `Registro: ${registro_id || 'N/A'}`,
         `Fecha y hora: ${fechaTexto}`
-      ].join('\n');
+      ].join(' | ');
 
-      const html = `
-        <p>Se registro una <strong>accion</strong>.</p>
-        <ul>
-          <li><strong>Accion:</strong> ${accionEspecifica}</li>
-          <li><strong>Usuario que realizo la accion:</strong> ${actorNombre}</li>
-          <li><strong>Usuario afectado:</strong> ${objetivoNombre}</li>
-          <li><strong>Fecha y hora:</strong> ${fechaTexto}</li>
-        </ul>
-      `;
-
-      await sendEmail({ to: destinatarios, subject, text, html });
+      await sendAuditNotification({
+        to: destinatarios,
+        subject,
+        subtitle,
+        actorNombre,
+        usuarioAfectado,
+        accion: accionEspecifica,
+        detallesCambio
+      });
     } catch (error) {
       console.error('Error enviando notificacion de eliminacion:', error);
+    }
+  }
+
+  /**
+   * Notifica por correo las eliminaciones realizadas por Coordinador de zona
+   */
+  async notificarEliminacionCoordinador({
+    actor = {},
+    ruta_api = null,
+    tabla_afectada = null,
+    registro_id = null,
+    ip_address = null,
+    user_agent = null,
+    fecha = new Date(),
+    datos_registro = null
+  }) {
+    try {
+      if (!isEmailConfigured()) return;
+
+      const destinatarios = await db('usuarios')
+        .whereIn('rol', ['gerente_ops'])
+        .whereNotNull('email')
+        .pluck('email');
+
+      if (!destinatarios || destinatarios.length === 0) return;
+
+      const subject = 'Notificacion de Auditoria';
+      const actorNombre = actor.nombre || actor.nombre_completo || actor.name || actor.email || 'N/A';
+      const subtitle = this.getAuditSubtitleByRole(actor?.rol);
+      const objetivoNombre = datos_registro?.nombre_completo ||
+        datos_registro?.nombre_conductor ||
+        datos_registro?.nombre ||
+        datos_registro?.numero_vehiculo ||
+        datos_registro?.folio_renta ||
+        datos_registro?.name ||
+        datos_registro?.email ||
+        (registro_id ? `ID ${registro_id}` : 'N/A');
+      const fechaTexto = new Date(fecha).toLocaleString('es-MX', {
+        timeZone: 'America/Mexico_City'
+      });
+
+      const accionEspecifica = (() => {
+        switch (tabla_afectada) {
+          case 'conductores':
+            return 'Eliminacion de conductor';
+          case 'vehiculos':
+            return 'Eliminacion de vehiculo';
+          case 'solicitudes':
+            return 'Eliminacion de solicitud';
+          default:
+            return 'Eliminacion de registro';
+        }
+      })();
+
+      const usuarioAfectado = tabla_afectada === 'vehiculos'
+        ? {
+            tipo: 'vehiculo',
+            numero_vehiculo:
+              datos_registro?.numero_vehiculo ||
+              datos_registro?.nombre ||
+              (registro_id ? `ID ${registro_id}` : 'N/A'),
+            placa: datos_registro?.placa || 'N/A'
+          }
+        : {
+            name: objetivoNombre,
+            email:
+              datos_registro?.email ||
+              datos_registro?.usuario_email ||
+              datos_registro?.conductor_email ||
+              'N/A'
+          };
+
+      const detallesCambio = [
+        `Tabla: ${tabla_afectada || 'N/A'}`,
+        `Registro: ${registro_id || 'N/A'}`,
+        `Fecha y hora: ${fechaTexto}`
+      ].join(' | ');
+
+      await sendAuditNotification({
+        to: destinatarios,
+        subject,
+        subtitle,
+        actorNombre,
+        usuarioAfectado,
+        accion: accionEspecifica,
+        detallesCambio
+      });
+    } catch (error) {
+      console.error('Error enviando notificacion de eliminacion (coordinador):', error);
     }
   }
 

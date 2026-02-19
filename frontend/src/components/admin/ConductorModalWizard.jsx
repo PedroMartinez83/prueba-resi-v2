@@ -30,6 +30,22 @@ const FileUploadZone = ({ label, accept, value, onChange, required = false, help
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
+  const isAcceptedFile = (file) => {
+    if (!file) return false;
+    const acceptedTypes = accept
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    return acceptedTypes.some((type) => {
+      if (type.endsWith('/*')) {
+        const baseType = type.slice(0, -1);
+        return file.type.startsWith(baseType);
+      }
+      return file.type === type;
+    });
+  };
+
   const handleFileChange = (file) => {
     if (file) {
       onChange(file);
@@ -50,7 +66,7 @@ const FileUploadZone = ({ label, accept, value, onChange, required = false, help
     setIsDragging(false);
     
     const file = e.dataTransfer.files[0];
-    if (file && accept.includes(file.type)) {
+    if (isAcceptedFile(file)) {
       handleFileChange(file);
     }
   };
@@ -322,6 +338,67 @@ useEffect(() => {
     }
   ];
 
+  const FIELD_STEP_MAP = {
+    nombre_conductor: 1,
+    numero_telefono: 1,
+    email: 1,
+    direccion_completa: 1,
+    curp: 1,
+    fecha_nacimiento: 1,
+    estado_civil: 1,
+    contacto_emergencia: 1,
+    telefono_emergencia: 1,
+    rfc: 2,
+    numero_de_ine_ife: 2,
+    licencia_conducir: 2,
+    licencia_vigencia: 2,
+    seguro_vehiculo_vencimiento: 2
+  };
+
+  const setFieldValue = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    setErrors(prev => {
+      if (!prev[field] && !prev.submit) return prev;
+      const nextErrors = { ...prev };
+      delete nextErrors[field];
+      delete nextErrors.submit;
+      return nextErrors;
+    });
+  };
+
+  const normalizeBackendErrors = (error) => {
+    const details = error?.details || error?.response?.details;
+    const mapped = {};
+
+    if (Array.isArray(details)) {
+      details.forEach((detail) => {
+        const key = Array.isArray(detail?.path) ? detail.path[0] : detail?.context?.key;
+        if (!key) return;
+        mapped[key] = (detail?.message || 'Dato inválido').replace(/"/g, '');
+      });
+    }
+
+    const msg = error?.message || '';
+    if (!Object.keys(mapped).length && msg) {
+      const msgLower = msg.toLowerCase();
+      if (msgLower.includes('tel') || msgLower.includes('telefono')) mapped.numero_telefono = msg;
+      else if (msgLower.includes('email') || msgLower.includes('correo')) mapped.email = msg;
+      else if (msgLower.includes('rfc')) mapped.rfc = msg;
+      else if (msgLower.includes('licencia')) mapped.licencia_conducir = msg;
+    }
+
+    return mapped;
+  };
+
+  const goToFirstErrorStep = (fieldErrors) => {
+    const firstField = Object.keys(fieldErrors)[0];
+    if (!firstField) return;
+    const targetStep = FIELD_STEP_MAP[firstField];
+    if (targetStep && targetStep !== currentStep) {
+      setCurrentStep(targetStep);
+    }
+  };
+
   const validateStep = (step) => {
     const newErrors = {};
     
@@ -333,8 +410,11 @@ useEffect(() => {
         if (!formData.nombre_conductor?.trim()) {
           newErrors.nombre_conductor = 'Nombre requerido';
         }
-        if (!formData.numero_telefono?.trim()) {
-          newErrors.numero_telefono = 'Teléfono requerido';
+        const telefono = formData.numero_telefono?.trim() || '';
+        if (!telefono) {
+          newErrors.numero_telefono = 'Telefono requerido';
+        } else if (!/^[0-9+\s\-()]{10,20}$/.test(telefono)) {
+          newErrors.numero_telefono = 'Telefono invalido (usa entre 10 y 20 caracteres numericos)';
         }
         const finalEmail = getEmailForSubmission(formData);
         if (!finalEmail) {
@@ -349,8 +429,8 @@ useEffect(() => {
         console.log('✅ Paso 2: Documentos opcionales');
         
         // Solo validar formato si el campo tiene valor
-        if (formData.rfc && formData.rfc.length !== 13) {
-          newErrors.rfc = 'RFC debe tener 13 caracteres';
+        if (formData.rfc && (formData.rfc.length < 12 || formData.rfc.length > 13)) {
+          newErrors.rfc = 'RFC debe tener 12 o 13 caracteres';
         }
         if (formData.curp && formData.curp.length !== 18) {
           newErrors.curp = 'CURP debe tener 18 caracteres';
@@ -450,10 +530,18 @@ useEffect(() => {
     }
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       await onSubmit(dataToSubmit);
-      onClose();
     } catch (error) {
       console.error('Error al guardar conductor:', error);
-      setErrors({ submit: error.message || 'Error al guardar conductor' });
+      const fieldErrors = normalizeBackendErrors(error);
+      if (Object.keys(fieldErrors).length) {
+        setErrors({
+          ...fieldErrors,
+          submit: 'Revisa los campos marcados en rojo.'
+        });
+        goToFirstErrorStep(fieldErrors);
+      } else {
+        setErrors({ submit: error.message || 'Error al guardar conductor' });
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -469,8 +557,10 @@ useEffect(() => {
           <input
             type="text"
             value={formData.nombre_conductor}
-            onChange={(e) => setFormData({...formData, nombre_conductor: e.target.value})}
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50"
+            onChange={(e) => setFieldValue('nombre_conductor', e.target.value)}
+            className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 ${
+              errors.nombre_conductor ? 'border-red-500/60' : 'border-white/10'
+            }`}
             placeholder="Nombre completo del conductor"
           />
           {errors.nombre_conductor && (
@@ -487,8 +577,10 @@ useEffect(() => {
             <input
               type="tel"
               value={formData.numero_telefono}
-              onChange={(e) => setFormData({...formData, numero_telefono: e.target.value})}
-              className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+              onChange={(e) => setFieldValue('numero_telefono', e.target.value)}
+              className={`w-full pl-10 pr-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+                errors.numero_telefono ? 'border-red-500/60' : 'border-white/10'
+              }`}
               placeholder="+52 311 123 4567"
             />
           </div>
@@ -506,8 +598,10 @@ useEffect(() => {
             <input
               type="email"
               value={formData.email}
-              onChange={(e) => setFormData({...formData, email: e.target.value})}
-              className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+              onChange={(e) => setFieldValue('email', e.target.value)}
+              className={`w-full pl-10 pr-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+                errors.email ? 'border-red-500/60' : 'border-white/10'
+              }`}
               placeholder="conductor@email.com"
             />
           </div>
@@ -556,8 +650,10 @@ useEffect(() => {
           <input
             type="text"
             value={formData.curp}
-            onChange={(e) => setFormData({...formData, curp: e.target.value.toUpperCase()})}
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+            onChange={(e) => setFieldValue('curp', e.target.value.toUpperCase())}
+            className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+              errors.curp ? 'border-red-500/60' : 'border-white/10'
+            }`}
             placeholder="ABCD123456HMNXYZ00"
             maxLength="18"
           />
@@ -641,8 +737,10 @@ useEffect(() => {
           <input
             type="text"
             value={formData.rfc}
-            onChange={(e) => setFormData({...formData, rfc: e.target.value.toUpperCase()})}
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+            onChange={(e) => setFieldValue('rfc', e.target.value.toUpperCase())}
+            className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+              errors.rfc ? 'border-red-500/60' : 'border-white/10'
+            }`}
             placeholder="ABCD123456789"
             maxLength="13"
           />
@@ -671,8 +769,10 @@ useEffect(() => {
           <input
             type="text"
             value={formData.licencia_conducir}
-            onChange={(e) => setFormData({...formData, licencia_conducir: e.target.value})}
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+            onChange={(e) => setFieldValue('licencia_conducir', e.target.value)}
+            className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+              errors.licencia_conducir ? 'border-red-500/60' : 'border-white/10'
+            }`}
             placeholder="Número de licencia"
           />
           {errors.licencia_conducir && (
@@ -689,8 +789,10 @@ useEffect(() => {
             <input
               type="date"
               value={formData.licencia_vigencia}
-              onChange={(e) => setFormData({...formData, licencia_vigencia: e.target.value})}
-              className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+              onChange={(e) => setFieldValue('licencia_vigencia', e.target.value)}
+              className={`w-full pl-10 pr-4 py-2.5 bg-white/5 border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+                errors.licencia_vigencia ? 'border-red-500/60' : 'border-white/10'
+              }`}
             />
             {errors.licencia_vigencia && (
               <p className="text-red-400 text-xs mt-1">{errors.licencia_vigencia}</p>

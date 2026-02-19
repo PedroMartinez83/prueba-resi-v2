@@ -75,6 +75,7 @@ const auditMiddleware = (options = {}) => {
       user_agent: req.headers['user-agent'],
       datos_anteriores: req.method === 'PUT' || req.method === 'PATCH' ? cleanCircularReferences(req.body) : null
     };
+    let auditoriaRegistrada = false;
 
     // Interceptar respuesta
     res.status = function(code) {
@@ -96,6 +97,10 @@ const auditMiddleware = (options = {}) => {
 
     // Función para registrar la auditoría
     const registrarAuditoria = async (responseData) => {
+      // Evita duplicados cuando Express ejecuta res.json() y luego res.send() internamente.
+      if (auditoriaRegistrada) return;
+      auditoriaRegistrada = true;
+
       try {
         // Determinar resultado basado en el código de respuesta
         if (!auditData.codigo_respuesta) {
@@ -135,8 +140,8 @@ const auditMiddleware = (options = {}) => {
         // Determinar tabla afectada desde la ruta
         const rutaParts = req.originalUrl.split('/').filter(Boolean);
         const tablasConocidas = [
-          'vehiculos', 'conductores', 'usuarios', 'rentas', 
-          'mantenimientos', 'clientes', 'inversiones'
+          'vehiculos', 'conductores', 'usuarios', 'rentas',
+          'mantenimientos', 'clientes', 'inversiones', 'solicitudes'
         ];
         
         for (const tabla of tablasConocidas) {
@@ -172,6 +177,25 @@ const auditMiddleware = (options = {}) => {
           ) {
             const deletedData = responseData?.data || responseData?.result || responseData;
             await auditService.notificarEliminacionFinanzas({
+              actor: req.user,
+              ruta_api: auditData.ruta_api,
+              tabla_afectada: auditData.tabla_afectada,
+              registro_id: auditData.registro_id,
+              ip_address: auditData.ip_address,
+              user_agent: auditData.user_agent,
+              fecha: new Date(),
+              datos_registro: deletedData
+            });
+          }
+
+          if (
+            auditData.accion === 'DELETE' &&
+            auditData.resultado === 'success' &&
+            req.user?.rol === 'coordinador' &&
+            ['conductores', 'vehiculos', 'solicitudes'].includes(auditData.tabla_afectada)
+          ) {
+            const deletedData = responseData?.data || responseData?.result || responseData;
+            await auditService.notificarEliminacionCoordinador({
               actor: req.user,
               ruta_api: auditData.ruta_api,
               tabla_afectada: auditData.tabla_afectada,

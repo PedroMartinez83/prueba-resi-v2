@@ -10,7 +10,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 
-const EstadisticasCards = ({ estadisticas, loading }) => {
+const EstadisticasCards = ({ estadisticas, loading, periodo }) => {
   
   const formatearDinero = (monto) => {
     return new Intl.NumberFormat('es-MX', {
@@ -20,6 +20,8 @@ const EstadisticasCards = ({ estadisticas, loading }) => {
       maximumFractionDigits: 0
     }).format(monto);
   };
+
+  const periodoLabel = periodo ? `Últimos ${periodo} días` : 'Periodo seleccionado';
 
   const cards = [
     {
@@ -52,7 +54,7 @@ const EstadisticasCards = ({ estadisticas, loading }) => {
       formato: 'numero',
       icono: Clock,
       color: 'from-amber-500 to-orange-500',
-      descripcion: 'Pagos por aprobar'
+      descripcion: periodoLabel
     },
     {
       titulo: 'Pagos Confirmados',
@@ -60,7 +62,7 @@ const EstadisticasCards = ({ estadisticas, loading }) => {
       formato: 'numero',
       icono: CheckCircle,
       color: 'from-green-500 to-emerald-500',
-      descripcion: 'Este mes'
+      descripcion: periodoLabel
     },
     {
       titulo: 'Conductores Activos',

@@ -29,14 +29,17 @@ const formatCurrency = (amount) => {
   }).format(amount);
 };
 
+
+
 const DriverDashboard = () => {
   const navigate = useNavigate();
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [misPagos, setMisPagos] = useState([]); // Nuevo estado para pagos
 
   useEffect(() => {
-    cargarDashboard();
+    cargarDatosCompletos();
   }, []);
 
   const cargarDashboard = async () => {
@@ -53,6 +56,44 @@ const DriverDashboard = () => {
     } catch (err) {
       console.error('Error cargando dashboard:', err);
       setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 🚀 FUNCIÓN DE CARGA UNIFICADA
+  const cargarDatosCompletos = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Pedimos Dashboard y Pagos al mismo servicio (conductorService)
+      const [dashResponse, pagosResponse] = await Promise.all([
+        conductorService.getDashboardData(),
+        conductorService.getMisPagos() // 👈 AQUÍ ESTÁ EL CAMBIO CORRECTO
+      ]);
+
+      if (dashResponse.success) {
+        setDashboardData(dashResponse);
+      } else {
+        throw new Error(dashResponse.message || "No se pudieron cargar los datos");
+      }
+
+      // Guardamos los pagos (validando si viene como array o dentro de .data)
+      if (Array.isArray(pagosResponse)) {
+        setMisPagos(pagosResponse);
+      } else if (pagosResponse.pagos && Array.isArray(pagosResponse.pagos)) {
+        setMisPagos(pagosResponse.pagos);
+      } else if (pagosResponse.data && Array.isArray(pagosResponse.data)) {
+        setMisPagos(pagosResponse.data);
+      } else {
+        setMisPagos([]); // Fallback
+      }
+
+    } catch (err) {
+      console.error('Error cargando información:', err);
+      // Si falla pagos pero carga dashboard, permitimos mostrar la pantalla
+      if (!dashboardData) setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -75,7 +116,7 @@ const DriverDashboard = () => {
         <h2 className="text-2xl font-bold text-white mb-2">Error al Cargar</h2>
         <p className="text-gray-400 mb-6">{error || 'No se pudieron cargar los datos del dashboard.'}</p>
         <button
-          onClick={cargarDashboard}
+          onClick={cargarDatosCompletos}
           className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg hover:shadow-lg transition-all"
         >
           Reintentar
@@ -93,6 +134,55 @@ const DriverDashboard = () => {
     ? kmPreventivoObjetivo.toLocaleString('es-MX')
     : 'N/D';
   const kmPreventivoDiferencia = Math.abs(mantenimientoPreventivo?.diferencia_km || 0).toLocaleString('es-MX');
+
+// --- EXTRACCIÓN DE DATOS ---
+
+  // =========================================================
+  // 🧮 CÁLCULO DE DEUDA REAL (Descontando Pendientes)
+  // =========================================================
+  
+  // 1. Filtramos pagos que el backend aún no cuenta (Pendientes)
+  const pagosPendientes = misPagos.filter(p => p.status === 'Pendiente');
+
+  // 2. Calculamos cuánto valen esos pagos
+  const montoEnRevision = pagosPendientes.reduce((sum, p) => sum + parseFloat(p.monto_total || 0), 0);
+  
+  // 3. Calculamos cuántos días cubren (Aproximado)
+const diasEnRevision = pagosPendientes.reduce((sum, p) => {
+      // Normalizamos las fechas para ignorar horas/zonas horarias
+      // Usamos .split('T')[0] para quedarnos solo con YYYY-MM-DD
+      const fechaInicioStr = (p.fecha_pago || '').toString().split('T')[0];
+      const fechaFinStr = (p.fecha_pago_fin || p.fecha_pago || '').toString().split('T')[0];
+
+      if (fechaInicioStr && fechaFinStr) {
+          const inicio = new Date(fechaInicioStr);
+          const fin = new Date(fechaFinStr);
+          
+          // Diferencia en milisegundos
+          const diffTime = Math.abs(fin - inicio);
+          // Convertimos a días (redondeando hacia arriba por seguridad)
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+          
+          return sum + diffDays + 1; // +1 porque el día inicial cuenta
+      }
+      
+      return sum + 1; // Fallback: cuenta como 1 día
+  }, 0);
+
+  // 4. Restamos a lo que dice el backend
+  const deudaOficial = parseFloat(estado_rentas?.monto_deuda_total || 0);
+  const diasOficiales = parseInt(estado_rentas?.rentas_pendientes || 0);
+
+  // Math.max(0, ...) asegura que nunca mostremos deuda negativa
+  const deudaReal = Math.max(0, deudaOficial - montoEnRevision);
+  const diasReales = Math.max(0, diasOficiales - diasEnRevision);
+
+  // Lógica de visualización de alertas
+  const mostrarAlertaDeuda = diasReales > 0;
+  // Mostramos alerta azul si oficial > 0 pero real == 0 (significa que todo está pagado pero pendiente)
+  const mostrarInfoRevision = !mostrarAlertaDeuda && diasOficiales > 0;
+
+  // =========================================================
 
   return (
     <div className="w-full space-y-8">
@@ -122,34 +212,30 @@ const DriverDashboard = () => {
         </div>
       </div>
 
-      {/* Panel de Alertas Críticas */}
-      {estado_rentas?.rentas_pendientes > 0 && (
+      
+    {/* CASO 1: DEUDA REAL (Rojo) - Aún debe dinero descontando lo pendiente */}
+      {mostrarAlertaDeuda && (
         <Alerta 
           tipo="error" 
-          titulo={`⚠️ Tienes ${estado_rentas.rentas_pendientes} pagos atrasados (${formatCurrency(estado_rentas.monto_deuda_total)})`}
-          subtitulo="Regulariza tu situación para evitar una amonestación."
+          titulo={`⚠️ Tienes ${diasReales} pagos atrasados (${formatCurrency(deudaReal)})`}
+          subtitulo={
+             diasEnRevision > 0 
+               ? `Tienes pagos por ${formatCurrency(montoEnRevision)} en revisión, pero aún falta cubrir este saldo.`
+               : "Regulariza tu situación para evitar una amonestación."
+          }
           accion={() => navigate('/conductor/pagos')}
           textoAccion="Ver Pagos"
         />
       )}
 
-      {alertas?.mantenimiento_pendiente && (
-        <Alerta
-          tipo="warning"
-          titulo={`🔧 Mantenimiento Programado: ${alertas.mantenimiento_pendiente.tipo_servicio}`}
-          subtitulo={`Fecha: ${new Date(alertas.mantenimiento_pendiente.fecha_programada).toLocaleDateString('es-MX', { day: 'numeric', month: 'long' })}`}
-          accion={() => navigate('/conductor/mantenimientos')}
-          textoAccion="Ingresa al taller"
-        />
-      )}
-
-      {revisionDiaria?.requiere_revision && (
-        <Alerta
-          tipo="warning"
-          titulo="🚗 Revisión diaria pendiente"
-          subtitulo="Disponible desde las 00:00 de hoy. Sube tu video de 1 minuto para confirmar el estado del vehículo."
-          accion={() => navigate('/conductor/vehiculo')}
-          textoAccion="Registrar ahora"
+      {/* CASO 2: TODO EN REVISIÓN (Azul) - Debe en sistema, pero ya subió comprobantes */}
+      {mostrarInfoRevision && (
+        <Alerta 
+          tipo="info" 
+          titulo="⏳ Pagos en revisión"
+          subtitulo={`Tus pagos pendientes (${formatCurrency(montoEnRevision)}) cubren tu deuda actual. Espera a que sean aprobados.`}
+          accion={() => navigate('/conductor/pagos')}
+          textoAccion="Ver Estado"
         />
       )}
 
@@ -309,39 +395,30 @@ const DriverDashboard = () => {
 // ===============================================
 
 // Componente de Alerta
+// Componente Alerta Reutilizable
 const Alerta = ({ tipo, titulo, subtitulo, accion, textoAccion }) => {
-  const config = {
-    error: { bg: 'bg-red-500/10', border: 'border-red-500/30', icon: XCircle, text: 'text-red-400', btnBg: 'bg-red-500' },
-    warning: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', icon: AlertTriangle, text: 'text-yellow-400', btnBg: 'bg-yellow-500' },
-    success: { bg: 'bg-green-500/10', border: 'border-green-500/30', icon: CheckCircle, text: 'text-green-400', btnBg: 'bg-green-500' },
-    info: { bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: AlertTriangle, text: 'text-blue-400', btnBg: 'bg-blue-500' },
-  };
-  const TIPO = config[tipo] || config.warning;
-  const Icon = TIPO.icon;
-
-  return (
-    <div className={`p-4 rounded-xl border ${TIPO.bg} ${TIPO.border}`}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-start gap-3 flex-1">
-          <Icon className={`w-6 h-6 ${TIPO.text} flex-shrink-0 mt-1`} />
-          <div>
-            <p className={`font-bold ${TIPO.text}`}>{titulo}</p>
-            <p className="text-sm text-gray-300 mt-1">{subtitulo}</p>
-          </div>
+    const colores = {
+        error: "bg-red-500/10 border-red-500/30 text-red-400",
+        info: "bg-blue-500/10 border-blue-500/30 text-blue-400",
+        warning: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+    };
+    return (
+        <div className={`p-4 rounded-xl border flex items-center justify-between gap-4 mb-4 ${colores[tipo] || colores.info}`}>
+            <div className="flex items-center gap-3">
+                <AlertTriangle className="w-6 h-6 shrink-0" />
+                <div>
+                    <h3 className="font-bold text-sm md:text-base">{titulo}</h3>
+                    <p className="text-xs md:text-sm opacity-80">{subtitulo}</p>
+                </div>
+            </div>
+            {accion && (
+                <button onClick={accion} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm transition-colors whitespace-nowrap">
+                    {textoAccion}
+                </button>
+            )}
         </div>
-        {accion && textoAccion && (
-          <button
-            onClick={accion}
-            className={`ml-4 px-4 py-2 ${TIPO.btnBg} text-white rounded-lg hover:opacity-90 transition-all text-sm font-medium whitespace-nowrap`}
-          >
-            {textoAccion}
-          </button>
-        )}
-      </div>
-    </div>
-  );
+    );
 };
-
 // Componente de Botón de Acción
 const BotonAccion = ({ titulo, subtitulo, icono: Icon, color, onClick }) => {
   const config = {

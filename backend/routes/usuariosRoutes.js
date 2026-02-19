@@ -12,22 +12,22 @@ const { requirePermission } = require('../middleware/roleMiddleware');
 /**
  * @route   GET /api/admin/usuarios
  * @desc    Listar todos los usuarios con filtros y paginación
- * @access  super_admin, director
+ * @access  super_admin, direccion
  */
 router.get(
   '/',
-  requirePermission('usuarios', 'view'),
+  requirePermission('usuarios.view'),
   usuariosController.getUsuarios
 );
 
 /**
  * @route   GET /api/admin/usuarios/:id
  * @desc    Obtener detalle de un usuario específico
- * @access  super_admin, director
+ * @access  super_admin, direccion
  */
 router.get(
   '/:id',
-  requirePermission('usuarios', 'view'),
+  requirePermission('usuarios.view'),
   usuariosController.getUsuarioById
 );
 
@@ -38,40 +38,40 @@ router.get(
  */
 router.post(
   '/',
-  requirePermission('usuarios', 'create'),
+  requirePermission('usuarios.create'),
   usuariosController.createUsuario
 );
 
 /**
  * @route   PUT /api/admin/usuarios/:id
  * @desc    Actualizar usuario existente
- * @access  super_admin (todos los campos), director (solo estado)
+ * @access  super_admin (todos los campos), direccion (solo estado)
  */
 router.put(
   '/:id',
-  requirePermission('usuarios', 'update'),
+  requirePermission('usuarios.update'),
   usuariosController.updateUsuario
 );
 
 /**
  * @route   POST /api/admin/usuarios/:id/resetear-password
  * @desc    Resetear contraseña de un usuario
- * @access  super_admin, director
+ * @access  super_admin, direccion
  */
 router.post(
   '/:id/resetear-password',
-  requirePermission('usuarios', 'reset_password'),
+  requirePermission('usuarios.reset_password'),
   usuariosController.resetearPassword
 );
 
 /**
  * @route   PUT /api/admin/usuarios/:id/cambiar-estado
  * @desc    Cambiar estado de un usuario (Activo/Suspendido/Prohibido)
- * @access  super_admin (todos), director (solo Activo/Suspendido)
+ * @access  super_admin (todos), direccion (solo Activo/Suspendido)
  */
 router.put(
   '/:id/cambiar-estado',
-  requirePermission('usuarios', 'update'),
+  requirePermission('usuarios.update'),
   usuariosController.cambiarEstado
 );
 
@@ -82,7 +82,7 @@ router.put(
  */
 router.delete(
   '/:id',
-  requirePermission('usuarios', 'delete'),
+  requirePermission('usuarios.delete'),
   usuariosController.deleteUsuario
 );
 

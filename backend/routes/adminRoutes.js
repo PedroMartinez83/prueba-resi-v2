@@ -47,7 +47,8 @@ const {
   actualizarEstatus,
   calcularDecisionFinal,
   migrarAConductor,
-  obtenerEstadisticas
+  obtenerEstadisticas,
+  eliminarSolicitud
 } = require('../controllers/solicitudController');
 
 // ========== MIDDLEWARE DE AUTENTICACIÓN GLOBAL ==========
@@ -97,6 +98,11 @@ router.post('/solicitudes/:id/calcular-decision',
 router.post('/solicitudes/:id/migrar', 
   requirePermission('conductores.create'),
   migrarAConductor
+);
+
+router.delete('/solicitudes/:id',
+  requirePermission('prospectos.delete'),
+  eliminarSolicitud
 );
 
 // ========== RUTAS DE INVERSIONISTAS ==========

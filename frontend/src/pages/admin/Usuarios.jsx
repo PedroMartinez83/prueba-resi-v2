@@ -26,9 +26,10 @@ import UsuarioModal from '../../components/admin/UsuarioModal';
 // Configuración de colores por rol
 const ROL_COLORS = {
   super_admin: 'from-purple-500/20 to-purple-600/20 border-purple-500/30 text-purple-400',
-  director: 'from-blue-500/20 to-blue-600/20 border-blue-500/30 text-blue-400',
+  direccion: 'from-blue-500/20 to-blue-600/20 border-blue-500/30 text-blue-400',
   gerente_ops: 'from-cyan-500/20 to-cyan-600/20 border-cyan-500/30 text-cyan-400',
   finanzas: 'from-green-500/20 to-green-600/20 border-green-500/30 text-green-400',
+  coordinador: 'from-violet-500/20 to-violet-600/20 border-violet-500/30 text-violet-400',
   reclutador: 'from-indigo-500/20 to-indigo-600/20 border-indigo-500/30 text-indigo-400',
   jefe_taller: 'from-orange-500/20 to-orange-600/20 border-orange-500/30 text-orange-400',
   secretaria: 'from-pink-500/20 to-pink-600/20 border-pink-500/30 text-pink-400',
@@ -38,6 +39,7 @@ const ROL_COLORS = {
 };
 
 const DEFAULT_ROLE_STYLE = 'from-gray-500/20 to-gray-600/20 border-gray-500/30 text-gray-300';
+const COORDINADOR_ROLES_SUPERIORES = ['super_admin', 'gerente_ops', 'direccion', 'director', 'finanzas'];
 
 // Configuración de estados
 const ESTADO_CONFIG = {
@@ -66,9 +68,10 @@ const ESTADO_CONFIG = {
 // Nombres amigables de roles
 const ROL_NAMES = {
   super_admin: 'Super Admin',
-  director: 'Director',
+  direccion: 'Dirección',
   gerente_ops: 'Gerente Operaciones',
   finanzas: 'Finanzas',
+  coordinador: 'Coordinador Zona',
   reclutador: 'Reclutador',
   jefe_taller: 'Jefe de Taller',
   secretaria: 'Secretaria',
@@ -104,7 +107,11 @@ const Usuarios = () => {
   // Usuario actual
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
   const isSuperAdmin = currentUser.rol === 'super_admin';
-  const isDirector = currentUser.rol === 'director';
+  const isFinanzas = currentUser.rol === 'finanzas';
+  const isDireccion = currentUser.rol === 'direccion';
+  const isCoordinador = currentUser.rol === 'coordinador';
+  const isGerenteOps = currentUser.rol === 'gerente_ops';
+  const canCreateUsuarios = isSuperAdmin || isFinanzas;
 
   useEffect(() => {
     cargarUsuarios();
@@ -253,6 +260,7 @@ const Usuarios = () => {
     return <LoadingSpinner size="large" message="Cargando usuarios..." />;
   }
 
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -278,7 +286,7 @@ const Usuarios = () => {
               <RefreshCw className="w-5 h-5 text-gray-400" />
             </button>
             
-            {isSuperAdmin && (
+            {canCreateUsuarios && (
               <button
                 onClick={handleCrearUsuario}
                 className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-500 text-white rounded-lg hover:from-cyan-600 hover:to-blue-600 transition-all shadow-lg"
@@ -375,7 +383,23 @@ const Usuarios = () => {
                   const estadoInfo = ESTADO_CONFIG[usuario.estado_cuenta] || ESTADO_CONFIG['Activo'];
                   const EstadoIcon = estadoInfo.icon;
                   const esMiUsuario = usuario.id === currentUser.id;
-                  
+
+              const rolesIntocables = ['super_admin', 'direccion', 'finanzas', 'gerente_ops'];
+
+              const esIntocableParaGerente = isGerenteOps && rolesIntocables.includes(usuario.rol);
+
+              const esIntocableParaDirector = isDireccion && usuario.rol === 'super_admin';
+
+              const tienePermiso =
+              (isSuperAdmin || isCoordinador) || 
+              (isDireccion && !esIntocableParaDirector)|| 
+              (isGerenteOps && !esIntocableParaGerente);
+
+              const esSuperiorParaCoordinador =
+                isCoordinador && COORDINADOR_ROLES_SUPERIORES.includes(usuario.rol);
+              const puedeAccionar = tienePermiso && !esMiUsuario;
+              const bloqueoCoordinador = esSuperiorParaCoordinador;
+                                
                   return (
                     <tr 
                       key={usuario.id} 
@@ -430,45 +454,65 @@ const Usuarios = () => {
                       {/* Acciones */}
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-end gap-2">
-                          {/* Editar (Super Admin o Director) */}
-                          {(isSuperAdmin || isDirector) && !esMiUsuario && (
+                          {/* Editar (Super Admin o direccion) */}
+                          {puedeAccionar && (
                             <button
+                              disabled={bloqueoCoordinador}
                               onClick={() => handleEditarUsuario(usuario)}
-                              className="p-2 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors"
-                              title="Editar usuario"
+                              className={`p-2 rounded-lg transition-colors ${
+                                bloqueoCoordinador
+                                  ? 'bg-blue-500/5 text-blue-300/40 cursor-not-allowed'
+                                  : 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'
+                              }`}
+                              title={bloqueoCoordinador ? 'No puedes editar usuarios con rol superior' : 'Editar usuario'}
                             >
                               <Edit className="w-4 h-4" />
                             </button>
                           )}
                           
-                          {/* Resetear Password (Super Admin o Director) */}
-                          {(isSuperAdmin || isDirector) && !esMiUsuario && (
+                          {/* Resetear Password (Super Admin o direccion) */}
+                          {puedeAccionar && (
                             <button
+                              disabled={bloqueoCoordinador}
                               onClick={() => handleResetearPassword(usuario)}
-                              className="p-2 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-colors"
-                              title="Resetear contraseña"
+                              className={`p-2 rounded-lg transition-colors ${
+                                bloqueoCoordinador
+                                  ? 'bg-yellow-500/5 text-yellow-300/40 cursor-not-allowed'
+                                  : 'bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20'
+                              }`}
+                              title={bloqueoCoordinador ? 'No puedes resetear usuarios con rol superior' : 'Resetear contrasena'}
                             >
                               <Key className="w-4 h-4" />
                             </button>
                           )}
                           
                           {/* Cambiar Estado */}
-                          {!esMiUsuario && usuario.rol !== 'super_admin' && (
+                          {puedeAccionar && usuario.rol !== 'super_admin' && (
                             <>
                               {usuario.estado_cuenta !== 'Activo' && (
                                 <button
+                                  disabled={bloqueoCoordinador}
                                   onClick={() => handleCambiarEstado(usuario, 'Activo')}
-                                  className="p-2 rounded-lg bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
-                                  title="Activar usuario"
+                                  className={`p-2 rounded-lg transition-colors ${
+                                    bloqueoCoordinador
+                                      ? 'bg-green-500/5 text-green-300/40 cursor-not-allowed'
+                                      : 'bg-green-500/10 text-green-400 hover:bg-green-500/20'
+                                  }`}
+                                  title={bloqueoCoordinador ? 'No puedes modificar estado de usuarios con rol superior' : 'Activar usuario'}
                                 >
                                   <UserCheck className="w-4 h-4" />
                                 </button>
                               )}
                               {usuario.estado_cuenta === 'Activo' && (
                                 <button
+                                  disabled={bloqueoCoordinador}
                                   onClick={() => handleCambiarEstado(usuario, 'suspendido')}
-                                  className="p-2 rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors"
-                                  title="Suspender usuario"
+                                  className={`p-2 rounded-lg transition-colors ${
+                                    bloqueoCoordinador
+                                      ? 'bg-orange-500/5 text-orange-300/40 cursor-not-allowed'
+                                      : 'bg-orange-500/10 text-orange-400 hover:bg-orange-500/20'
+                                  }`}
+                                  title={bloqueoCoordinador ? 'No puedes suspender usuarios con rol superior' : 'Suspender usuario'}
                                 >
                                   <UserX className="w-4 h-4" />
                                 </button>
@@ -540,6 +584,7 @@ const Usuarios = () => {
       {showModal && (
         <UsuarioModal
           usuario={usuarioEdit}
+          rolActual={Users?.rol}
           onClose={() => {
             setShowModal(false);
             setUsuarioEdit(null);

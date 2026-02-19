@@ -111,7 +111,7 @@ const RentasPDFReport = ({ rows = [], filtros }) => {
         <View style={styles.header}>
           <Text style={styles.title}>Reporte de Pagos de Rentas</Text>
           <Text style={styles.subtitle}>
-            Período: {filtros.fecha_desde} al {filtros.fecha_hasta}
+            Periodo: {filtros.fecha_desde} al {filtros.fecha_hasta}
           </Text>
           <Text style={styles.subtitle}>
             Generado: {generado} • Total de registros: {rows.length}
@@ -123,9 +123,9 @@ const RentasPDFReport = ({ rows = [], filtros }) => {
           {/* Header de tabla */}
           <View style={styles.tableHeader}>
             <Text style={[styles.tableHeaderCell, styles.colFechaPago]}>Fecha de pago</Text>
-            <Text style={[styles.tableHeaderCell, styles.colDiasCubiertos]}>Días cubiertos</Text>
+            <Text style={[styles.tableHeaderCell, styles.colDiasCubiertos]}>Dias cubiertos</Text>
             <Text style={[styles.tableHeaderCell, styles.colConductor]}>Conductor</Text>
-            <Text style={[styles.tableHeaderCell, styles.colVehiculo]}>Vehículo</Text>
+            <Text style={[styles.tableHeaderCell, styles.colVehiculo]}>Vehiculo</Text>
             <Text style={[styles.tableHeaderCell, styles.colTotalPagado]}>Total pagado</Text>
           </View>
 
@@ -160,10 +160,7 @@ const RentasPDFReport = ({ rows = [], filtros }) => {
         {/* Footer del documento */}
         <View style={styles.documentFooter}>
           <Text style={styles.footerText}>
-            Auto Manager • Sistema de Gestión Vehicular
-          </Text>
-          <Text style={styles.footerBrand}>
-            somoslazaro.marketing
+            Auto Manager • Sistema de Gestion Vehicular
           </Text>
         </View>
       </Page>

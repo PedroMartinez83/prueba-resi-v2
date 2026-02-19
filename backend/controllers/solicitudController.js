@@ -600,6 +600,46 @@ const obtenerEstadisticas = async (req, res) => {
   }
 };
 
+/**
+ * Eliminar solicitud (ADMIN)
+ * DELETE /api/admin/solicitudes/:id
+ */
+const eliminarSolicitud = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const solicitud = await getById(TABLES.SOLICITUDES_CONDUCTOR, id);
+
+    if (!solicitud) {
+      return res.status(404).json({
+        success: false,
+        message: 'Solicitud no encontrada'
+      });
+    }
+
+    await db(TABLES.SOLICITUDES_CONDUCTOR)
+      .where('id', id)
+      .del();
+
+    // "data" se incluye para que auditoria pueda construir correo legible.
+    return res.json({
+      success: true,
+      message: 'Solicitud eliminada correctamente',
+      data: {
+        id: solicitud.id,
+        nombre_completo: solicitud.nombre_completo || null,
+        email: solicitud.email || null
+      }
+    });
+  } catch (error) {
+    console.error('Error eliminando solicitud:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al eliminar la solicitud'
+    });
+  }
+};
+
 // ========== LÓGICA DE NEGOCIO SEGÚN DOCUMENTO V3.0 ==========
 
 /**
@@ -738,5 +778,6 @@ module.exports = {
   actualizarEstatus,
   calcularDecisionFinal,
   migrarAConductor,
-  obtenerEstadisticas
+  obtenerEstadisticas,
+  eliminarSolicitud
 };

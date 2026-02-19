@@ -120,10 +120,10 @@ exports.getConductoresDisponibles = async (req, res) => {
     console.log('🚫 IDs de conductores que el sistema va a ocultar por tener carro activo:', ocupados);
 
     // 2. Traemos a los conductores disponibles:
-    // - Que su status personal sea 'Activo'
+    // - Que su status personal permita reasignacion
     // - Y que su ID NO ESTÉ en la lista de los que tienen una asignación activa
     const disponibles = await db('conductores as c')
-      .where('c.status', 'Activo')
+      .whereIn('c.status', ['Aprobado', 'Activo', 'Inactivo'])
       .whereNotIn('c.id', ocupados) // Aquí ocurre la magia del filtro
       .select(
         'c.id',
@@ -190,6 +190,14 @@ exports.cambiarConductor = async (req, res) => {
           fecha_fin: db.fn.now(),
           updated_at: db.fn.now()
         });
+
+      await trx('conductores')
+        .where('id', conductor_actual_id)
+        .update({
+          status: 'Inactivo',
+          status_trabajo: 'inactivo',
+          updated_at: db.fn.now()
+        });
     }
 
     // 2. Crear nueva asignación
@@ -211,6 +219,14 @@ exports.cambiarConductor = async (req, res) => {
       .update({
         estado: 'Asignado',
         conductor_asignado_id: conductor_nuevo_id,
+        updated_at: db.fn.now()
+      });
+
+    await trx('conductores')
+      .where('id', conductor_nuevo_id)
+      .update({
+        status: 'Activo',
+        status_trabajo: 'activo',
         updated_at: db.fn.now()
       });
 

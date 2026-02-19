@@ -65,12 +65,15 @@ const Login = () => {
         
         switch(userRole) {
           case 'super_admin':
-          case 'director':
+          case 'direccion':
           case 'gerente_ops':
-        case 'finanzas':
+          case 'finanzas':
           case 'gestor_flota':
           case 'admin':
             navigate('/admin/dashboard');
+            break;
+          case 'coordinador':
+            navigate('/admin/rentas');
             break;
           case 'conductor':
             navigate('/conductor/dashboard');
@@ -301,12 +304,6 @@ const Login = () => {
             )}
             {/* El resto del JSX no cambia... */}
           </div>
-        </div>
-        <div className="login-footer">
-          <p className="copyright">© 2025 Auto Manager</p>
-          <p className="developer">
-            Desarrollado por <span className="developer-brand">somoslazaro.marketing</span>
-          </p>
         </div>
       </div>
     </div>

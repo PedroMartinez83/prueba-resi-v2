@@ -78,8 +78,8 @@ const Reportes = () => {
 
   const parametrosReporte = useMemo(() => {
     const params = {
-      fecha_desde: filtros.fecha_desde,
-      fecha_hasta: ['periodo', 'conductor'].includes(filtros.tipo)
+      fecha_registro_desde: filtros.fecha_desde,
+      fecha_registro_hasta: ['periodo', 'conductor'].includes(filtros.tipo)
         ? filtros.fecha_hasta
         : filtros.fecha_desde,
       status: 'Confirmado'
@@ -131,9 +131,9 @@ const Reportes = () => {
       // Formatear datos para Excel con el mismo formato de la vista previa
       const datos = buildVistaPreviaRows(pagos).map((row) => ({
         'Fecha de pago': row.fechaPago,
-        'Días cubiertos': row.diasCubiertos,
+        'Dias cubiertos': row.diasCubiertos,
         Conductor: row.conductor,
-        Vehículo: row.vehiculo,
+        Vehiculo: row.vehiculo,
         'Total pagado': row.totalPagado
       }));
 
@@ -347,17 +347,30 @@ const Reportes = () => {
     return `${inicioDia} ${inicioMes} ${inicioAno} al ${finDiaPadded} ${finMes} ${finAno}`;
   };
 
-  const getFechaRegistroLabel = (pago) => {
+  const formatFechaPagoVistaPrevia = (pago) => {
     if (!pago) return '-';
-    const fecha = pago.created_at || pago.fecha_registro || pago.fecha_pago;
-    if (!fecha) return '-';
-    return new Date(fecha).toLocaleDateString('es-MX');
+    const fechaRaw = pago.created_at || pago.fecha_registro || pago.fecha_pago;
+    if (!fechaRaw) return '-';
+
+    const fechaDate = parseLocalDate(fechaRaw);
+    if (!fechaDate || Number.isNaN(fechaDate.getTime())) {
+      return '-';
+    }
+
+    const dia = fechaDate.getDate();
+    const mes = fechaDate
+      .toLocaleDateString('es-MX', { month: 'long' })
+      .replace('.', '')
+      .toLowerCase();
+    const ano = fechaDate.getFullYear();
+
+    return `${dia} ${mes} ${ano}`;
   };
 
   const buildVistaPreviaRows = (pagos = []) =>
     pagos.map((pago) => ({
       id: pago.id,
-      fechaPago: getFechaRegistroLabel(pago),
+      fechaPago: formatFechaPagoVistaPrevia(pago),
       diasCubiertos: formatDiasCubiertosVistaPrevia(pago),
       conductor: pago.nombre_conductor,
       vehiculo: pago.numero_vehiculo,
@@ -609,9 +622,9 @@ const Reportes = () => {
               <thead>
                 <tr className="border-b border-white/10">
                   <th className="text-left py-3 px-4 text-gray-400 font-medium">Fecha de pago</th>
-                  <th className="text-left py-3 px-4 text-gray-400 font-medium">D?as cubiertos</th>
+                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Dias cubiertos</th>
                   <th className="text-left py-3 px-4 text-gray-400 font-medium">Conductor</th>
-                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Veh?culo</th>
+                  <th className="text-left py-3 px-4 text-gray-400 font-medium">Vehiculo</th>
                   <th className="text-right py-3 px-4 text-gray-400 font-medium">Total pagado</th>
                   <th className="text-left py-3 px-4 text-gray-400 font-medium">Estado</th>
                 </tr>
@@ -646,7 +659,7 @@ const Reportes = () => {
                 Mostrando primeros 10 registros. El reporte completo contendra todos los datos.
               </p>
               <div className="text-sm text-gray-400">
-                D?as cubiertos considera rangos registrados (domingos excluidos).
+                Dias cubiertos considera rangos registrados (domingos excluidos).
               </div>
             </div>
           </div>

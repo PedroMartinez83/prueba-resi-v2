@@ -543,15 +543,6 @@ const PortalInversion = () => {
           </div>
         </div>
       </div>
-
-      {/* Footer */}
-      <div className="relative bg-black/20 backdrop-blur-sm border-t border-white/10 mt-16">
-        <div className="max-w-7xl mx-auto px-4 py-6 text-center">
-          <p className="text-gray-500 text-sm">
-            Desarrollado por <span className="text-cyan-400">somoslazaro.marketing</span>
-          </p>
-        </div>
-      </div>
     </div>
   );
 };

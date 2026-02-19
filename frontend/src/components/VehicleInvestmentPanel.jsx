@@ -154,7 +154,8 @@ const VehicleInvestmentPanel = ({ vehiculo, onAsignarInversionClick }) => {
 
   // ========== FUNCIÓN PARA NAVEGAR A LA PÁGINA ==========
   const handleVerHistorial = () => {
-    navigate(`/rentabilidad-vehiculo/${vehiculo?.NumeroSerie}`);
+    const referenciaVehiculo = vehiculo?.id || vehiculo?.NumeroSerie;
+    navigate(`/rentabilidad-vehiculo/${referenciaVehiculo}`);
   };
 
   if (loading) {

@@ -94,4 +94,9 @@ router.delete('/:id',
   conductoresAdminController.deleteConductor
 );
 
+router.post('/:id/gestionar-baja', 
+  requirePermission('conductores.update'),
+  conductoresAdminController.gestionarBajaConductor
+);
+
 module.exports = router;

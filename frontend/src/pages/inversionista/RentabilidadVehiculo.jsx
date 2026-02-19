@@ -39,7 +39,12 @@ const RentabilidadVehiculo = () => {
     setLoading(true);
     console.log('🔍 Cargando historial para vehículo:', vehiculoId);
 
-    const response = await adminService.getHistorialVehiculo(vehiculoId);
+    const referencia = String(vehiculoId || '').trim();
+    const esIdNumerico = /^\d+$/.test(referencia);
+
+    const response = esIdNumerico
+      ? await adminService.getHistorialVehiculoById(referencia)
+      : await adminService.getHistorialVehiculo(referencia);
 
     console.log('✅ Datos recibidos:', response);
     

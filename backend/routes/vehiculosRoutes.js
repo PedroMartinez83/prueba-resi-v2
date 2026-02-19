@@ -64,4 +64,9 @@ router.delete('/:id',
   vehiculosController.deleteVehiculo
 );
 
+router.post('/:id/gestionar-baja', 
+  requirePermission('vehiculos.delete'), // O un permiso de admin
+  vehiculosController.procesarSolicitudBaja
+);
+
 module.exports = router;

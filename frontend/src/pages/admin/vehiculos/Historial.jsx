@@ -27,25 +27,6 @@ const VehiculoHistorial = () => {
     cargarHistorial();
   }, [id]);
 
-  // ========== GENERAR QR CODE ==========
-  useEffect(() => {
-    const generarQR = async () => {
-      try {
-        const qrDataUrl = await QRCode.toDataURL('https://somoslazaro.marketing', {
-          width: 200,
-          margin: 2,
-          color: {
-            dark: '#FFFFFF',
-            light: '#0F172A'
-          }
-        });
-        setImagenesGraficos(prev => ({ ...prev, qrCode: qrDataUrl }));
-      } catch (error) {
-        console.error('Error generando QR:', error);
-      }
-    };
-    generarQR();
-  }, []);
 
   const cargarHistorial = async () => {
   try {
@@ -60,12 +41,10 @@ const VehiculoHistorial = () => {
 
     // El backend devuelve NumeroSerie en PascalCase
     const numeroSerie = vehiculoData.vehiculo?.NumeroSerie;
-    
-    if (!numeroSerie) {
-      throw new Error('El vehículo no tiene número de serie');
-    }
-    
-    const historial = await adminService.getHistorialVehiculo(numeroSerie);
+
+    const historial = numeroSerie
+      ? await adminService.getHistorialVehiculo(numeroSerie)
+      : await adminService.getHistorialVehiculoById(id);
     
     if (historial.success) {
       setHistorialData(historial);

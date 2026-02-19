@@ -9,14 +9,15 @@ const asignacionesController = require('../controllers/admin/asignacionesAdminCo
 router.use(verifyToken);  // ← AGREGAR ESTA LÍNEA
 
 // ========== RUTAS DE HISTORIAL - CON AUTENTICACIÓN SEGURA ==========
-router.get('/vehiculo/:numero_serie/historial',
-  requirePermission('vehiculos.view'),
-  asignacionesController.getHistorialVehiculoPorSerie
-);
-
-router.get('/vehiculo/:vehiculo_id/historial',
+// Rutas explicitas para evitar colision entre ID y numero de serie.
+router.get('/vehiculo/id/:vehiculo_id/historial',
   requirePermission('vehiculos.view'),
   asignacionesController.getHistorialVehiculo
+);
+
+router.get('/vehiculo/serie/:numero_serie/historial',
+  requirePermission('vehiculos.view'),
+  asignacionesController.getHistorialVehiculoPorSerie
 );
 
 // ========== OTRAS RUTAS - CON PERMISOS ==========

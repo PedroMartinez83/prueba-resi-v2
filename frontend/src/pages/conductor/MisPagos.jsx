@@ -118,61 +118,114 @@ const MisPagos = () => {
 const totalEstimado = diasSeleccionados * totalDiario;
 
 const estaAlCorriente = React.useMemo(() => {
-    if (!resumen?.ultimo_pago_aprobado) return false; // Si no ha pagado nunca, no está al corriente
-    
-    // Normalizamos fechas para comparar solo YYYY-MM-DD
-    const ultimo = String(resumen.ultimo_pago_aprobado).substring(0, 10);
-    const hoy = new Date().toLocaleDateString('en-CA');
-    
-    return ultimo >= hoy; // Si su último pago es hoy o futuro, está al corriente
-  }, [resumen]);
+    // 1. Empezamos con la fecha que dice el backend (Confirmados)
+    let fechaMasReciente = resumen?.ultimo_pago_aprobado;
 
+    // 2. BÚSQUEDA LOCAL: Revisamos si hay pagos Pendientes más recientes
+    if (pagos && pagos.length > 0) {
+      // Filtramos los estados que consideramos como "Pagado" (incluyendo Pendiente)
+      const pagosValidos = pagos.filter(p => 
+        ['Aprobado', 'Pendiente', 'Confirmado'].includes(p.status)
+      );
+
+      if (pagosValidos.length > 0) {
+        // Ordenamos descendente para sacar el último
+        pagosValidos.sort((a, b) => {
+          const fA = new Date(a.fecha_pago_fin || a.fecha_pago);
+          const fB = new Date(b.fecha_pago_fin || b.fecha_pago);
+          return fB - fA; 
+        });
+
+        const ultimoLocal = pagosValidos[0].fecha_pago_fin || pagosValidos[0].fecha_pago;
+
+        // Si la fecha local es mayor a la del resumen (o si no había resumen), ganamos
+        if (!fechaMasReciente || new Date(ultimoLocal) > new Date(fechaMasReciente)) {
+            fechaMasReciente = ultimoLocal;
+        }
+      }
+    }
+
+    // 3. Si después de todo no tenemos fecha, es un conductor nuevo o sin pagos
+    if (!fechaMasReciente) return false;
+
+    // 4. COMPARACIÓN FINAL
+    // Normalizamos a YYYY-MM-DD para comparar texto
+    const ultimo = String(fechaMasReciente).substring(0, 10);
+    const hoy = new Date().toLocaleDateString('en-CA'); 
+    
+    // Si la fecha cubierta (sea Pendiente o Confirmada) es hoy o futuro -> ESTÁ AL CORRIENTE
+    return ultimo >= hoy; 
+
+  }, [resumen, pagos]);
   useEffect(() => {
     cargarPagos();
     cargarResumen();
   }, []);
 
   // NUEVO USEEFFECT: Autocompletar fecha cuando llegue el resumen
-  useEffect(() => {
+useEffect(() => {
+    // Si no hay resumen, no podemos calcular nada seguro
     if (!resumen) return;
 
-    // 1. AHORA USAMOS EL CAMPO QUE INCLUYE PENDIENTES
-    // Si este viene null, significa que no tiene NADA (ni aprobado ni pendiente) -> Se irá al 01/01/2026
-    const ultimoPago = resumen.ultimo_pago_aprobado;
-    
-    // 2. Definimos el "Día Cero" (Arranque de año)
-    const fechaArranque = '2026-01-01'; // <--- Tu fecha deseada por defecto
-    
-    const fechaInicioAsignacion = resumen.fecha_inicio_asignacion 
-          ? new Date(resumen.fecha_inicio_asignacion).toISOString().split('T')[0]
-          : fechaArranque;
-      
+    // --- 1. LÓGICA DE BÚSQUEDA DEL ÚLTIMO PAGO REAL ---
+    let fechaBase = resumen.ultimo_pago_aprobado; // Empezamos con lo que dice el resumen
+
+    // PERO, si tenemos la lista de pagos cargada, buscamos si hay uno más reciente (Pendiente)
+    if (pagos && pagos.length > 0) {
+        // Filtramos pagos válidos (ignoramos rechazados)
+        const pagosValidos = pagos.filter(p => 
+            ['Aprobado', 'Pendiente', 'Confirmado'].includes(p.status)
+        );
+
+        if (pagosValidos.length > 0) {
+            // Ordenamos por fecha descendente (el más nuevo primero)
+            pagosValidos.sort((a, b) => {
+                const fA = new Date(a.fecha_pago_fin || a.fecha_pago);
+                const fB = new Date(b.fecha_pago_fin || b.fecha_pago);
+                return fB - fA; 
+            });
+
+            // Tomamos la fecha del último pago encontrado en la lista local
+            const ultimaFechaLocal = pagosValidos[0].fecha_pago_fin || pagosValidos[0].fecha_pago;
+            
+            // Si la fecha local es más reciente que la del resumen (o si resumen era null), la usamos
+            if (!fechaBase || new Date(ultimaFechaLocal) > new Date(fechaBase)) {
+                fechaBase = ultimaFechaLocal;
+            }
+        }
+    }
+    // -----------------------------------------------------------
+
+    // 2. Definimos el "Día Cero"
+    const fechaArranque = '2026-01-01';
     const hoy = new Date().toLocaleDateString('en-CA');
 
     // Lógica 1: MODO "PONERSE AL TANTO"
     if (ponerseAlTanto) {
-      if (ultimoPago) {
+      if (fechaBase) {
         // Tiene historial (Pendiente o Aprobado) -> Sigue la cadena
-        const inicioCalculado = getSiguienteDiaHabil(ultimoPago);
+        const inicioCalculado = getSiguienteDiaHabil(fechaBase);
         
         if (new Date(inicioCalculado) > new Date(hoy)) {
+           // Ya estás al día o adelantado
            setFechaInicio(inicioCalculado);
            setFechaFin(inicioCalculado);
         } else {
+           // Debes días -> Rango hasta hoy
            setFechaInicio(inicioCalculado);
            setFechaFin(hoy);
         }
       } else {
-        // 🆕 LIMPIO TOTAL: No tiene ni pendientes. Empieza el 1 de Enero.
+        // 🆕 LIMPIO TOTAL: Empieza el 1 de Enero
         setFechaInicio(fechaArranque);
         setFechaFin(hoy);
       }
     } 
     // Lógica 2: MODO MANUAL
     else {
-      if (ultimoPago) {
+      if (fechaBase) {
         // Tiene historial -> Siguiente día
-        const siguienteDia = getSiguienteDiaHabil(ultimoPago);
+        const siguienteDia = getSiguienteDiaHabil(fechaBase);
         setFechaInicio(siguienteDia);
         setFechaFin(siguienteDia);
       } else {
@@ -181,7 +234,8 @@ const estaAlCorriente = React.useMemo(() => {
         setFechaFin(fechaArranque);
       }
     }
-  }, [ponerseAlTanto, resumen]);
+
+  }, [ponerseAlTanto, resumen, pagos]);
 
   const cargarPagos = async () => {
     try {

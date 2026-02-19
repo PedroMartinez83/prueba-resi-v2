@@ -236,7 +236,7 @@ const styles = StyleSheet.create({
     borderColor: '#334155',
   },
   
-  // === FOOTER (Desarrollado por somoslazaro.marketing) ===
+  // === FOOTER 
   footer: {
     position: 'absolute',
     bottom: 20,
@@ -409,7 +409,6 @@ const VehiculoPDFReport = ({ data, imagenesGraficos }) => {
           </View>
         </View>
 
-        <Text style={styles.footer} fixed>Desarrollado por somoslazaro.marketing</Text>
         <Text style={styles.pageNumber} render={({ pageNumber }) => `Página ${pageNumber}`} fixed />
       </Page>
 
@@ -465,7 +464,6 @@ const VehiculoPDFReport = ({ data, imagenesGraficos }) => {
           </View>
         </View>
 
-        <Text style={styles.footer} fixed>Desarrollado por somoslazaro.marketing</Text>
         <Text style={styles.pageNumber} render={({ pageNumber }) => `Página ${pageNumber}`} fixed />
       </Page>
 
@@ -545,7 +543,6 @@ const VehiculoPDFReport = ({ data, imagenesGraficos }) => {
           )}
         </View>
 
-        <Text style={styles.footer} fixed>Desarrollado por somoslazaro.marketing</Text>
         <Text style={styles.pageNumber} render={({ pageNumber }) => `Página ${pageNumber}`} fixed />
       </Page>
 
@@ -582,7 +579,6 @@ const VehiculoPDFReport = ({ data, imagenesGraficos }) => {
           </View>
         </View>
 
-        <Text style={styles.footer} fixed>Desarrollado por somoslazaro.marketing</Text>
         <Text style={styles.pageNumber} render={({ pageNumber }) => `Página ${pageNumber}`} fixed />
       </Page>
 
@@ -707,7 +703,6 @@ const VehiculoPDFReport = ({ data, imagenesGraficos }) => {
           </View>
         )}
 
-        <Text style={styles.footer} fixed>Desarrollado por somoslazaro.marketing</Text>
         <Text style={styles.pageNumber} render={({ pageNumber }) => `Página ${pageNumber}`} fixed />
       </Page>
     </Document>
