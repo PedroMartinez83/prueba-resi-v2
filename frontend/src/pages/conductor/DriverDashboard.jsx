@@ -141,54 +141,76 @@ const DriverDashboard = () => {
   // 🧮 CÁLCULO DE DEUDA REAL (Descontando Pendientes)
   // =========================================================
   
+// 🛡️ 0. ESCUDO ANTI-FANTASMAS: Calculamos los días MÁXIMOS reales que podría deber
+  const fechaAsignacionStr = estado_rentas?.fecha_inicio_asignacion?.split('T')[0]; 
+  const hoyLimpio = new Date();
+  hoyLimpio.setHours(0,0,0,0);
+  
+  let maxDiasPosibles = 9999; // Por defecto infinito si no hay fecha
+  if (fechaAsignacionStr) {
+      const fechaAsig = new Date(`${fechaAsignacionStr}T12:00:00`);
+      fechaAsig.setHours(0,0,0,0);
+      const msPorDia = 1000 * 60 * 60 * 24;
+      // Días naturales desde que se le dio el carro
+      maxDiasPosibles = Math.max(0, Math.floor((hoyLimpio - fechaAsig) / msPorDia));
+  }
+
   // 1. Filtramos pagos que el backend aún no cuenta (Pendientes)
-  const pagosPendientes = misPagos.filter(p => p.status === 'Pendiente');
+  // 🧹 Extra: Evitamos sumar comprobantes viejos de otros choferes
+  const pagosPendientes = misPagos.filter(p => {
+      if (p.status !== 'Pendiente') return false;
+      const fechaPagoStr = (p.fecha_pago || '').toString().split('T')[0];
+      if (fechaAsignacionStr && fechaPagoStr < fechaAsignacionStr) return false; // Ignora pagos viejos
+      return true;
+  });
 
   // 2. Calculamos cuánto valen esos pagos
   const montoEnRevision = pagosPendientes.reduce((sum, p) => sum + parseFloat(p.monto_total || 0), 0);
   
   // 3. Calculamos cuántos días cubren (Aproximado)
-const diasEnRevision = pagosPendientes.reduce((sum, p) => {
-      // Normalizamos las fechas para ignorar horas/zonas horarias
-      // Usamos .split('T')[0] para quedarnos solo con YYYY-MM-DD
+  const diasEnRevision = pagosPendientes.reduce((sum, p) => {
       const fechaInicioStr = (p.fecha_pago || '').toString().split('T')[0];
       const fechaFinStr = (p.fecha_pago_fin || p.fecha_pago || '').toString().split('T')[0];
 
       if (fechaInicioStr && fechaFinStr) {
-          const inicio = new Date(fechaInicioStr);
-          const fin = new Date(fechaFinStr);
-          
-          // Diferencia en milisegundos
+          const inicio = new Date(`${fechaInicioStr}T12:00:00`);
+          const fin = new Date(`${fechaFinStr}T12:00:00`);
           const diffTime = Math.abs(fin - inicio);
-          // Convertimos a días (redondeando hacia arriba por seguridad)
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-          
-          return sum + diffDays + 1; // +1 porque el día inicial cuenta
+          return sum + diffDays + 1; 
       }
-      
-      return sum + 1; // Fallback: cuenta como 1 día
+      return sum + 1; 
   }, 0);
 
-  // 4. Restamos a lo que dice el backend
-  const deudaOficial = parseFloat(estado_rentas?.monto_deuda_total || 0);
-  const diasOficiales = parseInt(estado_rentas?.rentas_pendientes || 0);
+  // 4. LECTURA DEL BACKEND Y APLICACIÓN DEL ESCUDO 🛡️
+  let deudaOficial = parseFloat(estado_rentas?.monto_deuda_total || 0);
+  let diasOficiales = parseInt(estado_rentas?.rentas_pendientes || 0);
 
-  // Math.max(0, ...) asegura que nunca mostremos deuda negativa
+  // Si el backend manda más días de los que realmente tiene con el carro... ¡Aplicamos el escudo!
+  if (diasOficiales > maxDiasPosibles) {
+      console.log(`🛡️ Escudo activado: Bajando de ${diasOficiales} a ${maxDiasPosibles} días.`);
+      
+      // 🚨 LA SOLUCIÓN: Calculamos cuánto le cobran por día y ajustamos el dinero
+      const costoPorDia = diasOficiales > 0 ? (deudaOficial / diasOficiales) : 0;
+      
+      diasOficiales = maxDiasPosibles;
+      deudaOficial = diasOficiales * costoPorDia; // Multiplicamos los días reales por lo que cuesta su día
+  }
+
+  // 5. Cálculo Final Real
   const deudaReal = Math.max(0, deudaOficial - montoEnRevision);
   const diasReales = Math.max(0, diasOficiales - diasEnRevision);
 
   // Lógica de visualización de alertas
   const mostrarAlertaDeuda = diasReales > 0;
-  // Mostramos alerta azul si oficial > 0 pero real == 0 (significa que todo está pagado pero pendiente)
   const mostrarInfoRevision = !mostrarAlertaDeuda && diasOficiales > 0;
-
   // =========================================================
 
   return (
     <div className="w-full space-y-8">
       
       {/* Header de Bienvenida */}
-      <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
+      <div className="bg-[#07425E] backdrop-blur-sm border border-white/10 rounded-2xl p-6">
         <h1 className="text-3xl font-bold text-white mb-2">
           ¡Bienvenido, {conductor?.nombre_conductor?.split(' ')[0]}! 👋
         </h1>
@@ -239,6 +261,17 @@ const diasEnRevision = pagosPendientes.reduce((sum, p) => {
         />
       )}
 
+      {/* 🟢 CASO 3: AL CORRIENTE (Verde) - No debe nada */}
+      {!mostrarAlertaDeuda && !mostrarInfoRevision && (
+        <Alerta 
+          tipo="success" 
+          titulo="✅ ¡Todo al corriente!"
+          subtitulo="Felicidades, no tienes pagos atrasados. ¡Gracias por tu puntualidad!"
+          accion={() => navigate('/conductor/pagos')}
+          textoAccion="Ver Historial"
+        />
+      )}
+
       {mantenimientoPreventivo && (
         <Alerta
           tipo={mantenimientoPreventivo.estado === 'vencido' ? 'error' : 'warning'}
@@ -246,7 +279,14 @@ const diasEnRevision = pagosPendientes.reduce((sum, p) => {
           subtitulo={mantenimientoPreventivo.estado === 'vencido'
             ? `Has excedido el servicio de ${kmPreventivoTexto} km por ${kmPreventivoDiferencia} km. ${mantenimientoPreventivo.tipo_servicio}`
             : `Faltan ${kmPreventivoDiferencia} km para el servicio de ${kmPreventivoTexto} km. ${mantenimientoPreventivo.tipo_servicio}`}
-          accion={() => navigate('/conductor/mantenimientos')}
+          accion={() =>
+            navigate('/conductor/mantenimientos', {
+              state: {
+                openSolicitud: true,
+                tipoSolicitud: 'preventivo_programado'
+              }
+            })
+          }
           textoAccion="Agendar mantenimiento"
         />
       )}
@@ -399,7 +439,7 @@ const diasEnRevision = pagosPendientes.reduce((sum, p) => {
 const Alerta = ({ tipo, titulo, subtitulo, accion, textoAccion }) => {
     const colores = {
         error: "bg-red-500/10 border-red-500/30 text-red-400",
-        info: "bg-blue-500/10 border-blue-500/30 text-blue-400",
+        info: "bg-white-500/10 border-white-500/30 text-white-500/10",
         warning: "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
     };
     return (
@@ -484,9 +524,20 @@ const InfoVehiculo = ({ vehiculo, mantenimientoPlan }) => {
     );
   }
   
-  const kmActual = vehiculo.kilometraje_actual || 0;
-  const kmProximo = vehiculo.proximo_mantenimiento_km || 0;
-  const kmProgreso = (kmProximo > 0) ? (kmActual / kmProximo) * 100 : 0;
+  const kmActual = Number(vehiculo.kilometraje_actual) || 0;
+  const kmProximo = Number(vehiculo.proximo_mantenimiento_km) || 0;
+  const KM_CICLO_MANTENIMIENTO = 10000;
+  const kmObjetivo =
+    kmProximo || Math.ceil(Math.max(kmActual, 1) / KM_CICLO_MANTENIMIENTO) * KM_CICLO_MANTENIMIENTO;
+  let kmEnCiclo = kmActual % KM_CICLO_MANTENIMIENTO;
+  if (kmActual > 0 && kmEnCiclo === 0) {
+    kmEnCiclo = KM_CICLO_MANTENIMIENTO;
+  }
+  const kmProgreso = Math.min((kmEnCiclo / KM_CICLO_MANTENIMIENTO) * 100, 100);
+  const servicioExcedido = kmObjetivo > 0 && kmActual > kmObjetivo;
+  const porcentajeBarra = servicioExcedido ? 100 : kmProgreso;
+  const kmRestantes = Math.max(kmObjetivo - kmActual, 0);
+  const kmExcedidos = Math.max(kmActual - kmObjetivo, 0);
   const proximoServicio = mantenimientoPlan?.proximo_servicio;
   const ultimoServicio = mantenimientoPlan?.ultimo_servicio;
   
@@ -518,10 +569,19 @@ const InfoVehiculo = ({ vehiculo, mantenimientoPlan }) => {
         </div>
         <div className="w-full bg-white/10 rounded-full h-2.5">
           <div 
-            className="bg-cyan-400 h-2.5 rounded-full transition-all" 
-            style={{ width: `${Math.min(kmProgreso, 100)}%` }}
+            className={`h-2.5 rounded-full transition-all ${
+              servicioExcedido ? 'bg-red-500' : 'bg-cyan-400'
+            }`}
+            style={{ width: `${porcentajeBarra}%` }}
           ></div>
         </div>
+        <p className={`mt-1 text-xs ${servicioExcedido ? 'text-red-300' : 'text-gray-400'}`}>
+          {servicioExcedido
+            ? `${kmExcedidos.toLocaleString('es-MX')} km excedidos`
+            : kmRestantes === 0
+              ? 'Meta alcanzada, agenda servicio'
+              : `${kmRestantes.toLocaleString('es-MX')} km restantes`}
+        </p>
       </div>
 
       {proximoServicio && (

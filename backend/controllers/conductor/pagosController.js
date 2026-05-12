@@ -2,6 +2,7 @@
 const { db } = require('../../config/database');
 const cloudinary = require('cloudinary').v2;
 const streamifier = require('streamifier');
+const { resolveConductorId } = require('./conductorContextHelper');
 
 // Configurar Cloudinary
 cloudinary.config({
@@ -179,12 +180,16 @@ const buildPendientesData = async (trx, conductorId, fechaInicioSolicitada = nul
 // =====================================================
 const getMisPagos = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
     const limit = parseInt(req.query.limit) || 1000;
 
     const pagos = await db('pagos_diarios as pd')
       .join('asignaciones as a', 'pd.asignacion_id', 'a.id')
       .where('a.conductor_id', conductorId)
+      .andWhere('a.activa', true)
       .orderBy('pd.fecha_pago', 'desc')
       .limit(limit)
       .select(
@@ -222,8 +227,12 @@ const getMisPagos = async (req, res) => {
 // =====================================================
 const getResumenCuenta = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
 
+    // 1. Buscamos la asignación actual
     const asignacionActiva = await db('asignaciones as a')
       .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
       .where('a.conductor_id', conductorId)
@@ -238,29 +247,38 @@ const getResumenCuenta = async (req, res) => {
         'v.porcentaje_pagado'
       )
       .first();
-      console.log('📦 DATOS CRUDOS DE LA BD:', asignacionActiva);
+      
+    // 🛡️ VALIDACIÓN: Si no tiene carro activo, devolvemos todo en ceros
+    if (!asignacionActiva) {
+        return res.json({
+            success: true,
+            message: 'No hay vehículo asignado',
+            total_pagado: 0, total_pendiente: 0, total_plan: 0, total_pagos_realizados: 0,
+            ultimo_pago_aprobado: null, ultimo_pago_registrado: null, fecha_inicio_asignacion: null
+        });
+    }
 
+    // 2. 🚨 CORRECCIÓN CLAVE: Filtramos SOLO por la asignación actual 🚨
     const baseQuery = db('pagos_diarios as pd')
-      .join('asignaciones as a', 'pd.asignacion_id', 'a.id')
-      .where('a.conductor_id', conductorId);
+      .where('pd.asignacion_id', asignacionActiva.id);
 
-    // Totales financieros
+    // Totales financieros (Ahora sí, solo de este carro)
     const totalPagado = await baseQuery.clone().where('pd.status', 'Confirmado').sum('pd.monto_renta_pagado as total').first();
     const totalPendiente = await baseQuery.clone().whereIn('pd.status', ['Pendiente']).sum('pd.monto_renta_pagado as total').first();
     const totalPagosRealizados = await baseQuery.clone().where('pd.status', 'Confirmado').count('pd.id as count').first();
 
-    // Último pago APROBADO
+    // 3. Último pago APROBADO (Mejorado para tomar en cuenta rangos)
     const ultimoPagoAprobado = await baseQuery
       .clone()
       .where('pd.status', 'Confirmado')
-      .orderBy('pd.fecha_pago', 'desc')
+      // Ordenamos tomando en cuenta la fecha_pago_fin por si pagó por rango
+      .orderByRaw('COALESCE(pd.fecha_pago_fin, pd.fecha_pago) DESC')
       .first('pd.fecha_pago', 'pd.fecha_pago_fin');
 
-    // Último pago GENERAL (Para posicionar el calendario)
+    // Último pago GENERAL
     const ultimoPagoGeneral = await baseQuery
       .clone()
       .whereIn('pd.status', ['Aprobado', 'Confirmado', 'Pendiente'])
-      // Ordenamos por la fecha más lejana que cubra
       .orderByRaw('COALESCE(pd.fecha_pago_fin, pd.fecha_pago) DESC')
       .first();
 
@@ -270,7 +288,7 @@ const getResumenCuenta = async (req, res) => {
 
     const conductor = await db('conductores')
       .where({ id: conductorId })
-      .select('saldo_poliza_mecanica', 'saldo_ahorro_mantenimiento')
+      .select('saldo_ahorro_mantenimiento', 'saldo_poliza_mecanica')
       .first();
 
     const totalPlan = parseFloat(asignacionActiva?.total_corrida || 0);
@@ -318,7 +336,11 @@ const registrarPago = async (req, res) => {
   const trx = await db.transaction();
 
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
     const { fecha_inicio, fecha_fin, notas, metodo_pago } = req.body;
 
     // Validaciones
@@ -347,28 +369,33 @@ const registrarPago = async (req, res) => {
       .orderByRaw('COALESCE(fecha_pago_fin, fecha_pago) DESC')
       .first();
 
-let fechaEsperada;
+    let fechaEsperada;
 
     if (ultimoPagoRegistrado) {
-        // Si ya hay pagos, seguimos la cadena normal
+        // Si ya hay pagos, seguimos la cadena normal (el día siguiente al último pago)
         const rawFecha = ultimoPagoRegistrado.fecha_pago_fin || ultimoPagoRegistrado.fecha_pago;
         const fechaUltima = toDateString(rawFecha);
         fechaEsperada = addDaysToDate(fechaUltima, 1);
     } else {
-        // 🚨 AQUÍ ESTÁ LA CORRECCIÓN 🚨
-        // Si es el PRIMER pago, definimos desde cuándo debe empezar a pagar.
-        
-        const fechaAsignacion = toDateString(asignacion.fecha_inicio);
-        const fechaArranqueSistema = '2026-01-01'; // 👈 TU FECHA DE CORTE
+        // 🚨 AQUÍ ESTÁ LA MAGIA 🚨
+        // Si es el PRIMER pago de este conductor con este carro, 
+        // su cuenta arranca estrictamente en la fecha que se le asignó.
+        // ¡Adiós al primero de enero!
+        fechaEsperada = toDateString(asignacion.fecha_inicio);
+    }
 
-        // LÓGICA:
-        // 1. Si la asignación es vieja (ej. 2025), empezamos a cobrar desde el 2026-01-01.
-        // 2. Si la asignación es nueva (ej. Feb 2026), empezamos desde la fecha de asignación.
+    // Validación: Si intenta pagar después de lo esperado (dejando hueco)
+    if (fInicio > fechaEsperada) {
+        const finHueco = addDaysToDate(fInicio, -1);
         
-        if (fechaAsignacion < fechaArranqueSistema) {
-             fechaEsperada = fechaArranqueSistema;
-        } else {
-             fechaEsperada = fechaAsignacion;
+        // Verificamos si los días en el hueco son cobrables (si son domingos, se permite el salto)
+        const diasHueco = contarDiasCobrables(fechaEsperada, finHueco);
+        
+        if (diasHueco > 0) {
+             await trx.rollback();
+             return res.status(400).json({ 
+                message: `Error de continuidad: No puedes dejar huecos. Tu último pago cubre hasta ${toDateString(addDaysToDate(fechaEsperada, -1))}. Debes pagar los ${diasHueco} días hábiles pendientes comenzando desde ${fechaEsperada}.` 
+             });
         }
     }
 
@@ -439,8 +466,11 @@ if (traslape) {
 
     // Subida de Imagen
     const result = await uploadToCloudinary(req.file.buffer, {
-      resource_type: 'image',
+      resource_type: 'auto',
       folder: `comprobantes_pago/${conductorId}`,
+      // 🚀 EL TRUCO DE ORO: Forzamos a Cloudinary a convertir TODO a JPG.
+      // Así matamos el problema de que el HEIC no se pueda ver en el panel de Admin.
+      format: 'jpg', 
       transformation: [{ width: 1200, crop: 'limit', quality: 'auto' }]
     });
 
@@ -491,7 +521,10 @@ if (traslape) {
 // =====================================================
 const getResumenPonerseAlTanto = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
     const pendientesData = await buildPendientesData(db, conductorId);
 
     if (pendientesData.error) {
@@ -521,26 +554,44 @@ const getResumenPonerseAlTanto = async (req, res) => {
 };
 
 // =====================================================
-// OBTENER SALDO DE PÓLIZA
+// OBTENER SALDO DE PÓLIZA (LEER DEL CONDUCTOR)
 // =====================================================
 const getMiSaldoPoliza = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
+
+    // 1. Buscamos los datos personales del conductor (Ahorro y Tipo de Póliza)
     const conductor = await db('conductores')
       .where({ id: conductorId })
-      .select('saldo_poliza_mecanica', 'saldo_ahorro_mantenimiento', 'tipo_poliza')
+      .select('saldo_ahorro_mantenimiento', 'saldo_poliza_mecanica', 'tipo_poliza')
       .first();
 
     if (!conductor) {
       return res.status(404).json({ success: false, message: 'Conductor no encontrado' });
     }
 
+    // 2. Opcional: identificar vehículo actual solo para referencia visual
+    const asignacionActiva = await db('asignaciones')
+      .join('vehiculos', 'asignaciones.vehiculo_id', 'vehiculos.id')
+      .where('asignaciones.conductor_id', conductorId)
+      .where('asignaciones.activa', true)
+      .select('vehiculos.numero_vehiculo')
+      .first();
+
     res.json({
       success: true,
       saldo_poliza: parseFloat(conductor.saldo_poliza_mecanica || 0),
+      
       saldo_ahorro: parseFloat(conductor.saldo_ahorro_mantenimiento || 0),
-      tipo_poliza: conductor.tipo_poliza
+      tipo_poliza: conductor.tipo_poliza,
+      
+      // Opcional: Le mandamos el número del carro para que el Frontend sepa de dónde salió el dinero
+      vehiculo_actual: asignacionActiva ? asignacionActiva.numero_vehiculo : 'Sin vehículo asignado'
     });
+
   } catch (error) {
     console.error('Error en getMiSaldoPoliza:', error);
     res.status(500).json({ success: false, message: 'Error al obtener saldo', error: error.message });

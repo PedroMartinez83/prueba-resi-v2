@@ -11,7 +11,7 @@ const ProtectedRouteConductor = () => {
   // Mientras carga, mostrar pantalla de carga
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-purple-500 mx-auto"></div>
           <p className="text-white mt-4">Cargando...</p>
@@ -39,7 +39,7 @@ const ProtectedRouteConductor = () => {
   if (user.rol === 'conductor' && !user.conductorId) {
     console.error('❌ Usuario conductor sin conductorId:', user);
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 max-w-md">
           <h2 className="text-xl font-bold text-red-400 mb-2">Error de Configuración</h2>
           <p className="text-gray-300">

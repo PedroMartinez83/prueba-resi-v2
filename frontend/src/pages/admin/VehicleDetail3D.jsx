@@ -1,8 +1,8 @@
 // frontend/src/pages/admin/VehicleDetail3D.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import VehicleConductorPanel from '../../components/VehicleConductorPanel';
-import { useParams, useNavigate } from 'react-router-dom';
-import VehicleInvestmentPanel from '../../components/VehicleInvestmentPanel';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import VehiculoCorridaPanel from '../../components/VehiculoCorridaPanel';
 import EditableField from '../../components/EditableField';
 import adminService from '../../services/adminService';
 import AsignarConductorModal from '../../components/modales/AsignarConductorModal';
@@ -12,6 +12,7 @@ import CambiarConductorModal from '../../components/modales/CambiarConductorModa
 import ModalRegistrarPago from '../../components/pagos/ModalRegistrarPago';
 import { GenerarPDFButton } from '../../components/reportes/VehiculoPDFReport';
 import AsignarInversionModal from '../../components/inversiones/AsignarInversionModal';
+import InventarioModal from '../../components/vehiculos/InventarioModal';
 import { toPng } from 'html-to-image';
 import QRCode from 'qrcode';
 
@@ -40,6 +41,7 @@ import VehicleDisplay from '../../components/VehicleDisplay';
 const VehicleDetail3D = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   
   // Estados principales
   const [vehiculo, setVehiculo] = useState(null);
@@ -71,6 +73,9 @@ const VehicleDetail3D = () => {
   const [showAsignarInversionModal, setShowAsignarInversionModal] = useState(false);
   const [showRegistrarPagoModal, setShowRegistrarPagoModal] = useState(false);
   const [conductorParaPago, setConductorParaPago] = useState(null);
+  const [showInventarioModal, setShowInventarioModal] = useState(false);
+  const [inventarioSnapshotTipo, setInventarioSnapshotTipo] = useState('alta_inicial');
+  const [autoInventarioQueryProcessed, setAutoInventarioQueryProcessed] = useState(false);
 
   
   // Opciones para los campos select
@@ -224,6 +229,11 @@ const VehicleDetail3D = () => {
           datosActualizados[key] = sectionData[key];
         }
       });
+
+      // El conductor asignado debe cambiarse solo desde flujos dedicados.
+      delete datosActualizados.ConductorAsignadoId;
+      // NumeroVehiculo no se edita manualmente en update.
+      delete datosActualizados.NumeroVehiculo;
       
       if (Object.keys(datosActualizados).length === 0) {
         cancelEditingSection();
@@ -380,6 +390,34 @@ const VehicleDetail3D = () => {
     return date.toISOString().split('T')[0];
   };
 
+  const abrirInventarioPostAsignacion = (tipo = 'entrega_conductor') => {
+    setInventarioSnapshotTipo(tipo);
+    setShowInventarioModal(true);
+  };
+
+  useEffect(() => {
+    if (!vehiculo?.id || autoInventarioQueryProcessed) return;
+    const params = new URLSearchParams(location.search);
+    const openInventario = params.get('openInventario');
+    const tiposPermitidos = new Set(['alta_inicial', 'entrega_conductor', 'devolucion_conductor']);
+
+    if (openInventario && tiposPermitidos.has(openInventario)) {
+      setInventarioSnapshotTipo(openInventario);
+      setShowInventarioModal(true);
+      setAutoInventarioQueryProcessed(true);
+
+      params.delete('openInventario');
+      const nextSearch = params.toString();
+      navigate(
+        {
+          pathname: location.pathname,
+          search: nextSearch ? `?${nextSearch}` : ''
+        },
+        { replace: true }
+      );
+    }
+  }, [vehiculo?.id, autoInventarioQueryProcessed, location.search, location.pathname, navigate]);
+
   const getStatusColor = (estado) => {
     const colors = {
       'Disponible': 'bg-green-100/80 text-green-800 border-green-200',
@@ -501,13 +539,17 @@ const VehicleDetail3D = () => {
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 sm:gap-6">
           {/* COLUMNA 1: EL ACTIVO */}
           <div className="xl:col-span-4 space-y-4 sm:space-y-6">
+            
+            {/* Foto / 3D del Vehículo */}
             <div className="glass rounded-2xl overflow-hidden border border-primary/20">
               <VehicleDisplay vehiculo={vehiculo} />
             </div>
-            <VehicleInvestmentPanel 
-  vehiculo={vehiculo} 
-  onAsignarInversionClick={() => setShowAsignarInversionModal(true)}
-/>          </div>
+            
+            {/* 🚀 EL NUEVO PANEL DE CORRIDA */}
+            {/* Usamos el ID del vehículo actual (ajusta a vehiculo._id si usas MongoDB) */}
+            <VehiculoCorridaPanel vehiculo={vehiculo} />
+            
+          </div>
 
           {/* COLUMNA 2: LOS DATOS */}
           <div className="xl:col-span-4 space-y-4 sm:space-y-6">
@@ -581,14 +623,19 @@ const VehicleDetail3D = () => {
               {/* Contenido del TAB GENERAL */}
               {activeTab === 'general' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <EditableField
-                    label="Número de Vehículo"
-                    value={editingSection === 'general' ? sectionData?.NumeroVehiculo : vehiculo.NumeroVehiculo}
-                    onChange={(value) => handleFieldChange('NumeroVehiculo', value)}
-                    type="text"
-                    editing={editingSection === 'general'}
-                    error={validationErrors.NumeroVehiculo}
-                  />
+                  <div className="min-w-0">
+                    <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+                      Número de Vehículo
+                    </label>
+                    <p className="text-sm sm:text-base font-semibold text-white truncate">
+                      {vehiculo?.NumeroVehiculo || 'No especificado'}
+                    </p>
+                    {editingSection === 'general' && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Este valor no se edita manualmente.
+                      </p>
+                    )}
+                  </div>
 
                   <EditableField
                     label="Tipo Socio"
@@ -794,13 +841,29 @@ const VehicleDetail3D = () => {
                     editing={editingSection === 'mantenimiento'}
                   />
 
-                  <EditableField
-                    label="ID Conductor Asignado"
-                    value={editingSection === 'mantenimiento' ? sectionData?.ConductorAsignadoId : vehiculo.ConductorAsignadoId}
-                    onChange={(value) => handleFieldChange('ConductorAsignadoId', value)}
-                    type="number"
-                    editing={editingSection === 'mantenimiento'}
-                  />
+                  <div className="sm:col-span-2 rounded-lg border border-blue-400/30 bg-blue-500/10 p-4">
+                    <p className="text-xs text-blue-300 mb-1">Conductor asignado</p>
+                    <p className="text-white font-medium">
+                      {vehiculo?.ConductorInfo?.nombre || vehiculo?.ConductorInfo?.nombre_conductor || (vehiculo?.ConductorAsignadoId ? `ID #${vehiculo.ConductorAsignadoId}` : 'Sin conductor asignado')}
+                    </p>
+                    <p className="text-xs text-gray-300 mt-2">
+                      Este dato se gestiona solo con Asignar/Cambiar conductor.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (vehiculo?.ConductorAsignadoId || vehiculo?.ConductorInfo?.id) {
+                          setShowCambiarConductorModal(true);
+                          return;
+                        }
+                        setShowAsignarConductorModal(true);
+                      }}
+                      className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      {(vehiculo?.ConductorAsignadoId || vehiculo?.ConductorInfo?.id) ? 'Cambiar conductor' : 'Asignar conductor'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -838,6 +901,31 @@ const VehicleDetail3D = () => {
 
           {/* COLUMNA 3: LA ACCIÓN */}
           <div className="xl:col-span-4 space-y-4 sm:space-y-6">
+            {(vehiculo?.requiere_inventario_devolucion || vehiculo?.inventario_alerta) && (
+              <div className="glass rounded-2xl p-4 sm:p-5 border border-orange-500/30 bg-orange-500/10">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-orange-300 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-orange-200">Alerta de inventario</p>
+                    <p className="text-xs text-orange-100 mt-1">
+                      {vehiculo?.inventario_alerta || 'Hay inventarios pendientes para este vehiculo.'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInventarioSnapshotTipo('devolucion_conductor');
+                        setShowInventarioModal(true);
+                      }}
+                      className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium transition-colors"
+                    >
+                      <ClipboardList className="w-4 h-4" />
+                      Completar inventario pendiente
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <VehicleConductorPanel 
               vehiculo={vehiculo} 
               onAsignarClick={() => setShowAsignarConductorModal(true)}
@@ -885,7 +973,7 @@ const VehicleDetail3D = () => {
         {/* ========== MODAL PDF FUTURISTA ========== */}
         {showPDFModal && historialData && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 rounded-2xl p-6 sm:p-8 max-w-md w-full border border-purple-500/30 shadow-2xl">
+            <div className="bg-[#07425E] rounded-2xl p-6 sm:p-8 max-w-md w-full border border-purple-500/30 shadow-2xl">
               <div className="text-center">
                 <div className="mb-6">
                   <div className="w-16 h-16 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -939,12 +1027,13 @@ const VehicleDetail3D = () => {
           isOpen={showAsignarConductorModal}
           onClose={() => setShowAsignarConductorModal(false)}
           vehiculo={vehiculo}
-          onSuccess={async () => {
+          onSuccess={async (asignacionResponse) => {
             const response = await adminService.getVehiculoById(id);
             if (response.success) {
               setVehiculo(response.vehiculo);
             }
             setShowAsignarConductorModal(false);
+            abrirInventarioPostAsignacion('entrega_conductor');
           }}
         />
         
@@ -977,8 +1066,30 @@ const VehicleDetail3D = () => {
               setVehiculo(response.vehiculo);
             }
             setShowCambiarConductorModal(false);
+            abrirInventarioPostAsignacion('entrega_conductor');
           }}
         />
+
+        {showInventarioModal && (
+          <InventarioModal
+            isOpen={showInventarioModal}
+            onClose={() => setShowInventarioModal(false)}
+            vehiculo={vehiculo}
+            notify={(message, type = 'success') => {
+              if (type === 'error') {
+                alert(message);
+              }
+            }}
+            onSaved={async () => {
+              const response = await adminService.getVehiculoById(id);
+              if (response.success) {
+                setVehiculo(response.vehiculo);
+              }
+            }}
+            initialSnapshotTipo={inventarioSnapshotTipo}
+            prefillChoferNombre={vehiculo?.ConductorInfo?.nombre || ''}
+          />
+        )}
 
         {showRegistrarPagoModal && (
           <ModalRegistrarPago
@@ -1015,3 +1126,5 @@ const VehicleDetail3D = () => {
 };
 
 export default VehicleDetail3D;
+
+

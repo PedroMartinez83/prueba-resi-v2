@@ -15,6 +15,8 @@ import {
   UserPlus
 } from 'lucide-react';
 import { API_BASE_URL } from '@/services/api';
+import ModalNuevoInversionista from '../../components/inversiones/ModalNuevoInversionista';
+import adminService from '../../services/adminService';
 
 const Inversionistas = () => {
   const navigate = useNavigate();
@@ -36,6 +38,10 @@ const Inversionistas = () => {
     potenciales: 0,
     totalInvertido: 0
   });
+
+  // Modal para nuevo inversionista
+  const [isNuevoInversionistaModalOpen, setIsNuevoInversionistaModalOpen] = useState(false);
+
 
   useEffect(() => {
     fetchInversionistas();
@@ -88,7 +94,10 @@ const Inversionistas = () => {
   };
 
   // Filtrar inversionistas
-  const inversionistasFiltrados = inversionistas.filter(inv => {
+const inversionistasFiltrados = inversionistas.filter(inv => {
+    // 🚫 NUEVO: Omitir siempre los que están eliminados lógicamente
+    if (inv.status === 'Eliminado') return false;
+
     const matchSearch = searchTerm === '' || 
       inv.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       inv.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -152,7 +161,7 @@ const Inversionistas = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="glass rounded-2xl p-8 border border-white/10">
           <div className="flex items-center space-x-4">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
@@ -165,7 +174,7 @@ const Inversionistas = () => {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center p-4">
         <div className="glass rounded-2xl p-8 border border-red-500/30 max-w-md w-full">
           <div className="flex items-center space-x-3 text-red-400 mb-4">
             <AlertCircle className="w-6 h-6" />
@@ -184,7 +193,7 @@ const Inversionistas = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         
         {/* Header */}
@@ -370,9 +379,15 @@ const Inversionistas = () => {
 
         {/* Tabla de Inversionistas */}
         <div className="glass rounded-2xl border border-white/10 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-white/5">
+          
+          {/*  1. Scroll en ambas direcciones, altura límite y barra elegante  */}
+          <div className="overflow-auto max-h-[60vh] sidebar-scroll">
+            
+            {/*  2. relative y un ancho mínimo de 1000px (son 7 columnas)  */}
+            <table className="w-full min-w-[1000px] relative">
+              
+              {/*  3. Fondo sólido, sticky, top-0, z-10 y una sombrita  */}
+              <thead className="bg-[#1a1a2e] sticky top-0 z-10 shadow-sm border-b border-white/10">
                 <tr>
                   <th className="px-6 py-4 text-left text-sm font-medium text-gray-300">
                     Inversionista
@@ -506,7 +521,38 @@ const Inversionistas = () => {
         </div>
 
       </div>
+    <ModalNuevoInversionista 
+        isOpen={showNewModal} 
+        onClose={() => setShowNewModal(false)}
+        onSave={async (data) => {
+          try {
+            // 1. Llamamos a la API a través del servicio que creaste
+            const response = await adminService.crearInversionista(data);
+            
+            // 2. Verificamos si todo salió bien
+            if (response.success) {
+              alert('✅ Inversionista creado exitosamente');
+              await fetchInversionistas(); // Recargamos la lista para mostrar el nuevo inversionista
+              
+              setShowNewModal(false); // Cerramos el modal
+              
+              // 3. OPCIONAL: Si tienes una función que carga la tabla, llámala aquí
+              // para que el nuevo inversionista aparezca de inmediato sin recargar la página.
+              // Ej: cargarInversionistas(); o fetchInversionistas();
+              
+            } else {
+              // Si el backend nos mandó un error (ej. RFC duplicado)
+              alert(`⛔ Error: ${response.message}`);
+            }
+          } catch (error) {
+            console.error("Error al guardar:", error);
+            // Esto salta si hay error de red o de servidor (ej. el backend está apagado)
+            alert('❌ Error de conexión con el servidor. Revisa la consola para más detalles.');
+          }
+        }} 
+      />
     </div>
+    
   );
 };
 

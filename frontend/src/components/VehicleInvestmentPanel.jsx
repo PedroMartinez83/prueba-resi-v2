@@ -73,7 +73,7 @@ const VehicleInvestmentPanel = ({ vehiculo, onAsignarInversionClick }) => {
     setGuardando(true);
     try {
       const datosInversion = {
-        numero_serie_vehiculo: vehiculo.NumeroSerie,
+        numero_de_serie_vehiculo: vehiculo.NumeroSerie,
         inversionista_id: inversionista.id,
         modelo_negocio: datosCalculados.modelo || 'AUTOMANAGER',
         valor_factura: datosCalculados.datosVehiculo?.valor_factura,
@@ -152,6 +152,28 @@ const VehicleInvestmentPanel = ({ vehiculo, onAsignarInversionClick }) => {
     return total > 0 ? (recuperado / total) * 100 : 0;
   };
 
+  const obtenerMetricasSILegado = (inv = inversion) => {
+    if (!inv) {
+      return { pagoMensual: 0, ingresoMensual: 0, utilidadMensual: 0 };
+    }
+
+    const pagoMensual = parseFloat(inv.pago_mensual_inversionista || 0);
+    const totalCorrida = parseFloat(inv.total_corrida || 0);
+    const plazo = parseFloat(inv.plazo_para_inversionistas || inv.plazo_en_meses || 0);
+    const rentaDiaria = parseFloat(inv.renta || inv.renta_diaria || 0);
+
+    // Prioriza renta real guardada; si no existe, infiere mensual desde total/plazo.
+    const ingresoMensual = rentaDiaria > 0
+      ? (rentaDiaria * 26)
+      : (plazo > 0 && totalCorrida > 0 ? (totalCorrida / plazo) : 0);
+
+    return {
+      pagoMensual,
+      ingresoMensual,
+      utilidadMensual: ingresoMensual - pagoMensual
+    };
+  };
+
   // ========== FUNCIÓN PARA NAVEGAR A LA PÁGINA ==========
   const handleVerHistorial = () => {
     const referenciaVehiculo = vehiculo?.id || vehiculo?.NumeroSerie;
@@ -172,6 +194,7 @@ const VehicleInvestmentPanel = ({ vehiculo, onAsignarInversionClick }) => {
   if (inversion && !inversion.inversionista_id && !guardando) {
     const modeloNegocio = inversion.modelo_negocio || 'SI_LEGADO';
     const porcentajeRecuperado = calcularPorcentajeRecuperado();
+    const metricasSILegado = obtenerMetricasSILegado(inversion);
 
     return (
       <div className="glass rounded-2xl border border-yellow-500/30 overflow-hidden">
@@ -247,13 +270,13 @@ const VehicleInvestmentPanel = ({ vehiculo, onAsignarInversionClick }) => {
             // SI Legado: Pago Fijo
             <div className="text-center space-y-3 py-4">
               <p className="text-6xl font-bold text-white">
-                {formatCurrency(inversion.pago_mensual_inversionista || 8000)}
+                {formatCurrency(metricasSILegado.pagoMensual)}
               </p>
               <p className="text-sm text-gray-400 uppercase tracking-wide font-medium">
                 Pago Fijo al Inversionista / mes
               </p>
               <p className="text-base text-gray-500">
-                Utilidad Mensual: <span className="text-primary font-bold">{formatCurrency(2400)}</span>
+                Utilidad Mensual: <span className="text-primary font-bold">{formatCurrency(metricasSILegado.utilidadMensual)}</span>
               </p>
             </div>
           )}
@@ -336,7 +359,11 @@ const VehicleInvestmentPanel = ({ vehiculo, onAsignarInversionClick }) => {
                     </p>
                   </div>
                   <p className="text-base font-bold text-white">
-                    {formatCurrency(inversion.total_corrida || inversion.utilidad_empresa || 0)}
+                    {formatCurrency(
+                      modeloNegocio === 'SI_LEGADO'
+                        ? (inversion.total_corrida || 0)
+                        : (inversion.utilidad_empresa || 0)
+                    )}
                   </p>
                 </div>
               )}
@@ -462,31 +489,70 @@ if (!inversion && vehiculo?.TipoSocio === 'SD' && vehiculo?.total_corrida && !gu
           )}
         </div>
 
-        {/* 2. DATOS DEL CONTRATO EN GRID */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-            <div className="flex items-center gap-2 mb-2">
-              <DollarSign className="w-4 h-4 text-green-400" />
-              <p className="text-xs text-gray-400 uppercase">Corrida Total (Deuda)</p>
+        {/* 2. DATOS DEL CONTRATO EN LISTA APILADA (ESTILO TARJETA PREMIUM) */}
+        <div className="flex flex-col gap-3 lg:gap-4">
+          
+          {/* Tarjeta 1: Corrida Total */}
+          <div className="bg-gray-900 rounded-xl p-4 lg:p-5 border border-gray-700 flex items-center justify-between shadow-lg">
+            {/* Lado Izquierdo: Icono + Etiqueta */}
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-green-500/10 rounded-lg">
+                <DollarSign className="w-6 h-6 text-green-400" />
+              </div>
+              <div>
+                <p className="text-[11px] lg:text-xs text-gray-400 uppercase leading-none mb-1">
+                  Corrida Total (Deuda)
+                </p>
+                {/* Opcional: descripción pequeña si la tienes en la BD */}
+                <p className="text-gray-600 text-[10px] hidden sm:block">Monto total adeudado a recibir por contrato</p>
+              </div>
             </div>
-            <p className="text-2xl font-bold text-white">{formatCurrency(vehiculo.total_corrida)}</p>
+            {/* Lado Derecho: Valor Grande y Claro */}
+            <p className="text-2xl lg:text-3xl font-extrabold text-white text-right">
+              {formatCurrency(vehiculo.total_corrida)}
+            </p>
           </div>
           
-          <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingUp className="w-4 h-4 text-primary" />
-              <p className="text-xs text-gray-400 uppercase">Multiplicador</p>
+          {/* Tarjeta 2: Multiplicador */}
+          <div className="bg-gray-900 rounded-xl p-4 lg:p-5 border border-gray-700 flex items-center justify-between shadow-lg">
+            {/* Lado Izquierdo: Icono + Etiqueta */}
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-cyan-500/10 rounded-lg">
+                <TrendingUp className="w-6 h-6 text-cyan-400" />
+              </div>
+              <div>
+                <p className="text-[11px] lg:text-xs text-gray-400 uppercase leading-none mb-1">
+                  Multiplicador
+                </p>
+                <p className="text-gray-600 text-[10px] hidden sm:block">Factor de rendimiento de la inversión</p>
+              </div>
             </div>
-            <p className="text-2xl font-bold text-green-400">{vehiculo.multiplicador_corrida}x</p>
+            {/* Lado Derecho: Valor Grande y Claro */}
+            <p className="text-2xl lg:text-3xl font-extrabold text-cyan-400 text-right">
+              {vehiculo.multiplicador_corrida}x
+            </p>
           </div>
           
-          <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-            <div className="flex items-center gap-2 mb-2">
-              <Calendar className="w-4 h-4 text-blue-400" />
-              <p className="text-xs text-gray-400 uppercase">Plazo</p>
+          {/* Tarjeta 3: Plazo */}
+          <div className="bg-gray-900 rounded-xl p-4 lg:p-5 border border-gray-700 flex items-center justify-between shadow-lg">
+            {/* Lado Izquierdo: Icono + Etiqueta */}
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-blue-500/10 rounded-lg">
+                <Calendar className="w-6 h-6 text-blue-400" />
+              </div>
+              <div>
+                <p className="text-[11px] lg:text-xs text-gray-400 uppercase leading-none mb-1">
+                  Plazo
+                </p>
+                <p className="text-gray-600 text-[10px] hidden sm:block">Duración del contrato en meses</p>
+              </div>
             </div>
-            <p className="text-2xl font-bold text-primary">{vehiculo.plazo_corrida} meses</p>
+            {/* Lado Derecho: Valor Grande y Claro */}
+            <p className="text-2xl lg:text-3xl font-extrabold text-blue-400 text-right">
+              {vehiculo.plazo_corrida} meses
+            </p>
           </div>
+          
         </div>
 
         {/* 3. MENSAJE EXPLICATIVO */}
@@ -623,6 +689,7 @@ if (!inversion && vehiculo?.TipoSocio === 'SD' && vehiculo?.total_corrida && !gu
   const porcentajeRecuperado = calcularPorcentajeRecuperado();
   const modeloNegocio = inversion.modelo_negocio || 'SI_LEGADO';
   const proximoPago = calcularProximoPago();
+  const metricasSILegado = obtenerMetricasSILegado(inversion);
   
   return (
     <div className="glass rounded-2xl border border-primary/20 overflow-hidden">
@@ -686,13 +753,13 @@ if (!inversion && vehiculo?.TipoSocio === 'SD' && vehiculo?.total_corrida && !gu
           // SI Legado: Pago Fijo
           <div className="text-center space-y-3 py-4">
             <p className="text-6xl font-bold text-white">
-              {formatCurrency(8000)}
+              {formatCurrency(metricasSILegado.pagoMensual)}
             </p>
             <p className="text-sm text-gray-400 uppercase tracking-wide font-medium">
               Pago Fijo al Inversionista / mes
             </p>
             <p className="text-base text-gray-500">
-              Utilidad Mensual: <span className="text-primary font-bold">{formatCurrency(2400)}</span>
+              Utilidad Mensual: <span className="text-primary font-bold">{formatCurrency(metricasSILegado.utilidadMensual)}</span>
             </p>
           </div>
         )}
@@ -737,7 +804,7 @@ if (!inversion && vehiculo?.TipoSocio === 'SD' && vehiculo?.total_corrida && !gu
                   <p className="text-xs text-gray-500 mt-2">
                     Monto: <span className="font-bold text-white">
                       {modeloNegocio === 'SI_LEGADO' 
-                        ? formatCurrency(8000)
+                        ? formatCurrency(metricasSILegado.pagoMensual)
                         : formatCurrency((inversion.renta || 400) * 26)
                       }
                     </span>
@@ -832,7 +899,7 @@ if (!inversion && vehiculo?.TipoSocio === 'SD' && vehiculo?.total_corrida && !gu
               </div>
               <p className="text-base font-bold text-white">
                 {modeloNegocio === 'SI_LEGADO' 
-                  ? formatCurrency(10400)
+                  ? formatCurrency(metricasSILegado.ingresoMensual)
                   : formatCurrency(inversion.utilidad_empresa || 0)
                 }
               </p>

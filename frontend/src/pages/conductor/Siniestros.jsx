@@ -145,7 +145,7 @@ const Siniestros = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 bg-[#07425E] p-6 rounded-2xl">
       
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">

@@ -2,19 +2,30 @@
 const postgresService = require('../services/postgresService');
 const auditService = require('../services/auditService');
 const { getVehiculosEnumValues } = require('../utils/enumHelper');
+const cloudinary = require('../config/cloudinary');
 
 // Obtener db y TABLES
 const { db, TABLES } = postgresService;
+const INVENTARIO_SNAPSHOTS_TABLE = 'inventario_snapshots';
+const INVENTARIO_TIPOS_VALIDOS = new Set(['alta_inicial', 'entrega_conductor', 'devolucion_conductor']);
+const MAX_FOTOS_INVENTARIO = 4;
 
 const construirNumeroVehiculoEstandar = (tipoSocio, numeroUnidad, idFallback) => {
-  const tipo = (tipoSocio || 'SD').toString().trim() || 'SD';
+  // 1. Forzamos a que siempre exista 'SD' si viene vacío, undefined o null
+  const tipo = (tipoSocio && String(tipoSocio).trim() !== '') ? String(tipoSocio).trim().toUpperCase() : 'SD';
+  
+  // 2. Extraemos el número
   const unidadNumerica = parseInt(numeroUnidad, 10);
   const unidadFallback = parseInt(idFallback, 10);
 
-  const unidadFinal = Number.isInteger(unidadNumerica) && unidadNumerica > 0
-    ? unidadNumerica
-    : (Number.isInteger(unidadFallback) && unidadFallback > 0 ? unidadFallback : 0);
+  let unidadFinal = 0;
+  if (!isNaN(unidadNumerica) && unidadNumerica > 0) {
+    unidadFinal = unidadNumerica;
+  } else if (!isNaN(unidadFallback) && unidadFallback > 0) {
+    unidadFinal = unidadFallback;
+  }
 
+  // 3. Ensamblamos con los 4 ceros siempre
   return `${tipo}-${String(unidadFinal).padStart(4, '0')}`;
 };
 
@@ -46,7 +57,9 @@ const obtenerNumeroVehiculoNormalizado = (record) => {
 const mapearCamposVehiculo = (data) => {
   const mapeo = {
     'TipoSocio': 'tipo_socio',
+    'tipo_socio': 'tipo_socio',
     'NumeroUnidad': 'numero_unidad',
+    'numero_unidad': 'numero_unidad',
     'Marca': 'marca',
     'Modelo': 'modelo',
     'TipoVehiculo': 'tipo_vehiculo',
@@ -65,6 +78,7 @@ const mapearCamposVehiculo = (data) => {
     'MontoDeducible': 'monto_deducible',
     'Observaciones': 'observaciones',
     'NumeroVehiculo': 'numero_vehiculo',
+    'numero_vehiculo': 'numero_vehiculo',
     'NumeroMotor': 'numero_motor',
     'ConductorAsignadoId': 'conductor_asignado_id',
     'PolizaSeguroId': 'poliza_seguro_id',
@@ -73,10 +87,21 @@ const mapearCamposVehiculo = (data) => {
     'multiplicador_corrida': 'multiplicador_corrida',
     'plazo_corrida': 'plazo_corrida'
   };
+  const camposPermitidosPostgres = new Set(Object.values(mapeo));
 
   const resultado = {};
   for (const [key, value] of Object.entries(data)) {
-    const campoPostgres = mapeo[key] || key.toLowerCase();
+    let campoPostgres = mapeo[key];
+
+    // Permite payloads internos en snake_case solo si el campo está explícitamente aprobado.
+    if (!campoPostgres && camposPermitidosPostgres.has(key)) {
+      campoPostgres = key;
+    }
+
+    // Ignorar cualquier campo no reconocido para evitar mass assignment.
+    if (!campoPostgres) {
+      continue;
+    }
     
     // NO incluir foreign keys si son null, 0, o undefined
     if ((campoPostgres === 'poliza_seguro_id' || campoPostgres === 'conductor_asignado_id') && 
@@ -131,11 +156,312 @@ const mapearCamposRespuestaVehiculo = (record) => {
   saldo_pendiente_corrida: parseFloat(record.saldo_pendiente_corrida || 0),
   porcentaje_pagado: parseFloat(record.porcentaje_pagado || 0),
   fecha_inicio_corrida: record.fecha_inicio_corrida || null,
+  tiene_inventario_inicial: Boolean(record.tiene_inventario_inicial),
+  fecha_inventario_inicial: record.fecha_inventario_inicial || null,
+  inventario_inicial_pendiente: !Boolean(record.tiene_inventario_inicial),
   
   Conductores: record.conductores || [],
   created_at: record.created_at,
   updated_at: record.updated_at
 };
+};
+
+const parseVehiculoIdFromParams = (id) => {
+  const vehiculoId = parseInt(id, 10);
+  if (!Number.isInteger(vehiculoId) || vehiculoId <= 0) {
+    return null;
+  }
+  return vehiculoId;
+};
+
+const parseSnapshotIdFromParams = (id) => {
+  const snapshotId = parseInt(id, 10);
+  if (!Number.isInteger(snapshotId) || snapshotId <= 0) {
+    return null;
+  }
+  return snapshotId;
+};
+
+const normalizeJsonField = (value, fallback) => {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  return value;
+};
+
+const normalizeDateField = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const normalizeNumberField = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+
+const sanitizeSnapshotTipo = (value) => {
+  if (!value) return null;
+  const tipo = String(value).trim().toLowerCase();
+  return INVENTARIO_TIPOS_VALIDOS.has(tipo) ? tipo : null;
+};
+
+const normalizeEstado = (value, fallback = '') => {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value).trim();
+};
+
+const requiereInventarioInicialParaEstado = (estado) => {
+  const estadoNormalizado = String(estado || '').trim().toLowerCase();
+  return estadoNormalizado === 'asignado';
+};
+
+const getReqFilesAsArray = (value) => {
+  if (!value) return [];
+  return Array.isArray(value) ? value.filter(Boolean) : [value];
+};
+
+const gatherFotoFiles = (req) => {
+  if (!req.files || typeof req.files !== 'object') return [];
+
+  const fotos = [];
+  const directKeys = ['fotos', 'fotos[]', 'foto', 'foto[]'];
+
+  directKeys.forEach((key) => {
+    fotos.push(...getReqFilesAsArray(req.files[key]));
+  });
+
+  Object.entries(req.files).forEach(([key, value]) => {
+    const keyNormalized = String(key || '').toLowerCase();
+    if (!keyNormalized.startsWith('foto')) return;
+    if (directKeys.includes(key)) return;
+    fotos.push(...getReqFilesAsArray(value));
+  });
+
+  const uniqueByPath = new Map();
+  fotos.forEach((file) => {
+    const dedupeKey = `${file?.name || ''}:${file?.tempFilePath || ''}:${file?.size || ''}`;
+    uniqueByPath.set(dedupeKey, file);
+  });
+
+  return Array.from(uniqueByPath.values());
+};
+
+const uploadFileToCloudinary = async (file, options = {}) => {
+  if (!file || !file.tempFilePath) {
+    throw new Error('Archivo invalido para subir a Cloudinary');
+  }
+
+  const result = await cloudinary.uploader.upload(file.tempFilePath, options);
+  return {
+    url: result.secure_url,
+    publicId: result.public_id
+  };
+};
+
+const ensureVehiculoExists = async (trx, vehiculoId) => {
+  const vehiculo = await trx(TABLES.VEHICULOS)
+    .where('id', vehiculoId)
+    .first();
+
+  return vehiculo || null;
+};
+
+const mapSnapshotResponse = (record) => {
+  if (!record) return null;
+
+  return {
+    id: record.id,
+    vehiculo_id: record.vehiculo_id,
+    asignacion_id: record.asignacion_id,
+    conductor_id: record.conductor_id,
+    snapshot_tipo: record.snapshot_tipo,
+    snapshot_numero: record.snapshot_numero,
+    estado: record.estado,
+    fecha_evento: record.fecha_evento,
+    kilometraje: record.kilometraje,
+    observaciones: record.observaciones,
+    fotos_urls_json: normalizeJsonField(record.fotos_urls_json, []),
+    payload_json: normalizeJsonField(record.payload_json, {}),
+    creado_por: record.creado_por,
+    actualizado_por: record.actualizado_por,
+    created_at: record.created_at,
+    updated_at: record.updated_at
+  };
+};
+
+const flattenObjectForDiff = (input, prefix = '', output = {}) => {
+  if (input === null || input === undefined) return output;
+
+  if (Array.isArray(input)) {
+    output[prefix || 'root'] = input;
+    return output;
+  }
+
+  if (typeof input !== 'object') {
+    output[prefix || 'root'] = input;
+    return output;
+  }
+
+  Object.entries(input).forEach(([key, value]) => {
+    const nextPrefix = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      flattenObjectForDiff(value, nextPrefix, output);
+    } else {
+      output[nextPrefix] = value;
+    }
+  });
+
+  return output;
+};
+
+const buildInventarioInicialByVehiculo = async (vehiculoIds = []) => {
+  const ids = (vehiculoIds || [])
+    .map((id) => parseInt(id, 10))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (ids.length === 0) {
+    return new Map();
+  }
+
+  const rows = await db(INVENTARIO_SNAPSHOTS_TABLE)
+    .select('vehiculo_id')
+    .min('fecha_evento as fecha_inventario_inicial')
+    .min('created_at as created_at_inicial')
+    .whereIn('vehiculo_id', ids)
+    .where('snapshot_tipo', 'alta_inicial')
+    .groupBy('vehiculo_id');
+
+  const byVehiculo = new Map();
+  rows.forEach((row) => {
+    const vehiculoId = parseInt(row.vehiculo_id, 10);
+    if (!Number.isInteger(vehiculoId) || vehiculoId <= 0) return;
+    byVehiculo.set(vehiculoId, {
+      tiene_inventario_inicial: true,
+      fecha_inventario_inicial: row.fecha_inventario_inicial || row.created_at_inicial || null
+    });
+  });
+
+  return byVehiculo;
+};
+
+const shouldSkipInventarioDiffKey = (key) => {
+  const normalized = String(key || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized.startsWith('firmas.')) return true;
+
+  return [
+    'reviso_nombre_mecanico',
+    'recibe_nombre_arrendatario',
+    'firma_mecanico_base64',
+    'firma_arrendatario_base64'
+  ].includes(normalized);
+};
+
+const buildInventarioSeguimientoByVehiculo = async (vehiculos = []) => {
+  const vehiculoIds = vehiculos
+    .map((v) => parseInt(v?.id, 10))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (vehiculoIds.length === 0) {
+    return new Map();
+  }
+
+  const activeAsignacionByVehiculo = new Map();
+  vehiculos.forEach((v) => {
+    const vehiculoId = parseInt(v?.id, 10);
+    if (!Number.isInteger(vehiculoId) || vehiculoId <= 0) return;
+    const asignacionActivaId = parseInt(v?.asignacion_activa_id || v?.asignacion_id, 10);
+    if (Number.isInteger(asignacionActivaId) && asignacionActivaId > 0) {
+      activeAsignacionByVehiculo.set(vehiculoId, asignacionActivaId);
+    }
+  });
+
+  const snapshots = await db(INVENTARIO_SNAPSHOTS_TABLE)
+    .select('vehiculo_id', 'asignacion_id', 'snapshot_tipo')
+    .whereIn('vehiculo_id', vehiculoIds)
+    .where('estado', 'completado')
+    .whereIn('snapshot_tipo', ['entrega_conductor', 'devolucion_conductor']);
+
+  const hasByVehiculoTipo = new Set();
+  const hasByVehiculoAsignacionTipo = new Set();
+  snapshots.forEach((s) => {
+    const vehiculoId = parseInt(s.vehiculo_id, 10);
+    const asignacionId = parseInt(s.asignacion_id, 10);
+    const tipo = String(s.snapshot_tipo || '').trim().toLowerCase();
+    if (!Number.isInteger(vehiculoId) || !tipo) return;
+
+    hasByVehiculoTipo.add(`${vehiculoId}:${tipo}`);
+    if (Number.isInteger(asignacionId) && asignacionId > 0) {
+      hasByVehiculoAsignacionTipo.add(`${vehiculoId}:${asignacionId}:${tipo}`);
+    }
+  });
+
+  const asignacionesCerradas = await db('asignaciones')
+    .select('id', 'vehiculo_id', 'fecha_fin', 'updated_at', 'created_at')
+    .whereIn('vehiculo_id', vehiculoIds)
+    .where('activa', false)
+    .orderBy('vehiculo_id', 'asc')
+    .orderByRaw('COALESCE(fecha_fin, updated_at, created_at) DESC')
+    .orderBy('id', 'desc');
+
+  const ultimaAsignacionCerradaByVehiculo = new Map();
+  asignacionesCerradas.forEach((row) => {
+    const vehiculoId = parseInt(row.vehiculo_id, 10);
+    const asignacionId = parseInt(row.id, 10);
+    if (!Number.isInteger(vehiculoId) || !Number.isInteger(asignacionId)) return;
+    if (!ultimaAsignacionCerradaByVehiculo.has(vehiculoId)) {
+      ultimaAsignacionCerradaByVehiculo.set(vehiculoId, asignacionId);
+    }
+  });
+
+  const result = new Map();
+  vehiculoIds.forEach((vehiculoId) => {
+    const activeAsignacionId = activeAsignacionByVehiculo.get(vehiculoId) || null;
+    const ultimaAsignacionCerradaId = ultimaAsignacionCerradaByVehiculo.get(vehiculoId) || null;
+
+    const hasEntrega = activeAsignacionId
+      ? hasByVehiculoAsignacionTipo.has(`${vehiculoId}:${activeAsignacionId}:entrega_conductor`) ||
+        hasByVehiculoTipo.has(`${vehiculoId}:entrega_conductor`)
+      : hasByVehiculoTipo.has(`${vehiculoId}:entrega_conductor`);
+
+    const hasDevolucion = ultimaAsignacionCerradaId
+      ? hasByVehiculoAsignacionTipo.has(`${vehiculoId}:${ultimaAsignacionCerradaId}:devolucion_conductor`) ||
+        hasByVehiculoTipo.has(`${vehiculoId}:devolucion_conductor`)
+      : hasByVehiculoTipo.has(`${vehiculoId}:devolucion_conductor`);
+
+    const requiereInventarioEntrega = Boolean(activeAsignacionId) && !hasEntrega;
+    const requiereInventarioDevolucion = !activeAsignacionId && Boolean(ultimaAsignacionCerradaId) && !hasDevolucion;
+
+    let inventarioAlerta = null;
+    if (requiereInventarioDevolucion) {
+      inventarioAlerta = 'Pendiente inventario de devolucion';
+    }
+
+    result.set(vehiculoId, {
+      asignacion_activa_id: activeAsignacionId,
+      ultima_asignacion_cerrada_id: ultimaAsignacionCerradaId,
+      tiene_inventario_entrega_actual: Boolean(hasEntrega),
+      tiene_inventario_devolucion_ultima: Boolean(hasDevolucion),
+      requiere_inventario_entrega: requiereInventarioEntrega,
+      requiere_inventario_devolucion: requiereInventarioDevolucion,
+      inventario_alerta: inventarioAlerta
+    });
+  });
+
+  return result;
 };
 
 // ========== OBTENER TODOS LOS VEHÍCULOS ==========
@@ -151,10 +477,12 @@ exports.getVehiculos = async (req, res) => {
 
       .select(
         'v.*',
+        'a.id as asignacion_activa_id',
         'c.nombre_conductor',
         'c.numero_telefono as conductor_telefono',
         'a.renta_diaria',
-        'a.abono_poliza_mantenimiento'
+        'a.abono_poliza_mantenimiento',
+  
       )
       .orderBy('v.tipo_socio')
       .orderBy('v.numero_unidad');
@@ -169,8 +497,29 @@ exports.getVehiculos = async (req, res) => {
       });
     }
     
+    const inventarioSeguimientoByVehiculo = await buildInventarioSeguimientoByVehiculo(vehiculos);
+    const inventarioInicialByVehiculo = await buildInventarioInicialByVehiculo(
+      vehiculos.map((v) => v.id)
+    );
+
     const vehiculosMapeados = vehiculos.map(v => {
       const vehiculoMapeado = mapearCamposRespuestaVehiculo(v);
+      const inventarioSeguimiento = inventarioSeguimientoByVehiculo.get(parseInt(v.id, 10));
+      const inventarioInicial = inventarioInicialByVehiculo.get(parseInt(v.id, 10));
+
+      if (inventarioInicial?.tiene_inventario_inicial) {
+        vehiculoMapeado.tiene_inventario_inicial = true;
+        vehiculoMapeado.inventario_inicial_pendiente = false;
+        if (!vehiculoMapeado.fecha_inventario_inicial) {
+          vehiculoMapeado.fecha_inventario_inicial = inventarioInicial.fecha_inventario_inicial;
+        }
+      }
+
+      if (inventarioSeguimiento) {
+        vehiculoMapeado.requiere_inventario_entrega = inventarioSeguimiento.requiere_inventario_entrega;
+        vehiculoMapeado.requiere_inventario_devolucion = inventarioSeguimiento.requiere_inventario_devolucion;
+        vehiculoMapeado.inventario_alerta = inventarioSeguimiento.inventario_alerta;
+      }
       
       if (v.nombre_conductor) {
         vehiculoMapeado.ConductorInfo = {
@@ -281,10 +630,11 @@ exports.getVehiculoById = async (req, res) => {
         'v.multiplicador_corrida as vehiculo_multiplicador',   // ✅ CORREGIDO: ALIAS ÚNICO
         'v.plazo_corrida as vehiculo_plazo',    
         'v.total_pagado_corrida',
-  'v.saldo_pendiente_corrida',
-  'v.porcentaje_pagado',
-  'v.fecha_inicio_corrida',
-  'a.id as asignacion_id',               // ✅ CORREGIDO: ALIAS ÚNICO
+        'v.saldo_pendiente_corrida',
+        'v.porcentaje_pagado',
+        'v.fecha_inicio_corrida',
+        'a.id as asignacion_id',               // ✅ CORREGIDO: ALIAS ÚNICO
+        'v.renta_sugerida',
         'a.id as asignacion_id',
         'a.fecha_inicio as fecha_asignacion',
         'a.fecha_fin as fecha_fin_asignacion',
@@ -365,12 +715,38 @@ exports.getVehiculoById = async (req, res) => {
       Observaciones: vehiculo.observaciones,
       NumeroMotor: vehiculo.numero_motor,
       // ✅ CORREGIDO: USAR LOS ALIAS CORRECTOS
+      renta_sugerida: vehiculo.renta_sugerida || null,
+      asignacion_activa_id: vehiculo.asignacion_id || null,
       total_corrida: vehiculo.vehiculo_total_corrida || null,
       multiplicador_corrida: vehiculo.vehiculo_multiplicador || null,
       plazo_corrida: vehiculo.vehiculo_plazo || null,
+      total_pagado_corrida: vehiculo.total_pagado_corrida || 0,
+      saldo_pendiente_corrida: vehiculo.saldo_pendiente_corrida || 0,
+      porcentaje_pagado: vehiculo.porcentaje_pagado || 0,
       created_at: vehiculo.created_at,
       updated_at: vehiculo.updated_at
     };
+
+    const inventarioInicialByVehiculo = await buildInventarioInicialByVehiculo([vehiculo.id]);
+    const inventarioInicial = inventarioInicialByVehiculo.get(parseInt(vehiculo.id, 10));
+    if (inventarioInicial?.tiene_inventario_inicial) {
+      vehiculoMapeado.tiene_inventario_inicial = true;
+      vehiculoMapeado.inventario_inicial_pendiente = false;
+      if (!vehiculoMapeado.fecha_inventario_inicial) {
+        vehiculoMapeado.fecha_inventario_inicial = inventarioInicial.fecha_inventario_inicial;
+      }
+    }
+
+    const inventarioSeguimientoByVehiculo = await buildInventarioSeguimientoByVehiculo([{
+      id: vehiculo.id,
+      asignacion_id: vehiculo.asignacion_id
+    }]);
+    const inventarioSeguimiento = inventarioSeguimientoByVehiculo.get(parseInt(vehiculo.id, 10));
+    if (inventarioSeguimiento) {
+      vehiculoMapeado.requiere_inventario_entrega = inventarioSeguimiento.requiere_inventario_entrega;
+      vehiculoMapeado.requiere_inventario_devolucion = inventarioSeguimiento.requiere_inventario_devolucion;
+      vehiculoMapeado.inventario_alerta = inventarioSeguimiento.inventario_alerta;
+    }
     
     if (vehiculo.conductor_id) {
       vehiculoMapeado.ConductorInfo = {
@@ -457,32 +833,36 @@ exports.getVehiculoById = async (req, res) => {
 // ========== CREAR VEHÍCULO CON AUDITORÍA ==========
 exports.createVehiculo = async (req, res) => {
   const trx = await db.transaction();
-  
   try {
     await auditService.setUserContext(trx, req.user);
-    
+    // 1. Mapeamos los datos (El mapeador podria estar forzando el 'SD')
     const datosPostgres = mapearCamposVehiculo(req.body);
-    console.log('🔍 Datos mapeados que se insertarán:', datosPostgres);
-    
-    // 🆕 LOG DE CAMPOS SD
+    // =====================================================================
+    // Forzar al backend a respetar el tipo de socio del formulario
+    // =====================================================================
+    const tipoReal = req.body.TipoSocio || req.body.tipo_socio;
+    if (tipoReal) {
+      datosPostgres.tipo_socio = tipoReal.substring(0, 2).toUpperCase();
+    } else {
+      datosPostgres.tipo_socio = datosPostgres.tipo_socio || 'SD';
+    }
+    datosPostgres.numero_unidad = req.body.NumeroUnidad || req.body.numero_unidad || datosPostgres.numero_unidad || 0;
+    // 3. LOG DE CAMPOS FINANCIEROS
     if (datosPostgres.total_corrida || datosPostgres.multiplicador_corrida || datosPostgres.plazo_corrida) {
-      console.log('🚗 Vehículo SD detectado con campos:', {
-        total_corrida: datosPostgres.total_corrida,
-        multiplicador_corrida: datosPostgres.multiplicador_corrida,
-        plazo_corrida: datosPostgres.plazo_corrida
-      });
+      console.log(`Vehiculo ${datosPostgres.tipo_socio} detectado con campos financieros`);
     }
-    
-    if (datosPostgres.tipo_socio && datosPostgres.numero_unidad) {
-      datosPostgres.numero_vehiculo = construirNumeroVehiculoEstandar(
-        datosPostgres.tipo_socio,
-        datosPostgres.numero_unidad
-      );
-    }
-    
-    const camposRequeridos = ['tipo_socio', 'numero_unidad', 'marca', 'modelo', 'placa'];
+    // 4. CONSTRUCCION DEL NUMERO DE VEHICULO
+    datosPostgres.numero_vehiculo = construirNumeroVehiculoEstandar(
+      datosPostgres.tipo_socio,
+      datosPostgres.numero_unidad
+    );
+    // En alta nueva respetamos el estado solicitado (default: Disponible).
+    const estadoSolicitado = normalizeEstado(datosPostgres.estado, 'Disponible');
+    datosPostgres.estado = estadoSolicitado;
+    console.log('Numero de vehiculo final a guardar:', datosPostgres.numero_vehiculo);
+    // 5. Validamos campos requeridos
+    const camposRequeridos = ['tipo_socio', 'marca', 'modelo', 'placa'];
     const camposFaltantes = camposRequeridos.filter(campo => !datosPostgres[campo]);
-    
     if (camposFaltantes.length > 0) {
       await trx.rollback();
       return res.status(400).json({
@@ -491,21 +871,40 @@ exports.createVehiculo = async (req, res) => {
         camposFaltantes
       });
     }
-    
     Object.keys(datosPostgres).forEach(key => {
       if (typeof datosPostgres[key] === 'string') {
         datosPostgres[key] = datosPostgres[key].trim().replace(/^["']|["']$/g, '');
       }
     });
-    
     datosPostgres.created_at = new Date();
     datosPostgres.updated_at = new Date();
-    
+    // =====================================================================
+    // INICIALIZAR CAMPOS FINANCIEROS (INVERSION Y SALDO)
+    // =====================================================================
+    // 1. Guardar la Inversion Total como Precio de Compra
+    if (req.body.precio_compra !== undefined) {
+      datosPostgres.precio_compra = parseFloat(req.body.precio_compra);
+      console.log(`Precio de compra (Inversion Total) guardado: ${datosPostgres.precio_compra}`);
+    }
+    // 2. Guardar la renta sugerida
+    if (req.body.renta_sugerida !== undefined) {
+      datosPostgres.renta_sugerida = parseFloat(req.body.renta_sugerida);
+      console.log(`Renta sugerida guardada: ${datosPostgres.renta_sugerida}`);
+    }
+    // 3. Saldo pendiente inicial
+    if (datosPostgres.total_corrida && parseFloat(datosPostgres.total_corrida) > 0) {
+      datosPostgres.saldo_pendiente_corrida = parseFloat(datosPostgres.total_corrida);
+      console.log(`Saldo pendiente inicializado en: ${datosPostgres.saldo_pendiente_corrida}`);
+    } else {
+      datosPostgres.saldo_pendiente_corrida = 0;
+    }
+    // =====================================================================
+    // INSERCION EN LA BASE DE DATOS
+    // =====================================================================
     const [nuevoVehiculo] = await trx(TABLES.VEHICULOS)
       .insert(datosPostgres)
       .returning('*');
-    
-    console.log('✅ Vehículo creado en BD:', {
+    console.log('Vehiculo creado en BD:', {
       id: nuevoVehiculo.id,
       numero_vehiculo: nuevoVehiculo.numero_vehiculo,
       tipo_socio: nuevoVehiculo.tipo_socio,
@@ -513,101 +912,94 @@ exports.createVehiculo = async (req, res) => {
       multiplicador_corrida: nuevoVehiculo.multiplicador_corrida,
       plazo_corrida: nuevoVehiculo.plazo_corrida
     });
-    
     await trx.commit();
-    
-    res.status(201).json({
+    const responsePayload = {
       success: true,
       vehiculo: mapearCamposRespuestaVehiculo(nuevoVehiculo),
-      message: 'Vehículo creado exitosamente'
-    });
+      message: 'Vehiculo creado exitosamente'
+    };
+    res.status(201).json(responsePayload);
   } catch (error) {
     await trx.rollback();
-    
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error creando vehículo: ${error.message}`,
+      mensaje: `Error creando vehiculo: ${error.message}`,
       stack_trace: error.stack,
       contexto: req.body,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
       metodo_http: req.method
     });
-    
     if (error.code === '23505') {
       const constraint = (error.constraint || '').toLowerCase();
-      let mensaje = 'Ya existe un vehículo con esa placa o número de serie';
-
+      let mensaje = 'Ya existe un vehiculo con esa placa o numero de serie';
       if (constraint.includes('vehiculos_numero_vehiculo_unique')) {
-        mensaje = 'Ya existe un vehículo con ese número de vehículo';
+        mensaje = 'Ya existe un vehiculo con ese numero de vehiculo';
       } else if (constraint.includes('placa')) {
-        mensaje = 'Ya existe un vehículo con esa placa';
+        mensaje = 'Ya existe un vehiculo con esa placa';
       } else if (constraint.includes('serie')) {
-        mensaje = 'Ya existe un vehículo con ese número de serie';
+        mensaje = 'Ya existe un vehiculo con ese numero de serie';
       }
-
       return res.status(400).json({
         success: false,
         error: mensaje
       });
     }
-    
     res.status(500).json({ 
       success: false,
-      error: 'Error al crear el vehículo',
+      error: 'Error al crear el vehiculo',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
-
-// ========== ACTUALIZAR VEHÍCULO CON AUDITORÍA ==========
+// ========== ACTUALIZAR VEHICULO CON AUDITORIA ==========
 exports.updateVehiculo = async (req, res) => {
   const trx = await db.transaction();
-  
   try {
     const { id } = req.params;
-    
     await auditService.setUserContext(trx, req.user);
-    
     const vehiculoAnterior = await trx(TABLES.VEHICULOS)
       .where('id', id)
       .first();
-    
     if (!vehiculoAnterior) {
       await trx.rollback();
       return res.status(404).json({
         success: false,
-        error: 'Vehículo no encontrado'
+        error: 'Vehiculo no encontrado'
       });
     }
-    
     const datosPostgres = mapearCamposVehiculo(req.body);
-    
-    // ⚠️ IMPORTANTE: NO regenerar numero_vehiculo en modo edición
-    // Si se intenta cambiar, mantener el original
+    if (Object.prototype.hasOwnProperty.call(datosPostgres, 'estado')) {
+      const estadoDestino = normalizeEstado(datosPostgres.estado, vehiculoAnterior.estado);
+      if (requiereInventarioInicialParaEstado(estadoDestino) && !vehiculoAnterior.tiene_inventario_inicial) {
+        await trx.rollback();
+        return res.status(400).json({
+          success: false,
+          code: 'INVENTARIO_INICIAL_REQUERIDO_ESTADO',
+          error: 'No se puede cambiar a Asignado sin inventario inicial completado.'
+        });
+      }
+      datosPostgres.estado = estadoDestino;
+    }
+    // IMPORTANTE: NO regenerar numero_vehiculo en modo edicion
     delete datosPostgres.numero_vehiculo;
-    
     Object.keys(datosPostgres).forEach(key => {
       if (typeof datosPostgres[key] === 'string') {
         datosPostgres[key] = datosPostgres[key].trim().replace(/^["']|["']$/g, '');
       }
     });
-    
     datosPostgres.updated_at = new Date();
-    
     const [vehiculoActualizado] = await trx(TABLES.VEHICULOS)
       .where('id', id)
       .update(datosPostgres)
       .returning('*');
-    
     if (vehiculoAnterior.estado !== vehiculoActualizado.estado || 
         vehiculoAnterior.conductor_asignado_id !== vehiculoActualizado.conductor_asignado_id) {
-      
       await auditService.logCriticalChange({
         usuario_id: req.user.id,
         tipo_cambio: 'cambio_estado_vehiculo',
-        descripcion: `Vehículo ${vehiculoActualizado.numero_vehiculo} cambió de estado`,
+        descripcion: `Vehiculo ${vehiculoActualizado.numero_vehiculo} cambio de estado`,
         datos_sensibles: {
           estado_anterior: vehiculoAnterior.estado,
           estado_nuevo: vehiculoActualizado.estado,
@@ -617,44 +1009,38 @@ exports.updateVehiculo = async (req, res) => {
         ip_address: auditService.getClientIp(req)
       });
     }
-    
     await trx.commit();
-    
     res.json({
       success: true,
       vehiculo: mapearCamposRespuestaVehiculo(vehiculoActualizado),
-      message: 'Vehículo actualizado exitosamente'
+      message: 'Vehiculo actualizado exitosamente'
     });
   } catch (error) {
     await trx.rollback();
-    
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error actualizando vehículo ${req.params.id}: ${error.message}`,
+      mensaje: `Error actualizando vehiculo ${req.params.id}: ${error.message}`,
       stack_trace: error.stack,
       contexto: req.body,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
       metodo_http: req.method
     });
-    
     if (error.code === '23505') {
       return res.status(400).json({
         success: false,
-        error: 'Ya existe otro vehículo con esa placa o número de serie'
+        error: 'Ya existe otro vehiculo con esa placa o numero de serie'
       });
     }
-    
     res.status(500).json({ 
       success: false,
-      error: 'Error al actualizar el vehículo',
+      error: 'Error al actualizar el vehiculo',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
-
-// ========== ELIMINAR VEHÍCULO CON AUDITORÍA ==========
+// ========== ELIMINAR VEHICULO CON AUDITORIA ==========
 // backend/controllers/vehiculosController.js
 exports.deleteVehiculo = async (req, res) => {
   const trx = await db.transaction();
@@ -662,7 +1048,7 @@ exports.deleteVehiculo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 👇 AQUÍ VALIDAMOS QUE ESTEMOS AUTENTICADOS Y OBTENEMOS EL ROL
+    //  AQUÍ VALIDAMOS QUE ESTEMOS AUTENTICADOS Y OBTENEMOS EL ROL
     // Si req.user no existe, es porque el middleware de auth falló o no se usó en la ruta
     if (!req.user || !req.user.rol) {
         await trx.rollback();
@@ -861,20 +1247,49 @@ exports.procesarSolicitudBaja = async (req, res) => {
 // ========== OTRAS FUNCIONES ==========
 exports.getOpcionesVehiculos = async (req, res) => {
   try {
+    // 1. Consultamos la tabla real USANDO KNEX.JS 👈
+    const vehiculos = await db('catalogo_vehiculos')
+      .select('marca', 'modelo')
+      .where('activo', true)
+      .orderBy([{ column: 'marca', order: 'asc' }, { column: 'modelo', order: 'asc' }]);
+
+    // 2. Preparamos nuestras variables vacías
+    const marcasUnicas = new Set();
+    const modelosUnicos = new Set();
+    const catalogoDependiente = {}; 
+
+    // 3. Llenamos las variables dinámicamente
+    // 🚨 Nota: Knex ya devuelve el arreglo directo, así que le quitamos el ".rows" que traía antes
+    vehiculos.forEach(fila => {
+      marcasUnicas.add(fila.marca);
+      modelosUnicos.add(fila.modelo);
+      
+      // Armamos el diccionario para los combos dependientes del Frontend
+      if (!catalogoDependiente[fila.marca]) {
+        catalogoDependiente[fila.marca] = [];
+      }
+      catalogoDependiente[fila.marca].push(fila.modelo);
+    });
+
+    // 4. Armamos la respuesta final
     const opciones = {
       tipoSocio: ['SD', 'SI', 'SA'],
       tipoVehiculo: ['Sedan', 'SUV', 'Pickup', 'Van', 'Hatchback', 'Compacto'],
-      tipoCombustible: ['Gasolina', 'Eléctrico', 'Híbrido', 'Diesel'],
+      tipoCombustible: ['Gasolina', 'Eléctrico', 'Híbrido', 'Diésel'],
       color: ['Blanco', 'Negro', 'Gris', 'Plata', 'Rojo', 'Azul', 'Verde', 'Tinto'],
       estado: ['Disponible', 'Rentado', 'Mantenimiento', 'Baja', 'Siniestro', 'Asignado'],
-      marcas: ['Nissan', 'BYD', 'Toyota', 'Honda', 'Mazda', 'Volkswagen'],
-      modelos: ['Versa', 'March', 'V-Drive', 'Dolphin Mini', 'Sentra', 'Altima']
+      
+      // Magia pura desde la base de datos:
+      marcas: Array.from(marcasUnicas),
+      modelos: Array.from(modelosUnicos),
+      marcasModelos: catalogoDependiente 
     };
     
     res.json({
       success: true,
       opciones
     });
+
   } catch (error) {
     await auditService.logError({
       usuario_id: req.user?.id,
@@ -893,6 +1308,59 @@ exports.getOpcionesVehiculos = async (req, res) => {
     });
   }
 };
+
+exports.createCatalogoVehiculo = async (req, res) => {
+  try {
+    const { marca, modelo } = req.body;
+
+    // 1. Validación básica de seguridad
+    if (!marca || !modelo) {
+      return res.status(400).json({
+        success: false,
+        error: 'La marca y el modelo son obligatorios.'
+      });
+    }
+
+    // 2. Inserción con Knex.js
+    // Usamos returning para que nos devuelva el registro recién creado
+    const [nuevoVehiculo] = await db('catalogo_vehiculos')
+      .insert({
+        marca: marca.trim(),
+        modelo: modelo.trim(),
+        activo: true
+      })
+      .returning(['id', 'marca', 'modelo']);
+
+    // 3. Respuesta exitosa
+    res.status(201).json({
+      success: true,
+      vehiculo: nuevoVehiculo,
+      message: 'Modelo registrado exitosamente en el catálogo'
+    });
+
+  } catch (error) {
+    // 4. Auditoría en caso de error
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error creando modelo en catálogo: ${error.message}`,
+      stack_trace: error.stack,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    // Validamos si es el error de llave duplicada para mandar un mensaje más limpio (opcional)
+    const isDuplicate = error.message.includes('unique_marca_modelo') || error.code === '23505';
+
+    res.status(isDuplicate ? 409 : 500).json({
+      success: false,
+      error: isDuplicate ? 'Este modelo ya existe para esta marca.' : 'Error al registrar el modelo en el catálogo',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 
 exports.getEstadisticasVehiculos = async (req, res) => {
   try {
@@ -970,6 +1438,35 @@ exports.asignarConductor = async (req, res) => {
       });
     }
     
+    const estadoVehiculo = String(vehiculo.estado || '').trim().toLowerCase();
+    const estadosNoOperativos = new Set(['baja', 'solicitud_baja']);
+
+    if (estadosNoOperativos.has(estadoVehiculo)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: `No se puede asignar conductor a un vehiculo en estado ${vehiculo.estado}`
+      });
+    }
+
+    // Regla de negocio: sin inventario inicial completado no se permite asignar conductor
+    const inventarioInicialCompletado = await trx(INVENTARIO_SNAPSHOTS_TABLE)
+      .where({
+        vehiculo_id: id,
+        snapshot_tipo: 'alta_inicial',
+        estado: 'completado'
+      })
+      .first();
+
+    if (!inventarioInicialCompletado) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        code: 'INVENTARIO_INICIAL_REQUERIDO',
+        error: 'No se puede asignar conductor sin inventario inicial completado. Primero llena y completa el inventario del vehiculo.'
+      });
+    }
+
     const conductor = await trx('conductores')
       .where('id', conductorId)
       .first();
@@ -1029,11 +1526,24 @@ exports.asignarConductor = async (req, res) => {
         });
     }
     
+// =========================================================
+    // 🛡️ FIX ZONA HORARIA Y TIPO DE DATO INDESTRUCTIBLE
+    // =========================================================
+    let fechaSegura;
+    
+    if (!fechaInicio) {
+      fechaSegura = new Date();
+      fechaSegura.setHours(12, 0, 0, 0);
+    } else {
+      const fechaString = new Date(fechaInicio).toISOString().split('T')[0];
+      fechaSegura = new Date(fechaString + 'T12:00:00');
+    }
+
     const [nuevaAsignacion] = await trx('asignaciones')
       .insert({
-        conductor_id: conductorId,
-        vehiculo_id: id,
-        fecha_inicio: fechaInicio || new Date(),
+        conductor_id: conductorId, // 👈 Variable correcta para Vehículos
+        vehiculo_id: id,           // 👈 Variable correcta para Vehículos
+        fecha_inicio: fechaSegura, 
         renta_diaria: rentaDiaria || 400,
         abono_poliza_mantenimiento: abonoPoliza || 100,
         url_contrato_digital: urlContrato || null,
@@ -1042,14 +1552,18 @@ exports.asignarConductor = async (req, res) => {
       })
       .returning('*');
     
+    // =========================================================
+    // 🚀 FIX: ACTUALIZAR EL VEHÍCULO CON LA FECHA DEL MODAL
+    // =========================================================
     await trx('vehiculos')
-      .where('id', id)
+      .where('id', id)             // 👈 Variable correcta para Vehículos
       .update({
         estado: 'Asignado',
         conductor_asignado_id: conductorId,
+        fecha_inicio_corrida: fechaSegura, 
         updated_at: new Date()
       });
-
+    // =========================================================
     await trx('conductores')
       .where('id', conductorId)
       .update({
@@ -1211,6 +1725,56 @@ exports.getPolizasSeguro = async (req, res) => {
     });
   }
 };
+
+exports.createPolizaSeguro = async (req, res) => {
+  try {
+    // 1. Extraemos los datos que nos manda React en el body
+    const { numero_poliza, aseguradora, fecha_vencimiento } = req.body;
+
+    // 2. Validación básica (que no nos manden campos vacíos)
+    if (!numero_poliza || !aseguradora || !fecha_vencimiento) {
+      return res.status(400).json({
+        success: false,
+        error: 'Todos los campos (número de póliza, aseguradora y fecha de vencimiento) son obligatorios.'
+      });
+    }
+
+    // 3. Insertamos en la base de datos
+    // Usamos returning('*') o el arreglo de columnas para que Postgres nos devuelva el registro recién creado con su nuevo ID
+    const [nuevaPoliza] = await db('polizas_seguro')
+      .insert({
+        numero_poliza,
+        aseguradora,
+        fecha_vencimiento
+      })
+      .returning(['id', 'numero_poliza', 'aseguradora', 'fecha_vencimiento']);
+
+    // 4. Respondemos con éxito y mandamos la póliza creada
+    res.status(201).json({
+      success: true,
+      poliza: nuevaPoliza,
+      message: 'Póliza creada exitosamente'
+    });
+
+  } catch (error) {
+    // 5. El mismo manejo de errores y auditoría que ya usas (¡impecable!)
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error creando póliza: ${error.message}`,
+      stack_trace: error.stack,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: 'Error al crear la póliza de seguro',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 // ========== OBTENER VEHÍCULOS DISPONIBLES (SIN CONDUCTOR) ==========
 exports.getVehiculosDisponibles = async (req, res) => {
   try {
@@ -1233,7 +1797,8 @@ exports.getVehiculosDisponibles = async (req, res) => {
         'v.tipo_vehiculo',
         'v.tipo_socio',
         'v.estado',
-        'v.kilometraje_actual'
+        'v.kilometraje_actual',
+        'v.renta_sugerida',
       )
       .orderBy('v.tipo_socio')
       .orderBy('v.numero_unidad');
@@ -1267,4 +1832,524 @@ exports.getVehiculosDisponibles = async (req, res) => {
     });
   }
 };
+
+exports.getInventariosVehiculo = async (req, res) => {
+  try {
+    const vehiculoId = parseVehiculoIdFromParams(req.params.id);
+    if (!vehiculoId) {
+      return res.status(400).json({ success: false, error: 'ID de vehiculo invalido' });
+    }
+
+    const vehiculo = await db(TABLES.VEHICULOS)
+      .where('id', vehiculoId)
+      .select('id', 'numero_vehiculo', 'tipo_socio', 'numero_unidad', 'tiene_inventario_inicial', 'fecha_inventario_inicial')
+      .first();
+
+    if (!vehiculo) {
+      return res.status(404).json({ success: false, error: 'Vehiculo no encontrado' });
+    }
+
+    const snapshots = await db(INVENTARIO_SNAPSHOTS_TABLE)
+      .where('vehiculo_id', vehiculoId)
+      .orderBy('snapshot_numero', 'asc')
+      .orderBy('created_at', 'asc');
+
+    const inventarioInicialByVehiculo = await buildInventarioInicialByVehiculo([vehiculoId]);
+    const inventarioInicial = inventarioInicialByVehiculo.get(vehiculoId);
+    const tieneInventarioInicial = Boolean(vehiculo.tiene_inventario_inicial) || Boolean(inventarioInicial?.tiene_inventario_inicial);
+    const fechaInventarioInicial = vehiculo.fecha_inventario_inicial || inventarioInicial?.fecha_inventario_inicial || null;
+
+    return res.json({
+      success: true,
+      vehiculo: {
+        id: vehiculo.id,
+        numero_vehiculo: obtenerNumeroVehiculoNormalizado(vehiculo),
+        tipo_socio: vehiculo.tipo_socio,
+        numero_unidad: vehiculo.numero_unidad,
+        tiene_inventario_inicial: tieneInventarioInicial,
+        fecha_inventario_inicial: fechaInventarioInicial
+      },
+      inventarios: snapshots.map(mapSnapshotResponse)
+    });
+  } catch (error) {
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error obteniendo inventarios de vehiculo: ${error.message}`,
+      stack_trace: error.stack,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener inventarios del vehiculo',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getInventarioVehiculoById = async (req, res) => {
+  try {
+    const vehiculoId = parseVehiculoIdFromParams(req.params.id);
+    const snapshotId = parseSnapshotIdFromParams(req.params.snapshotId);
+
+    if (!vehiculoId || !snapshotId) {
+      return res.status(400).json({ success: false, error: 'Parametros invalidos' });
+    }
+
+    const snapshot = await db(INVENTARIO_SNAPSHOTS_TABLE)
+      .where({
+        id: snapshotId,
+        vehiculo_id: vehiculoId
+      })
+      .first();
+
+    if (!snapshot) {
+      return res.status(404).json({ success: false, error: 'Inventario no encontrado' });
+    }
+
+    return res.json({
+      success: true,
+      inventario: mapSnapshotResponse(snapshot)
+    });
+  } catch (error) {
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error obteniendo inventario por id: ${error.message}`,
+      stack_trace: error.stack,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Error al obtener inventario',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.createInventarioVehiculo = async (req, res) => {
+  const trx = await db.transaction();
+  try {
+    const vehiculoId = parseVehiculoIdFromParams(req.params.id);
+    if (!vehiculoId) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, error: 'ID de vehiculo invalido' });
+    }
+
+    await auditService.setUserContext(trx, req.user);
+
+    const vehiculo = await ensureVehiculoExists(trx, vehiculoId);
+    if (!vehiculo) {
+      await trx.rollback();
+      return res.status(404).json({ success: false, error: 'Vehiculo no encontrado' });
+    }
+
+    const snapshotTipo = sanitizeSnapshotTipo(req.body.snapshot_tipo);
+    if (!snapshotTipo) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'snapshot_tipo invalido. Valores permitidos: alta_inicial, entrega_conductor, devolucion_conductor'
+      });
+    }
+
+    let asignacionId = req.body.asignacion_id ? parseInt(req.body.asignacion_id, 10) : null;
+    let conductorId = req.body.conductor_id ? parseInt(req.body.conductor_id, 10) : null;
+
+    if (snapshotTipo === 'alta_inicial') {
+      const existente = await trx(INVENTARIO_SNAPSHOTS_TABLE)
+        .where({ vehiculo_id: vehiculoId, snapshot_tipo: 'alta_inicial' })
+        .first();
+
+      if (existente) {
+        await trx.rollback();
+        return res.status(409).json({
+          success: false,
+          error: 'Este vehiculo ya tiene inventario inicial registrado'
+        });
+      }
+    }
+
+    const [numeroAgg] = await trx(INVENTARIO_SNAPSHOTS_TABLE)
+      .where({ vehiculo_id: vehiculoId, snapshot_tipo: snapshotTipo })
+      .max('snapshot_numero as max_num');
+    const snapshotNumero = (Number(numeroAgg?.max_num) || 0) + 1;
+
+    const fotoFiles = gatherFotoFiles(req);
+    if (fotoFiles.length === 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'Debe incluir al menos una foto en el inventario'
+      });
+    }
+
+    if (fotoFiles.length > MAX_FOTOS_INVENTARIO) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: `Solo se permiten ${MAX_FOTOS_INVENTARIO} fotos por inventario`
+      });
+    }
+
+    const uploadFotos = [];
+    for (let i = 0; i < fotoFiles.length; i += 1) {
+      const uploaded = await uploadFileToCloudinary(fotoFiles[i], {
+        folder: 'automanager/inventarios/fotos',
+        resource_type: 'image',
+        public_id: `vehiculo_${vehiculoId}_${snapshotTipo}_${Date.now()}_${i + 1}`
+      });
+      uploadFotos.push(uploaded.url);
+    }
+
+    if ((snapshotTipo === 'entrega_conductor' || snapshotTipo === 'devolucion_conductor') && (!asignacionId || !conductorId)) {
+      const asignacionActiva = await trx('asignaciones')
+        .where('vehiculo_id', vehiculoId)
+        .where('activa', true)
+        .orderBy('id', 'desc')
+        .first();
+
+      if (asignacionActiva) {
+        asignacionId = asignacionActiva.id;
+        conductorId = asignacionActiva.conductor_id;
+      }
+    }
+
+    const payloadJson = normalizeJsonField(req.body.payload_json, {});
+    if (!payloadJson || typeof payloadJson !== 'object' || Object.keys(payloadJson).length === 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'payload_json no puede estar vacio'
+      });
+    }
+
+    const fechaEvento = normalizeDateField(req.body.fecha_evento);
+    if (!fechaEvento) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'fecha_evento es obligatoria'
+      });
+    }
+
+    const kilometraje = normalizeNumberField(req.body.kilometraje);
+    if (kilometraje === null || kilometraje < 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'kilometraje valido es obligatorio'
+      });
+    }
+
+    const now = new Date();
+
+    const [created] = await trx(INVENTARIO_SNAPSHOTS_TABLE)
+      .insert({
+        vehiculo_id: vehiculoId,
+        asignacion_id: Number.isInteger(asignacionId) && asignacionId > 0 ? asignacionId : null,
+        conductor_id: Number.isInteger(conductorId) && conductorId > 0 ? conductorId : null,
+        snapshot_tipo: snapshotTipo,
+        snapshot_numero: snapshotNumero,
+        estado: 'completado',
+        fecha_evento: fechaEvento,
+        kilometraje,
+        observaciones: req.body.observaciones || null,
+        fotos_urls_json: JSON.stringify(uploadFotos),
+        payload_json: JSON.stringify(payloadJson),
+        creado_por: req.user?.id || null,
+        actualizado_por: req.user?.id || null,
+        created_at: now,
+        updated_at: now
+      })
+      .returning('*');
+
+    if (snapshotTipo === 'alta_inicial') {
+      await trx(TABLES.VEHICULOS)
+        .where('id', vehiculoId)
+        .update({
+          tiene_inventario_inicial: true,
+          fecha_inventario_inicial: fechaEvento || now,
+          updated_at: now
+        });
+    }
+
+    await trx.commit();
+    return res.status(201).json({
+      success: true,
+      message: 'Registro de inventario guardado correctamente',
+      inventario: mapSnapshotResponse(created)
+    });
+  } catch (error) {
+    await trx.rollback();
+
+    if (error?.code === '23505' && String(error?.constraint || '').includes('uq_inventario_snapshots_alta_inicial')) {
+      return res.status(409).json({
+        success: false,
+        error: 'Este vehiculo ya tiene inventario inicial registrado'
+      });
+    }
+
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error creando inventario de vehiculo: ${error.message}`,
+      stack_trace: error.stack,
+      contexto: req.body,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Error al crear inventario',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.updateInventarioVehiculo = async (req, res) => {
+  try {
+    const vehiculoId = parseVehiculoIdFromParams(req.params.id);
+    const snapshotId = parseSnapshotIdFromParams(req.params.snapshotId);
+
+    if (!vehiculoId || !snapshotId) {
+      return res.status(400).json({ success: false, error: 'Parametros invalidos' });
+    }
+    return res.status(409).json({
+      success: false,
+      code: 'INVENTARIO_EDICION_NO_PERMITIDA',
+      error: 'Los registros de inventario ya se guardan completos y no se pueden editar. Genera un nuevo registro.'
+    });
+  } catch (error) {
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error actualizando inventario de vehiculo: ${error.message}`,
+      stack_trace: error.stack,
+      contexto: req.body,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Error al actualizar inventario',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.completarInventarioVehiculo = async (req, res) => {
+  const trx = await db.transaction();
+  try {
+    const vehiculoId = parseVehiculoIdFromParams(req.params.id);
+    const snapshotId = parseSnapshotIdFromParams(req.params.snapshotId);
+
+    if (!vehiculoId || !snapshotId) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, error: 'Parametros invalidos' });
+    }
+
+    await auditService.setUserContext(trx, req.user);
+
+    const snapshot = await trx(INVENTARIO_SNAPSHOTS_TABLE)
+      .where({ id: snapshotId, vehiculo_id: vehiculoId })
+      .first();
+
+    if (!snapshot) {
+      await trx.rollback();
+      return res.status(404).json({ success: false, error: 'Inventario no encontrado' });
+    }
+
+    if (snapshot.estado === 'completado') {
+      await trx.commit();
+      return res.json({
+        success: true,
+        message: 'El registro de inventario ya estaba completado',
+        inventario: mapSnapshotResponse(snapshot)
+      });
+    }
+
+    const payload = normalizeJsonField(snapshot.payload_json, {});
+    const fotos = normalizeJsonField(snapshot.fotos_urls_json, []);
+    const kilometraje = normalizeNumberField(snapshot.kilometraje);
+    const fechaEvento = snapshot.fecha_evento || new Date();
+
+    if (!fechaEvento) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, error: 'fecha_evento es obligatoria para completar inventario' });
+    }
+
+    if (kilometraje === null || kilometraje < 0) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, error: 'kilometraje valido es obligatorio para completar inventario' });
+    }
+
+    if (!payload || typeof payload !== 'object' || Object.keys(payload).length === 0) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, error: 'payload_json no puede estar vacio al completar inventario' });
+    }
+
+    if (!Array.isArray(fotos) || fotos.length === 0) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, error: 'Debe incluir al menos una foto en el inventario' });
+    }
+
+    const patch = {
+      estado: 'completado',
+      fecha_evento: fechaEvento,
+      actualizado_por: req.user?.id || null,
+      updated_at: new Date()
+    };
+
+    const [updated] = await trx(INVENTARIO_SNAPSHOTS_TABLE)
+      .where({ id: snapshotId, vehiculo_id: vehiculoId })
+      .update(patch)
+      .returning('*');
+
+    if (updated.snapshot_tipo === 'alta_inicial') {
+      await trx(TABLES.VEHICULOS)
+        .where('id', vehiculoId)
+        .update({
+          tiene_inventario_inicial: true,
+          fecha_inventario_inicial: updated.fecha_evento || new Date(),
+          updated_at: new Date()
+        });
+    }
+
+    await trx.commit();
+    return res.json({
+      success: true,
+      message: 'Inventario completado correctamente',
+      inventario: mapSnapshotResponse(updated)
+    });
+  } catch (error) {
+    await trx.rollback();
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error completando inventario de vehiculo: ${error.message}`,
+      stack_trace: error.stack,
+      contexto: req.body,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Error al completar inventario',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.compararInventariosVehiculo = async (req, res) => {
+  try {
+    const vehiculoId = parseVehiculoIdFromParams(req.params.id);
+    if (!vehiculoId) {
+      return res.status(400).json({ success: false, error: 'ID de vehiculo invalido' });
+    }
+
+    const snapshotAId = parseSnapshotIdFromParams(req.query.snapshot_a_id);
+    const snapshotBId = parseSnapshotIdFromParams(req.query.snapshot_b_id);
+
+    if (!snapshotAId || !snapshotBId) {
+      return res.status(400).json({
+        success: false,
+        error: 'snapshot_a_id y snapshot_b_id son obligatorios'
+      });
+    }
+
+    const snapshots = await db(INVENTARIO_SNAPSHOTS_TABLE)
+      .where('vehiculo_id', vehiculoId)
+      .whereIn('id', [snapshotAId, snapshotBId]);
+
+    const snapA = snapshots.find((s) => s.id === snapshotAId);
+    const snapB = snapshots.find((s) => s.id === snapshotBId);
+
+    if (!snapA || !snapB) {
+      return res.status(404).json({
+        success: false,
+        error: 'No se encontraron ambos inventarios para comparar'
+      });
+    }
+
+    const payloadA = normalizeJsonField(snapA.payload_json, {});
+    const payloadB = normalizeJsonField(snapB.payload_json, {});
+    const flatA = flattenObjectForDiff(payloadA);
+    const flatB = flattenObjectForDiff(payloadB);
+
+    const keys = new Set([
+      ...Object.keys(flatA),
+      ...Object.keys(flatB),
+      'kilometraje',
+      'observaciones'
+    ]);
+
+    const cambios = [];
+    for (const key of keys) {
+      if (shouldSkipInventarioDiffKey(key)) {
+        continue;
+      }
+
+      const oldVal = key === 'kilometraje'
+        ? snapA.kilometraje
+        : key === 'observaciones'
+          ? snapA.observaciones
+          : flatA[key];
+      const newVal = key === 'kilometraje'
+        ? snapB.kilometraje
+        : key === 'observaciones'
+          ? snapB.observaciones
+          : flatB[key];
+
+      if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+        cambios.push({
+          campo: key,
+          valor_anterior: oldVal ?? null,
+          valor_nuevo: newVal ?? null
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      snapshot_a: mapSnapshotResponse(snapA),
+      snapshot_b: mapSnapshotResponse(snapB),
+      total_cambios: cambios.length,
+      cambios
+    });
+  } catch (error) {
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error comparando inventarios de vehiculo: ${error.message}`,
+      stack_trace: error.stack,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    return res.status(500).json({
+      success: false,
+      error: 'Error al comparar inventarios',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = exports;
+
+
+
+

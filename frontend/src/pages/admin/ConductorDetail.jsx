@@ -40,6 +40,7 @@ const [selectedVehiculo, setSelectedVehiculo] = useState(null);
 const [rentaDiaria, setRentaDiaria] = useState(400);
 const [abonoPoliza, setAbonoPoliza] = useState(100);
 const [fechaInicio, setFechaInicio] = useState(new Date().toISOString().split('T')[0]);
+const [vehiculoSearch, setVehiculoSearch] = useState('');
 
   useEffect(() => {
     fetchConductor();
@@ -230,6 +231,7 @@ const fetchVehiculosDisponibles = async () => {
       alert('✅ Vehículo asignado exitosamente');
       setShowAssignVehicleModal(false);
       setSelectedVehiculo(null);
+      setVehiculoSearch('');
       await fetchConductor(); // Recargar datos del conductor
     }
   } catch (error) {
@@ -301,6 +303,13 @@ const fetchVehiculosDisponibles = async () => {
 
       if (response.success) {
         toast.success('Vehículo desasignado exitosamente');
+        if (response.vehiculo_id) {
+          const abrirDevolucion = window.confirm('¿Deseas registrar ahora el inventario de devolucion del vehiculo?');
+          if (abrirDevolucion) {
+            navigate(`/admin/vehiculos/${response.vehiculo_id}?openInventario=devolucion_conductor`);
+            return;
+          }
+        }
         await fetchConductor();
       } else {
         toast.error(response?.error || 'Error al desasignar vehículo');
@@ -370,9 +379,46 @@ const fetchVehiculosDisponibles = async () => {
     { id: 'finanzas', label: 'Finanzas', icon: DollarSign }
   ];
 
+  const vehiculosFiltrados = vehiculosDisponibles.filter((vehiculo) => {
+    const query = vehiculoSearch.trim().toLowerCase();
+    if (!query) return true;
+
+    const searchableText = [
+      vehiculo.numero_vehiculo,
+      vehiculo.marca,
+      vehiculo.modelo,
+      vehiculo.placa,
+      vehiculo.color,
+      vehiculo.año,
+      vehiculo.tipo_vehiculo,
+      vehiculo.tipo_socio
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    return searchableText.includes(query);
+  });
+
+  const vehiculoSeleccionadoData = vehiculosDisponibles.find(
+    (vehiculo) => String(vehiculo.id) === String(selectedVehiculo)
+  );
+
+  const rentaOriginalSugerida = (() => {
+    const rentaCruda =
+      vehiculoSeleccionadoData?.renta_sugerida ??
+      vehiculoSeleccionadoData?.RentaSugerida ??
+      vehiculoSeleccionadoData?.renta_diaria;
+    const renta = parseFloat(rentaCruda);
+    return Number.isFinite(renta) ? renta : 500;
+  })();
+
+  const totalDiarioActual = parseFloat(rentaDiaria || 0) + parseFloat(abonoPoliza || 0);
+  const respetaSugerido = totalDiarioActual === rentaOriginalSugerida;
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-8">
+      <div className="min-h-screen bg-[#07425E] p-8">
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-16 w-16 border-4 border-cyan-500 border-t-transparent"></div>
         </div>
@@ -382,7 +428,7 @@ const fetchVehiculosDisponibles = async () => {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-8">
+      <div className="min-h-screen bg-[#07425E] p-8">
         <div className="flex flex-col items-center justify-center h-64">
           <AlertTriangle className="w-16 h-16 text-red-400 mb-4" />
           <p className="text-white text-xl mb-4">{error}</p>
@@ -399,7 +445,7 @@ const fetchVehiculosDisponibles = async () => {
 
   if (!conductor) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-8">
+      <div className="min-h-screen bg-[#07425E] p-8">
         <div className="flex flex-col items-center justify-center h-64">
           <p className="text-white text-xl mb-4">No se encontró el conductor</p>
           <button
@@ -414,7 +460,7 @@ const fetchVehiculosDisponibles = async () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-4 md:p-8">
+    <div className="min-h-screen bg-[#07425E] p-4 md:p-8">
       {/* Header */}
       <div className="mb-8">
         <button
@@ -904,6 +950,57 @@ const fetchVehiculosDisponibles = async () => {
         </div>
       )}
 
+      {/* Comprobante de domicilio */}
+      {conductor?.url_comprobante_domicilio ? (
+        <div className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10">
+          <div className="flex items-center gap-3">
+            <CheckCircle className="w-5 h-5 text-emerald-400" />
+            <div>
+              <p className="text-white font-semibold">Comprobante de domicilio</p>
+              <p className="text-gray-400 text-sm">Documento cargado</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.open(conductor.url_comprobante_domicilio, '_blank')}
+              className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-all"
+              title="Ver documento"
+            >
+              <Eye className="w-4 h-4" />
+            </button>
+            <a
+              href={conductor.url_comprobante_domicilio}
+              download
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-all"
+              title="Descargar documento"
+            >
+              <Download className="w-4 h-4" />
+            </a>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10 border-dashed">
+          <div className="flex items-center gap-3">
+            <XCircle className="w-5 h-5 text-gray-500" />
+            <div>
+              <p className="text-white font-semibold">Comprobante de domicilio</p>
+              <p className="text-gray-400 text-sm">No cargado</p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setSelectedDocType('comprobante_domicilio');
+              setShowUploadModal(true);
+            }}
+            className="text-cyan-400 hover:text-cyan-300 text-sm font-medium"
+          >
+            Subir
+          </button>
+        </div>
+      )}
+
       {/* CURP */}
       {conductor?.curp && (
         <div className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10">
@@ -992,6 +1089,7 @@ const fetchVehiculosDisponibles = async () => {
                <button 
   onClick={() => {
     setShowAssignVehicleModal(true);
+    setVehiculoSearch('');
     fetchVehiculosDisponibles();
   }}
   className="px-6 py-2 bg-cyan-500 text-white rounded-xl hover:bg-cyan-600 transition-all"
@@ -1319,7 +1417,7 @@ const fetchVehiculosDisponibles = async () => {
                 <span>{formatDate(conductor?.updated_at)}</span>
               </div>
               
-              {/* --- 👇 CAMBIO 3: Lógica para mostrar ID de usuario o botón de crear cuenta --- */}
+              {/* ---  CAMBIO 3: Lógica para mostrar ID de usuario o botón de crear cuenta --- */}
               {!conductor?.usuario_id ? (
                 <div className="mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-center">
                   <div className="flex items-center justify-center gap-2 mb-2">
@@ -1383,12 +1481,20 @@ const fetchVehiculosDisponibles = async () => {
       <h3 className="text-xl font-bold text-white mb-4">Asignar Vehículo</h3>
       
       <div className="space-y-4">
-        {/* Selector de vehículo */}
+{/* Selector de vehículo */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
             Vehículo Disponible
           </label>
           
+          <input
+            type="text"
+            value={vehiculoSearch}
+            onChange={(e) => setVehiculoSearch(e.target.value)}
+            placeholder="Buscar por número, marca, modelo, placa o color..."
+            className="w-full px-4 py-2 mb-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+          />
+
           {loadingVehiculos ? (
             <div className="text-center py-4">
               <div className="animate-spin rounded-full h-8 w-8 border-4 border-cyan-500 border-t-transparent mx-auto"></div>
@@ -1399,12 +1505,30 @@ const fetchVehiculosDisponibles = async () => {
               <Car className="w-12 h-12 text-gray-500 mx-auto mb-2" />
               <p className="text-gray-400">No hay vehículos disponibles</p>
             </div>
+          ) : vehiculosFiltrados.length === 0 ? (
+            <div className="text-center py-8 bg-white/5 rounded-lg border border-white/10">
+              <Car className="w-12 h-12 text-gray-500 mx-auto mb-2" />
+              <p className="text-gray-400">No hay coincidencias para tu búsqueda</p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto">
-              {vehiculosDisponibles.map((vehiculo) => (
+              {vehiculosFiltrados.map((vehiculo) => (
                 <button
                   key={vehiculo.id}
-                  onClick={() => setSelectedVehiculo(vehiculo.id)}
+                  onClick={() => {
+                    // 1. Seleccionamos el vehículo
+                    setSelectedVehiculo(vehiculo.id);
+                    
+                    // 2. 🧮 Lógica de Renta Automática
+                    const sugerida = parseFloat(vehiculo.renta_sugerida || 500); // 500 por si viene vacío
+                    const polizaFija = 100;
+                    
+                    // Si la sugerida es mayor a 100, le restamos los 100 de póliza. Si no, lo dejamos en 0.
+                    const rentaCalculada = sugerida > polizaFija ? sugerida - polizaFija : sugerida;
+                    
+                    setAbonoPoliza(polizaFija);
+                    setRentaDiaria(rentaCalculada);
+                  }}
                   className={`p-4 rounded-lg border-2 transition-all text-left ${
                     selectedVehiculo === vehiculo.id
                       ? 'border-cyan-500 bg-cyan-500/20'
@@ -1420,7 +1544,11 @@ const fetchVehiculosDisponibles = async () => {
                         {vehiculo.año} • {vehiculo.placa} • {vehiculo.color}
                       </p>
                       <p className="text-gray-500 text-xs mt-1">
-                        {vehiculo.tipo_vehiculo} • {vehiculo.tipo_socio}
+                        {vehiculo.tipo_vehiculo} • {vehiculo.tipo_socio} 
+                        {/* Pequeño badge de la renta que trae de BD */}
+                        <span className="ml-2 text-cyan-400 font-medium bg-cyan-900/30 px-2 py-0.5 rounded">
+                          Sugerida: ${parseFloat(vehiculo.renta_sugerida || 500).toFixed(2)}
+                        </span>
                       </p>
                     </div>
                     {selectedVehiculo === vehiculo.id && (
@@ -1435,7 +1563,19 @@ const fetchVehiculosDisponibles = async () => {
 
         {/* Configuración de renta */}
         {selectedVehiculo && (
-          <>
+          <div className="space-y-4 animate-fadeIn mt-4">
+            
+            {/* 💡 AVISO VISUAL PARA EL ADMIN */}
+            <div className="bg-cyan-900/20 border border-cyan-500/30 p-3 rounded-lg flex gap-3 items-start">
+              <div className="text-cyan-400 mt-0.5">💡</div>
+              <div>
+                <p className="text-cyan-300 text-sm font-medium">Valores calculados por el sistema</p>
+                <p className="text-gray-400 text-xs mt-0.5">
+                  Se recomienda ampliamente mantener estos montos, ya que están basados en la proyección financiera original del vehículo.
+                </p>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -1444,10 +1584,10 @@ const fetchVehiculosDisponibles = async () => {
                 <input
                   type="number"
                   value={rentaDiaria}
-                  onChange={(e) => setRentaDiaria(parseFloat(e.target.value))}
-                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                  onChange={(e) => setRentaDiaria(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-colors"
                   min="0"
-                  step="50"
+                  step="10"
                 />
               </div>
 
@@ -1458,8 +1598,8 @@ const fetchVehiculosDisponibles = async () => {
                 <input
                   type="number"
                   value={abonoPoliza}
-                  onChange={(e) => setAbonoPoliza(parseFloat(e.target.value))}
-                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                  onChange={(e) => setAbonoPoliza(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-colors"
                   min="0"
                   step="10"
                 />
@@ -1478,15 +1618,33 @@ const fetchVehiculosDisponibles = async () => {
               />
             </div>
 
-            <div className="p-4 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
-              <p className="text-cyan-400 text-sm">
-                💡 <strong>Total diario:</strong> ${(rentaDiaria + abonoPoliza).toFixed(2)}
-              </p>
-              <p className="text-gray-400 text-xs mt-1">
-                Renta: ${rentaDiaria} + Póliza: ${abonoPoliza}
-              </p>
+            {/* 📊 RECUADRO DE TOTAL (Cambia de color si modifican la sugerencia) */}
+            <div className={`p-4 rounded-lg border transition-colors ${
+              respetaSugerido 
+                ? 'bg-emerald-500/10 border-emerald-500/30' // Verde si lo respetan
+                : 'bg-amber-500/10 border-amber-500/30'     // Naranja si lo cambian
+            }`}>
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className={`text-sm font-bold ${
+                    respetaSugerido ? 'text-emerald-400' : 'text-amber-400'
+                  }`}>
+                    Total diario a cobrar: ${totalDiarioActual.toFixed(2)}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Desglose: ${rentaDiaria} (Renta) + ${abonoPoliza} (Póliza)
+                  </p>
+                </div>
+                
+                {/* Textito dinámico */}
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-black/20 text-gray-300">
+                  {respetaSugerido 
+                    ? '✓ Coincide con sugerido' 
+                    : `⚠️ Diferente a $${rentaOriginalSugerida.toFixed(2)}`}
+                </span>
+              </div>
             </div>
-          </>
+          </div>
         )}
       </div>
 
@@ -1495,6 +1653,7 @@ const fetchVehiculosDisponibles = async () => {
           onClick={() => {
             setShowAssignVehicleModal(false);
             setSelectedVehiculo(null);
+            setVehiculoSearch('');
           }}
           className="flex-1 px-4 py-2 rounded-xl backdrop-blur-xl bg-white/10 border border-white/20 text-white hover:bg-white/20 transition-all"
           disabled={loading}
@@ -1534,6 +1693,7 @@ const fetchVehiculosDisponibles = async () => {
             <option value="ine_reverso">INE - Reverso</option>
             <option value="licencia_frente">Licencia - Frente</option>
             <option value="licencia_reverso">Licencia - Reverso</option>
+            <option value="comprobante_domicilio">Comprobante de domicilio</option>
           </select>
         </div>
 
@@ -1543,7 +1703,7 @@ const fetchVehiculosDisponibles = async () => {
           </label>
           <input
             type="file"
-            accept="image/*,application/pdf"
+            accept=".jpg,.jpeg,.png,.webp,.heic,.heif,.pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,application/pdf"
             onChange={(e) => setSelectedFile(e.target.files[0])}
             className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-cyan-500 file:text-white hover:file:bg-cyan-600"
           />
@@ -1585,39 +1745,7 @@ const fetchVehiculosDisponibles = async () => {
         conductor={conductor}
         onSubmit={async (formData) => {
           try {
-            const dataToSend = {
-              nombre_conductor: formData.get('nombre_conductor'),
-              numero_telefono: formData.get('numero_telefono'),
-              email: formData.get('email'),
-              curp: formData.get('curp'),
-              rfc: formData.get('RFC'),
-              direccion_completa: formData.get('direccion'),
-              fecha_nacimiento: formData.get('fecha_nacimiento'),
-              status: formData.get('status'),
-              matricula: formData.get('matricula'),
-              licencia_conducir: formData.get('LicenciaConducir'),
-              licencia_vigencia: formData.get('licencia_vencimiento'),
-              chat_id_telegram: formData.get('chat_id_telegram'),
-              username_telegram: formData.get('username_telegram'),
-              saldo_ganancias: formData.get('saldo_ganancias'),
-              deposito: formData.get('deposito'),
-              tasa_aceptacion: formData.get('tasa_aceptacion'),
-              tasa_cancelacion: formData.get('tasa_cancelacion'),
-              tasa_completacion: formData.get('tasa_completacion'),
-              status_trabajo: formData.get('status_trabajo'),
-              bot_configurado: formData.get('bot_configurado') === 'true',
-              observaciones: formData.get('Observaciones'),
-              categoria: formData.get('categoria'),
-              numero_de_ine_ife: formData.get('Numero_de_INE_IFE')
-            };
-            
-            Object.keys(dataToSend).forEach(key => {
-              if (dataToSend[key] === null || dataToSend[key] === undefined || dataToSend[key] === '') {
-                delete dataToSend[key];
-              }
-            });
-              
-            const response = await adminService.updateConductor(conductor.id, dataToSend);
+            const response = await adminService.updateConductor(conductor.id, formData);
             if (response.success) {
               await fetchConductor();
               setShowEditModal(false);
@@ -1636,3 +1764,4 @@ const fetchVehiculosDisponibles = async () => {
 };
 
 export default ConductorDetail;
+

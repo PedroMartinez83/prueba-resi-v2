@@ -1,7 +1,7 @@
 // backend/routes/adminRoutes.js
 const express = require('express');
 const router = express.Router();
-const { verifyToken } = require('../middleware/authMiddleware');
+const { verifyToken, checkRole } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/roleMiddleware');
 
 // ========== SUB-RUTAS MODULARIZADAS ==========
@@ -48,7 +48,10 @@ const {
   calcularDecisionFinal,
   migrarAConductor,
   obtenerEstadisticas,
-  eliminarSolicitud
+  listarCitasSolicitudes,
+  registrarAsistenciaCita,
+  eliminarSolicitud,
+  recalcularMotorHistorico
 } = require('../controllers/solicitudController');
 
 // ========== MIDDLEWARE DE AUTENTICACIÓN GLOBAL ==========
@@ -70,9 +73,24 @@ router.get('/solicitudes/estadisticas',
   obtenerEstadisticas
 );
 
+router.get('/solicitudes/citas',
+  checkRole('super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador'),
+  listarCitasSolicitudes
+);
+
+router.post('/solicitudes/recalcular-motor-historico',
+  requirePermission('prospectos.create'),
+  recalcularMotorHistorico
+);
+
 router.get('/solicitudes', 
   requirePermission('prospectos.view'), 
   listarSolicitudes
+);
+
+router.put('/solicitudes/:id/asistencia-cita',
+  checkRole('super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador'),
+  registrarAsistenciaCita
 );
 
 router.get('/solicitudes/:id',
@@ -101,6 +119,7 @@ router.post('/solicitudes/:id/migrar',
 );
 
 router.delete('/solicitudes/:id',
+  checkRole('super_admin', 'direccion', 'director', 'gerente_ops'),
   requirePermission('prospectos.delete'),
   eliminarSolicitud
 );
@@ -128,13 +147,15 @@ router.get('/inversionistas',
 
 router.post('/inversionistas',
   requirePermission('inversiones.create'),
-  inversionistasController.createInversionista
+  inversionistasController.crearInversionista
 );
 
 router.put('/inversionistas/:id',
   requirePermission('inversiones.update'),
-  inversionistasController.updateInversionista
+  inversionistasController.editarInversionista
 );
+
+
 
 // ========== RUTAS ADICIONALES DE INVERSIONES (no están en inversionesRoutes.js) ==========
 router.get('/inversiones/:id/pagos',
@@ -142,10 +163,64 @@ router.get('/inversiones/:id/pagos',
   inversionesController.getPagosInversion
 );
 
+// Ver detalle de un contrato específico
+router.get('/contratos/:id',
+  requirePermission('inversiones.view'),
+  inversionistasController.getContratoDetalle
+);
+
 router.post('/inversiones/:id/pagos',
   requirePermission('inversiones.payment'),
-  inversionesController.registrarPago
+  inversionesController.registrarPagoInversion
 );
+
+router.delete('/inversiones/pagos/:id', 
+  requirePermission('inversiones.delete'),
+  inversionesController.eliminarPagoInversion
+);
+
+router.put('/inversiones/pagos/:id', 
+  requirePermission('inversiones.update'), 
+  inversionesController.actualizarPagoInversion
+);
+
+router.put('/contratos/:id/rescindir', 
+  requirePermission('inversiones.update'), 
+  inversionesController.rescindirContrato);
+
+router.post('/contratos/:id/pago-rescision', 
+  requirePermission('inversiones.create'), 
+  inversionesController.registrarPagoRescision
+);  
+
+router.put('/contratos/:id/reanudar', 
+  requirePermission('inversiones.update'), 
+  inversionesController.reanudarContrato
+);
+
+//  Borrado lógico de contrato
+router.delete('/contratos/:id', 
+  requirePermission('inversiones.delete'), 
+  inversionesController.eliminarInversion
+);
+
+
+
+router.post('/inversionistas/:id/crear-acceso', 
+  requirePermission('inversiones.update'),
+  inversionistasController.crearAccesoInversionista);
+
+router.get('/portal-inversionista/mi-dashboard', 
+  requirePermission('inversiones.view'),
+  (req, res) => {
+  // 🔒 MAGIA DE SEGURIDAD: 
+  // En lugar de confiar en un ID que venga en la URL, 
+  // tomamos el ID exacto que viene encriptado en su Token de sesión.
+  req.params.id = req.user.inversionistaId || req.user.inversionista_id; 
+  
+  // Ahora sí, llamamos al controlador que ya tenías hecho
+  return inversionistasController.getInversionistaById(req, res);
+});
 
 // ========== RUTAS DE RENTAS LEGACY (DEPRECADAS) ==========
 router.get('/rentas/opciones', 
@@ -193,6 +268,6 @@ router.get('/estadisticas',
 router.post('/sync/rentas',
   requirePermission('rentas.sync'),
   require('../controllers/adminController').syncRentasFromAirtable
-);
+); 
 
 module.exports = router;

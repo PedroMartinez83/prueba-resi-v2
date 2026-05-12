@@ -38,8 +38,19 @@ API.interceptors.request.use(
 
 // Interceptor para manejar errores de respuesta
 API.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const refreshedToken = response.headers?.['x-refreshed-token'];
+    if (refreshedToken) {
+      localStorage.setItem('token', refreshedToken);
+    }
+    return response;
+  },
   (error) => {
+    const refreshedToken = error?.response?.headers?.['x-refreshed-token'];
+    if (refreshedToken) {
+      localStorage.setItem('token', refreshedToken);
+    }
+
     const isUnauthorized = error.response?.status === 401;
     const isLoginRequest = error.config?.url?.includes('/auth/login');
 

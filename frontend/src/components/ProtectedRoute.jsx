@@ -5,7 +5,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 // Definir adminRoles
-const adminRoles = ['admin', 'super_admin', 'direccion', 'gerente_ops', 'finanzas', 'coordinador', 'jefe_taller', 'secretaria'];
+const adminRoles = ['admin', 'super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador', 'jefe_taller', 'secretaria'];
 
 // Función para verificar acceso según roles
 const checkRoleAccess = (userRole, requiredRole, allowedRoles) => {
@@ -49,7 +49,11 @@ const ProtectedRoute = ({ children, requiredRole = null, allowedRoles = null }) 
   if ((requiredRole || allowedRoles) && !checkRoleAccess(userRole, requiredRole, allowedRoles)) {
     // Redirigir según el rol del usuario
     if (adminRoles.includes(userRole)) {
-      const destinoAdmin = userRole === 'coordinador' ? '/admin/rentas' : '/admin/dashboard';
+      const destinoAdmin = userRole === 'coordinador'
+        ? '/admin/rentas'
+        : userRole === 'director'
+          ? '/admin/solicitudes/citas'
+          : '/admin/dashboard';
       return <Navigate to={destinoAdmin} replace />;
     } else if (userRole === 'conductor') {
       return <Navigate to="/conductor/dashboard" replace />;

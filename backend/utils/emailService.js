@@ -76,6 +76,199 @@ const sendPasswordChangedEmail = async ({ email }) => {
   return sendEmail({ to: email, subject, text, html });
 };
 
+const ROLES_NOTIFICACION_SOLICITUD = [
+  'super_admin',
+  'direccion',
+  'director',
+  'gerente_ops',
+  'finanzas',
+  'coordinador'
+];
+
+const normalizeEmailList = (values = []) => {
+  const input = Array.isArray(values) ? values : String(values || '').split(',');
+  return [...new Set(
+    input
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+  )];
+};
+
+const getSolicitudesAdminUrl = () => 'https://automanagersistema.com/admin/solicitudes';
+
+const sendSolicitudCreadaNotification = async ({ solicitud = {}, to } = {}) => {
+  try {
+    let destinatarios = normalizeEmailList(to);
+
+    if (destinatarios.length === 0) {
+      const usuarios = await db('usuarios')
+        .whereIn('rol', ROLES_NOTIFICACION_SOLICITUD)
+        .where('estado_cuenta', 'Activo')
+        .whereNotNull('email')
+        .select('email');
+
+      destinatarios = normalizeEmailList(usuarios.map((item) => item.email));
+    }
+
+    if (destinatarios.length === 0) {
+      return {
+        accepted: [],
+        skipped: true,
+        message: 'No hay destinatarios activos para notificacion de solicitudes'
+      };
+    }
+
+    const adminSolicitudesUrl = getSolicitudesAdminUrl();
+    const fechaTexto = solicitud?.fecha_solicitud
+      ? new Date(solicitud.fecha_solicitud).toLocaleString('es-MX')
+      : new Date().toLocaleString('es-MX');
+
+    const subject = `Nueva solicitud de conductor #${solicitud?.id || 'N/A'}`;
+    const text = [
+      'Se recibio una nueva solicitud de conductor.',
+      `Folio: ${solicitud?.id || 'N/A'}`,
+      `Nombre: ${solicitud?.nombre_completo || 'N/A'}`,
+      `Telefono: ${solicitud?.telefono || 'N/A'}`,
+      `Email: ${solicitud?.email || 'No proporcionado'}`,
+      `CURP: ${solicitud?.curp || 'No proporcionado'}`,
+      `Fecha: ${fechaTexto}`,
+      '',
+      `Revisar en: ${adminSolicitudesUrl}`
+    ].join('\n');
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+        <div style="background: #1f2937; color: #fff; padding: 16px 20px;">
+          <h2 style="margin: 0; font-size: 18px;">Nueva solicitud de conductor</h2>
+        </div>
+        <div style="padding: 20px; color: #111827;">
+          <p>Se recibio una nueva solicitud en el portal.</p>
+          <ul style="padding-left: 18px;">
+            <li><strong>Folio:</strong> ${solicitud?.id || 'N/A'}</li>
+            <li><strong>Nombre:</strong> ${solicitud?.nombre_completo || 'N/A'}</li>
+            <li><strong>Telefono:</strong> ${solicitud?.telefono || 'N/A'}</li>
+            <li><strong>Email:</strong> ${solicitud?.email || 'No proporcionado'}</li>
+            <li><strong>CURP:</strong> ${solicitud?.curp || 'No proporcionado'}</li>
+            <li><strong>Fecha:</strong> ${fechaTexto}</li>
+          </ul>
+          <a href="${adminSolicitudesUrl}" style="display: inline-block; margin-top: 12px; background: #2563eb; color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 6px;">
+            Abrir modulo de solicitudes
+          </a>
+        </div>
+      </div>
+    `;
+
+    return sendEmail({
+      to: destinatarios.join(', '),
+      subject,
+      text,
+      html
+    });
+  } catch (error) {
+    console.error('Error enviando notificacion de nueva solicitud:', error);
+    return {
+      accepted: [],
+      skipped: true,
+      message: 'Error enviando notificacion de nueva solicitud',
+      error: String(error?.message || error)
+    };
+  }
+};
+
+// 1. Roles específicos para inversiones (puedes ajustar esta lista si es diferente)
+const ROLES_NOTIFICACION_INVERSIONISTA = [
+  'super_admin',
+  'direccion',
+  'director',
+  'finanzas',
+  'gerente_ops'
+];
+
+// 2. Apuntamos a la nueva clase que creamos hoy
+const getSolicitudesInversionistasAdminUrl = () => 'https://automanagersistema.com/admin/solicitudes-registro';
+
+// 3. La función de envío
+const sendNuevaSolicitudInversionistaNotification = async ({ solicitud = {}, to } = {}) => {
+  try {
+    let destinatarios = normalizeEmailList(to);
+
+    if (destinatarios.length === 0) {
+      const usuarios = await db('usuarios')
+        .whereIn('rol', ROLES_NOTIFICACION_INVERSIONISTA)
+        .where('estado_cuenta', 'Activo')
+        .whereNotNull('email')
+        .select('email');
+
+      destinatarios = normalizeEmailList(usuarios.map((item) => item.email));
+    }
+
+    if (destinatarios.length === 0) {
+      return {
+        accepted: [],
+        skipped: true,
+        message: 'No hay destinatarios activos para notificación de nuevos prospectos a inversionista'
+      };
+    }
+
+    const adminUrl = getSolicitudesInversionistasAdminUrl();
+    // Usamos created_at porque así se llama en tu tabla de inversionistas
+    const fechaTexto = solicitud?.created_at
+      ? new Date(solicitud.created_at).toLocaleString('es-MX')
+      : new Date().toLocaleString('es-MX');
+
+    const subject = `🚀 Nuevo Prospecto de Inversionista #${solicitud?.id || 'N/A'}`;
+    const text = [
+      'Se ha registrado un nuevo prospecto a inversionista en el portal.',
+      `Folio: ${solicitud?.id || 'N/A'}`,
+      `Nombre: ${solicitud?.nombre || 'N/A'}`,
+      `Tipo: ${solicitud?.tipo_inversionista || 'N/A'}`,
+      `Teléfono: ${solicitud?.telefono || 'N/A'}`,
+      `Email: ${solicitud?.email || 'No proporcionado'}`,
+      `Fecha: ${fechaTexto}`,
+      '',
+      `Revisar y aprobar expediente en: ${adminUrl}`
+    ].join('\n');
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+        <div style="background: #0891b2; color: #fff; padding: 16px 20px;">
+          <h2 style="margin: 0; font-size: 18px;">Nuevo Prospecto de Inversionista 🚀</h2>
+        </div>
+        <div style="padding: 20px; color: #111827;">
+          <p>Se ha registrado un nuevo prospecto en el portal de inversionistas. Por favor, revisa sus documentos para proceder con la aprobación.</p>
+          <ul style="padding-left: 18px;">
+            <li><strong>Folio:</strong> ${solicitud?.id || 'N/A'}</li>
+            <li><strong>Nombre:</strong> ${solicitud?.nombre || 'N/A'}</li>
+            <li><strong>Tipo de Persona:</strong> ${solicitud?.tipo_inversionista || 'N/A'}</li>
+            <li><strong>Teléfono:</strong> ${solicitud?.telefono || 'N/A'}</li>
+            <li><strong>Email:</strong> ${solicitud?.email || 'No proporcionado'}</li>
+            <li><strong>Fecha de Registro:</strong> ${fechaTexto}</li>
+          </ul>
+          <a href="${adminUrl}" style="display: inline-block; margin-top: 12px; background: #06b6d4; color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 6px; font-weight: bold;">
+            Revisar Expediente
+          </a>
+        </div>
+      </div>
+    `;
+
+    // Asume que sendEmail ya está importado o definido en este archivo (igual que en tu otra función)
+    return sendEmail({
+      to: destinatarios.join(', '),
+      subject,
+      text,
+      html
+    });
+  } catch (error) {
+    console.error('Error enviando notificación de nuevo prospecto inversionista:', error);
+    return {
+      accepted: [],
+      skipped: true,
+      message: 'Error enviando notificación de nuevo prospecto inversionista',
+      error: String(error?.message || error)
+    };
+  }
+};
+
 /**
  * Notificación de auditoría:
  * - Si viene "to" se envía a ese/ esos correos.
@@ -96,7 +289,7 @@ const sendAuditNotification = async ({
 
     if (!destinatarios) {
       const jefes = await db('usuarios')
-        .whereIn('rol', ['super_admin', 'direccion'])
+        .whereIn('rol', ['super_admin', 'direccion', 'finanzas'])
         .where('estado_cuenta', 'Activo')
         .select('email');
 
@@ -141,15 +334,25 @@ const sendAuditNotification = async ({
       'N/A';
     const emailUsuarioAfectado = usuarioAfectado.email || 'N/A';
 
-    const tituloAfectado = esVehiculoAfectado ? 'Vehiculo afectado' : 'Usuario Afectado';
-    const etiquetaPrincipal = esVehiculoAfectado ? 'Numero de vehiculo' : 'Nombre Completo';
-    const valorPrincipal = esVehiculoAfectado
-      ? (usuarioAfectado.numero_vehiculo || 'N/A')
-      : nombreUsuarioAfectado;
-    const etiquetaSecundaria = esVehiculoAfectado ? 'Placa' : 'Email';
-    const valorSecundaria = esVehiculoAfectado
-      ? (usuarioAfectado.placa || 'N/A')
-      : emailUsuarioAfectado;
+    const tituloAfectado =
+      usuarioAfectado?.titulo ||
+      (esVehiculoAfectado ? 'Vehiculo afectado' : 'Usuario Afectado');
+    const etiquetaPrincipal =
+      usuarioAfectado?.etiqueta_principal ||
+      (esVehiculoAfectado ? 'Numero de vehiculo' : 'Nombre Completo');
+    const valorPrincipal =
+      usuarioAfectado?.valor_principal ||
+      (esVehiculoAfectado
+        ? (usuarioAfectado.numero_vehiculo || 'N/A')
+        : nombreUsuarioAfectado);
+    const etiquetaSecundaria =
+      usuarioAfectado?.etiqueta_secundaria ||
+      (esVehiculoAfectado ? 'Placa' : 'Email');
+    const valorSecundaria =
+      usuarioAfectado?.valor_secundaria ||
+      (esVehiculoAfectado
+        ? (usuarioAfectado.placa || 'N/A')
+        : emailUsuarioAfectado);
 
     const finalSubject =
       subject || `📢 Auditoría: Cambio realizado por ${nombreActor} - ${accion}`;
@@ -180,33 +383,36 @@ const sendAuditNotification = async ({
       }
     }
 
-    const describeDetalleItem = (item) => {
+    const parseDetalleItem = (item) => {
       const texto = (item || '').toString().trim();
       const colonIndex = texto.indexOf(':');
 
       if (colonIndex <= 0) {
-        return texto || 'Sin detalle';
+        return {
+          text: texto || 'Sin detalle',
+          html: texto || 'Sin detalle'
+        };
       }
 
       const label = texto.slice(0, colonIndex).trim();
       const value = texto.slice(colonIndex + 1).trim();
-      const labelNorm = label
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
 
-      if (!value) return `Se detecto un cambio en ${label.toLowerCase()}.`;
-      if (labelNorm === 'tabla') return `Se realizo la accion en el modulo de ${value}.`;
-      if (labelNorm === 'registro') return `El registro afectado corresponde a ${value}.`;
-      if (labelNorm === 'fecha y hora') return `La accion se realizo el ${value}.`;
-      if (labelNorm === 'nombre') return `Se actualizo el nombre: ${value}.`;
-      if (labelNorm === 'estado') return `Se actualizo el estado: ${value}.`;
-      return `Se actualizo ${label.toLowerCase()}: ${value}.`;
+      if (!value) {
+        return {
+          text: label,
+          html: `<strong>${label}:</strong> N/A`
+        };
+      }
+
+      return {
+        text: `${label}: ${value}`,
+        html: `<strong>${label}:</strong> ${value}`
+      };
     };
 
     const detalleHtml = detalleItems.length
       ? `<ul style="margin: 0; padding-left: 20px;">${detalleItems
-          .map(item => `<li style="margin-bottom: 8px;">${describeDetalleItem(item)}</li>`)
+          .map(item => `<li style="margin-bottom: 8px;">${parseDetalleItem(item).html}</li>`)
           .join('')}</ul>`
       : 'Sin detalles adicionales';
 
@@ -219,7 +425,7 @@ const sendAuditNotification = async ({
       `${etiquetaSecundaria}: ${valorSecundaria}`,
       `Acción: ${accion}`,
       'Detalle del cambio:',
-      ...(detalleItems.length ? detalleItems.map(item => `- ${describeDetalleItem(item)}`) : ['- Sin detalles adicionales'])
+      ...(detalleItems.length ? detalleItems.map(item => `- ${parseDetalleItem(item).text}`) : ['- Sin detalles adicionales'])
     ].join('\n');
 
     // 5) HTML
@@ -292,6 +498,8 @@ module.exports = {
   sendEmail,
   sendPasswordResetEmail,
   sendPasswordChangedEmail,
+  sendSolicitudCreadaNotification,
   sendAuditNotification,
-  isEmailConfigured
+  isEmailConfigured,
+  sendNuevaSolicitudInversionistaNotification
 };

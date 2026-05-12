@@ -1,6 +1,6 @@
 // frontend/src/components/vehiculos/VehiculosStats.jsx
 import React from 'react';
-import { Car, Check, UserCheck, Wrench, AlertTriangle } from 'lucide-react';
+import { Car, Check, UserCheck, Wrench, AlertTriangle, ClipboardCheck } from 'lucide-react';
 
 const VehiculosStats = ({ estadisticas, filterEstado, onFilterChange }) => {
   const stats = [
@@ -8,7 +8,7 @@ const VehiculosStats = ({ estadisticas, filterEstado, onFilterChange }) => {
       id: 'todos',
       label: 'Total Flota',
       value: estadisticas.total,
-      subtitle: 'Vehículos activos',
+      subtitle: 'Vehiculos activos',
       icon: Car,
       color: 'primary',
       borderColor: 'border-primary/20 hover:border-primary/40',
@@ -64,7 +64,7 @@ const VehiculosStats = ({ estadisticas, filterEstado, onFilterChange }) => {
       id: 'problemas',
       label: 'Problemas',
       value: estadisticas.problemas,
-      subtitle: 'Requieren atención',
+      subtitle: 'Requieren atencion',
       icon: AlertTriangle,
       color: 'red',
       borderColor: 'border-red-500/20 hover:border-red-500/40',
@@ -73,22 +73,36 @@ const VehiculosStats = ({ estadisticas, filterEstado, onFilterChange }) => {
       bgActive: 'bg-red-500/10',
       textColor: 'text-red-500',
       ringColor: 'ring-red-500'
+    },
+    {
+      id: 'inventario_pendiente',
+      label: 'Inventario Pendiente',
+      value: estadisticas.inventarioPendiente || 0,
+      subtitle: 'Solo inventario inicial',
+      icon: ClipboardCheck,
+      color: 'orange',
+      borderColor: 'border-orange-500/20 hover:border-orange-500/40',
+      borderActive: 'border-orange-500',
+      bgIcon: 'bg-orange-500/20',
+      bgActive: 'bg-orange-500/10',
+      textColor: 'text-orange-400',
+      ringColor: 'ring-orange-500'
     }
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
       {stats.map((stat) => {
         const Icon = stat.icon;
         const isActive = filterEstado === stat.id;
-        
+
         return (
           <button
             key={stat.id}
             onClick={() => onFilterChange(stat.id)}
             className={`glass rounded-lg p-3 sm:p-4 border-2 transition-all text-left transform hover:scale-105 ${
-              isActive 
-                ? `${stat.borderActive} ${stat.bgActive} ring-2 ${stat.ringColor} ring-offset-2 ring-offset-dark shadow-lg` 
+              isActive
+                ? `${stat.borderActive} ${stat.bgActive} ring-2 ${stat.ringColor} ring-offset-2 ring-offset-dark shadow-lg`
                 : stat.borderColor
             }`}
           >

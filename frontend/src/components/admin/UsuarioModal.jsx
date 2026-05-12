@@ -9,6 +9,7 @@ const ROL_OPTIONS = [
   { value: 'coordinador', label: 'Coordinador Zona', description: 'Operación y seguimiento regional' },
   { value: 'finanzas', label: 'Finanzas', description: 'Finanzas y pagos' },
   { value: 'jefe_taller', label: 'Jefe de Taller', description: 'Mantenimiento' },
+  { value: 'conductor', label: 'Conductor', description: 'Acceso de conductor' },
 ];
 
 const ESTADO_OPTIONS = [
@@ -23,6 +24,7 @@ const UsuarioModal = ({ usuario, onClose, onGuardar }) => {
   const isEditing = !!usuario;
   const userRol = currentUser.rol;
   const canManageRoles = ['super_admin', 'finanzas'].includes(userRol);
+  const canEditEmailInEdit = ['super_admin', 'director', 'finanzas', 'gerente_ops'].includes(userRol);
 
   
 const opcionesVisibles = ESTADO_OPTIONS.filter(opcion => {
@@ -154,8 +156,8 @@ const opcionesVisibles = ESTADO_OPTIONS.filter(opcion => {
                 name="email"
                 value={formData.email}
                 onChange={handleChange}
-                disabled={isEditing} // Email no se puede cambiar en edición
-                className={`w-full pl-10 pr-4 py-3 bg-black/40 border ${errors.email ? 'border-red-500/50' : 'border-white/10'} rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all ${isEditing ? 'opacity-60 cursor-not-allowed' : ''}`}
+                disabled={isEditing && !canEditEmailInEdit}
+                className={`w-full pl-10 pr-4 py-3 bg-black/40 border ${errors.email ? 'border-red-500/50' : 'border-white/10'} rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition-all ${(isEditing && !canEditEmailInEdit) ? 'opacity-60 cursor-not-allowed' : ''}`}
                 placeholder="usuario@ejemplo.com"
               />
             </div>
@@ -165,9 +167,14 @@ const opcionesVisibles = ESTADO_OPTIONS.filter(opcion => {
                 {errors.email}
               </p>
             )}
-            {isEditing && (
+            {isEditing && !canEditEmailInEdit && (
               <p className="mt-1 text-xs text-gray-500">
-                El email no se puede modificar
+                Tu rol no puede modificar el email desde edición
+              </p>
+            )}
+            {isEditing && canEditEmailInEdit && (
+              <p className="mt-1 text-xs text-gray-500">
+                El servidor validará jerarquía y duplicados antes de guardar
               </p>
             )}
           </div>

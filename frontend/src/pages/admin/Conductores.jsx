@@ -510,7 +510,7 @@ const conductoresFiltrados = useMemo(() => {
         
         return coincideBusqueda && coincideStatus && coincideStatusTrabajo && coincideVehiculo && coincideBot;
       })
-      // 2. EL ORDENAMIENTO MAGICO (Prioridad a Solicitudes) 👇
+      // 2. EL ORDENAMIENTO MAGICO (Prioridad a Solicitudes) 
       .sort((a, b) => {
         const statusA = (a.status || '').toString().toLowerCase();
         const statusB = (b.status || '').toString().toLowerCase();
@@ -620,7 +620,7 @@ const conductoresFiltrados = useMemo(() => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">

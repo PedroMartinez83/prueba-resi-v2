@@ -654,7 +654,7 @@ exports.vincularMantenimiento = async (req, res) => {
         tipo_servicio: 'Reparación por siniestro',
         fecha_programada: fecha_programada || db.fn.now(),
         kilometraje_servicio: vehiculo.kilometraje_actual,
-        proximo_servicio_km: vehiculo.kilometraje_actual + 5000,
+        proximo_servicio_km: vehiculo.kilometraje_actual + 10000,
         estado: 'Programado',
         status: 'Todo',
         taller: taller || 'Por definir',
@@ -776,13 +776,13 @@ exports.distribuirGastoSiniestro = async (req, res) => {
 
     let detallePoliza = null;
 
-    if (poliza > 0 && siniestro.conductor_id) {
-      const conductorData = await trx('conductores')
-        .where('id', siniestro.conductor_id)
+    if (poliza > 0 && siniestro.vehiculo_id) {
+      const vehiculoData = await trx('vehiculos')
+        .where('id', siniestro.vehiculo_id)
         .first();
 
-      if (conductorData) {
-        const saldoActual = parseFloat(conductorData.saldo_poliza_mecanica) || 50000;
+      if (vehiculoData) {
+        const saldoActual = parseFloat(vehiculoData.poliza_mecanica || 0);
         const nuevoSaldo = saldoActual - poliza;
 
         if (nuevoSaldo < 0) {
@@ -794,16 +794,16 @@ exports.distribuirGastoSiniestro = async (req, res) => {
           });
         }
 
-        await trx('conductores')
-          .where('id', siniestro.conductor_id)
+        await trx('vehiculos')
+          .where('id', siniestro.vehiculo_id)
           .update({
-            saldo_poliza_mecanica: nuevoSaldo,
+            poliza_mecanica: nuevoSaldo,
             updated_at: db.fn.now()
           });
 
         detallePoliza = {
-          conductor_id: conductorData.id,
-          nombre_conductor: conductorData.nombre_conductor,
+          vehiculo_id: vehiculoData.id,
+          vehiculo: vehiculoData.numero_vehiculo,
           saldo_previo: saldoActual,
           saldo_nuevo: nuevoSaldo,
           monto_descontado: poliza

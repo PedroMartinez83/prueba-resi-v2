@@ -1,9 +1,16 @@
 // frontend/src/components/vehiculos/VehiculosTable.jsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Car, Edit, Trash2, FileWarning, MoreVertical, AlertTriangle, Wrench, X, Check } from 'lucide-react';
+import { Car, Edit, Trash2, FileWarning, MoreVertical, AlertTriangle, Wrench, X, Check, ClipboardCheck } from 'lucide-react';
 
-const VehiculosTable = ({ vehiculos, onEdit, onDelete, onProcesarBaja, puedeProcesarSolicitudesBaja = false }) => {
+const VehiculosTable = ({
+  vehiculos,
+  onEdit,
+  onDelete,
+  onProcesarBaja,
+  onOpenInventario,
+  puedeProcesarSolicitudesBaja = false
+}) => {
   const navigate = useNavigate();
   const [menuAbierto, setMenuAbierto] = useState(null);
   const rolConPermiso = Boolean(puedeProcesarSolicitudesBaja);
@@ -62,7 +69,7 @@ const VehiculosTable = ({ vehiculos, onEdit, onDelete, onProcesarBaja, puedeProc
         // await api.post(`/vehiculos/${id}/gestionar-baja`, { accion });
         // O llama a una función que te pasen por props
         onProcesarBaja(id, accion); // Suponiendo que pasas esta función desde el padre
-    } catch (error) {
+    } catch {
         alert('Error al procesar');
     }
 };
@@ -78,9 +85,14 @@ const VehiculosTable = ({ vehiculos, onEdit, onDelete, onProcesarBaja, puedeProc
 
   return (
     <div className="glass rounded-lg border border-primary/20 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead className="bg-dark/50 border-b border-primary/20">
+      {/*   1. Cambiamos a overflow-auto, limitamos la altura y estilizamos la barra   */}
+      <div className="overflow-auto max-h-[60vh] sidebar-scroll">
+        
+        {/*   2. Agregamos relative y un min-w para que las columnas no se apachurren   */}
+        <table className="w-full min-w-[800px] relative">
+          
+          {/*   3. Quitamos el /50 del fondo y agregamos sticky top-0 z-10   */}
+          <thead className="bg-surface-primary border-b border-primary/20 sticky top-0 z-10 shadow-sm">
             <tr>
               <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">ID</th>
               <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">Vehículo</th>
@@ -115,6 +127,18 @@ const VehiculosTable = ({ vehiculos, onEdit, onDelete, onProcesarBaja, puedeProc
                         <span className="text-white font-mono text-sm">
                           {vehiculo.NumeroVehiculo || 'N/A'}
                         </span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                          vehiculo.tiene_inventario_inicial
+                            ? 'text-green-300 border-green-500/30 bg-green-500/10'
+                            : 'text-yellow-300 border-yellow-500/30 bg-yellow-500/10'
+                        }`}>
+                          {vehiculo.tiene_inventario_inicial ? 'Inv. inicial OK' : 'Inv. inicial pendiente'}
+                        </span>
+                        {vehiculo.inventario_alerta && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded border text-orange-300 border-orange-500/30 bg-orange-500/10">
+                            {vehiculo.inventario_alerta}
+                          </span>
+                        )}
                       </div>
                     </td>
                     
@@ -274,6 +298,17 @@ const VehiculosTable = ({ vehiculos, onEdit, onDelete, onProcesarBaja, puedeProc
                                 Ver Siniestros
                               </button>
 
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenInventario?.(vehiculo);
+                                  setMenuAbierto(null);
+                                }}
+                                className="w-full px-4 py-2 text-left text-sm text-cyan-300 hover:bg-gray-700 transition-colors flex items-center gap-2"
+                              >
+                                <ClipboardCheck className="w-4 h-4" />
+                                Llenar inventario
+                              </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();

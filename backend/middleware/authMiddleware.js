@@ -1,7 +1,42 @@
 const jwt = require('jsonwebtoken');
+const { db } = require('../config/database');
+
+const isEmptyConductorId = (value) =>
+  value === null ||
+  value === undefined ||
+  (typeof value === 'string' && value.trim() === '');
+
+const normalizeConductorId = (value) => {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return value;
+
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (!/^\d+$/.test(trimmed)) return value;
+
+  return Number.parseInt(trimmed, 10);
+};
+
+const normalizeUserId = (value) => {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value !== 'string') return value;
+
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (!/^\d+$/.test(trimmed)) return value;
+
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : value;
+};
+
+const normalizeEmail = (value) => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+};
 
 // Verificar token JWT
-const verifyToken = (req, res, next) => {
+const verifyToken = async (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
   
   console.log('🔐 verifyToken ejecutándose...');
@@ -19,6 +54,54 @@ const verifyToken = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decodedRole = decoded.rol || decoded.role;
+    decoded.id = normalizeUserId(decoded.id);
+
+    if ((!Number.isInteger(decoded.id) || decoded.id <= 0) && decodedRole === 'conductor') {
+      const emailCandidates = [
+        normalizeEmail(decoded.email),
+        normalizeEmail(decoded.name)
+      ].filter(Boolean);
+
+      if (emailCandidates.length > 0) {
+        const usuario = await db('usuarios')
+          .where((qb) => {
+            qb.whereIn('email', emailCandidates).orWhereIn('name', emailCandidates);
+          })
+          .select('id')
+          .first();
+
+        if (usuario?.id) {
+          decoded.id = usuario.id;
+          console.log('  ℹ️ user.id recuperado desde DB para token conductor');
+        }
+      }
+    }
+
+    if (decodedRole === 'conductor') {
+      decoded.conductorId = normalizeConductorId(decoded.conductorId);
+
+      if (isEmptyConductorId(decoded.conductorId)) {
+        const conductor = await db('conductores')
+          .where({ usuario_id: decoded.id })
+          .select('id')
+          .first();
+
+        if (conductor?.id) {
+          decoded.conductorId = conductor.id;
+          console.log('  ℹ️ conductorId recuperado desde DB para usuario:', decoded.id);
+        }
+      }
+
+      if (!Number.isInteger(decoded.conductorId) || decoded.conductorId <= 0) {
+        console.log('  ❌ conductorId inválido para usuario conductor:', decoded.id, decoded.conductorId);
+        return res.status(403).json({
+          success: false,
+          message: 'Usuario conductor no vinculado correctamente a un registro de conductor'
+        });
+      }
+    }
+
     const now = Date.now();
     const lastActivity = decoded.lastActivity || 0;
     const INACTIVITY_LIMIT_MS = 4 * 60 * 60 * 1000; // 4 horas

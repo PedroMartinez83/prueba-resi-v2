@@ -21,6 +21,213 @@ class AuditService {
         return 'Actividad Administrativa';
     }
   }
+
+  normalizeVehiculoNumero({
+    numeroVehiculo = null,
+    tipoSocio = 'SD',
+    numeroUnidad = null,
+    registroId = null
+  } = {}) {
+    const numeroActual = (numeroVehiculo || '').toString().trim();
+    const tipo = (tipoSocio || 'SD').toString().trim().toUpperCase() || 'SD';
+    const unidad = Number.parseInt(numeroUnidad, 10);
+    const idNumerico = Number.parseInt(registroId, 10);
+
+    const unidadFinal = Number.isInteger(unidad) && unidad > 0
+      ? unidad
+      : (Number.isInteger(idNumerico) && idNumerico > 0 ? idNumerico : null);
+
+    const matchEstandar = numeroActual.match(/^([A-Za-z]{2,})-(\d+)$/);
+    if (matchEstandar) {
+      return `${matchEstandar[1].toUpperCase()}-${String(parseInt(matchEstandar[2], 10)).padStart(4, '0')}`;
+    }
+
+    const matchSoloDigitos = numeroActual.match(/(\d+)/);
+    if (matchSoloDigitos) {
+      return `${tipo}-${String(parseInt(matchSoloDigitos[1], 10)).padStart(4, '0')}`;
+    }
+
+    if (unidadFinal) {
+      return `${tipo}-${String(unidadFinal).padStart(4, '0')}`;
+    }
+
+    return numeroActual || (Number.isInteger(idNumerico) && idNumerico > 0 ? `ID ${idNumerico}` : 'N/A');
+  }
+
+  async resolveVehiculoAfectado({ datos_registro = null, registro_id = null } = {}) {
+    const numeroVehiculoPayload =
+      datos_registro?.numero_vehiculo ||
+      datos_registro?.NumeroVehiculo ||
+      datos_registro?.numeroVehiculo ||
+      datos_registro?.vehiculo?.numero_vehiculo ||
+      datos_registro?.vehiculo?.NumeroVehiculo ||
+      datos_registro?.vehiculo?.numeroVehiculo ||
+      null;
+    const tipoSocioPayload =
+      datos_registro?.tipo_socio ||
+      datos_registro?.TipoSocio ||
+      datos_registro?.tipoSocio ||
+      datos_registro?.vehiculo?.tipo_socio ||
+      datos_registro?.vehiculo?.TipoSocio ||
+      datos_registro?.vehiculo?.tipoSocio ||
+      null;
+    const numeroUnidadPayload =
+      datos_registro?.numero_unidad ||
+      datos_registro?.NumeroUnidad ||
+      datos_registro?.numeroUnidad ||
+      datos_registro?.vehiculo?.numero_unidad ||
+      datos_registro?.vehiculo?.NumeroUnidad ||
+      datos_registro?.vehiculo?.numeroUnidad ||
+      null;
+
+    const placaPayload =
+      datos_registro?.placa ||
+      datos_registro?.Placa ||
+      datos_registro?.vehiculo?.placa ||
+      datos_registro?.vehiculo?.Placa ||
+      null;
+
+    let numeroVehiculo = numeroVehiculoPayload;
+    let placa = placaPayload;
+    let tipoSocio = tipoSocioPayload;
+    let numeroUnidad = numeroUnidadPayload;
+    const registroIdNumerico = Number.parseInt(registro_id, 10);
+
+    if (
+      (!numeroVehiculo || !placa || !tipoSocio || !numeroUnidad) &&
+      Number.isInteger(registroIdNumerico) &&
+      registroIdNumerico > 0
+    ) {
+      const vehiculoDb = await db('vehiculos')
+        .where('id', registroIdNumerico)
+        .select('numero_vehiculo', 'placa', 'tipo_socio', 'numero_unidad')
+        .first();
+
+      if (vehiculoDb) {
+        if (!numeroVehiculo) numeroVehiculo = vehiculoDb.numero_vehiculo;
+        if (!placa) placa = vehiculoDb.placa;
+        if (!tipoSocio) tipoSocio = vehiculoDb.tipo_socio;
+        if (!numeroUnidad) numeroUnidad = vehiculoDb.numero_unidad;
+      }
+    }
+
+    const numeroVehiculoNormalizado = this.normalizeVehiculoNumero({
+      numeroVehiculo,
+      tipoSocio,
+      numeroUnidad,
+      registroId: registroIdNumerico
+    });
+
+    return {
+      tipo: 'vehiculo',
+      numero_vehiculo: numeroVehiculoNormalizado,
+      placa: placa || 'N/A'
+    };
+  }
+
+  async resolveConductorAfectado({ datos_registro = null, registro_id = null } = {}) {
+    const nombrePayload =
+      datos_registro?.nombre_conductor ||
+      datos_registro?.NombreConductor ||
+      datos_registro?.nombre_completo ||
+      datos_registro?.name ||
+      datos_registro?.nombre ||
+      datos_registro?.conductor?.nombre_conductor ||
+      datos_registro?.conductor?.NombreConductor ||
+      datos_registro?.conductor?.nombre_completo ||
+      datos_registro?.conductor?.name ||
+      null;
+
+    const emailPayload =
+      datos_registro?.email ||
+      datos_registro?.conductor_email ||
+      datos_registro?.usuario_email ||
+      datos_registro?.conductor?.email ||
+      null;
+
+    let nombreConductor = nombrePayload;
+    let emailConductor = emailPayload;
+    const registroIdNumerico = Number.parseInt(registro_id, 10);
+
+    if (
+      (!nombreConductor || !emailConductor) &&
+      Number.isInteger(registroIdNumerico) &&
+      registroIdNumerico > 0
+    ) {
+      const conductorDb = await db('conductores')
+        .where('id', registroIdNumerico)
+        .select('nombre_conductor', 'email')
+        .first();
+
+      if (conductorDb) {
+        if (!nombreConductor) nombreConductor = conductorDb.nombre_conductor;
+        if (!emailConductor) emailConductor = conductorDb.email;
+      }
+    }
+
+    return {
+      name:
+        nombreConductor ||
+        (Number.isInteger(registroIdNumerico) && registroIdNumerico > 0
+          ? `ID ${registroIdNumerico}`
+          : 'N/A'),
+      email: emailConductor || 'N/A'
+    };
+  }
+
+  async resolvePagoRentaAfectado({ datos_registro = null, registro_id = null } = {}) {
+    const nombrePayload =
+      datos_registro?.nombre_conductor ||
+      datos_registro?.NombreConductor ||
+      datos_registro?.nombre_completo ||
+      datos_registro?.name ||
+      datos_registro?.numero_vehiculo ||
+      datos_registro?.NumeroVehiculo ||
+      null;
+
+    const emailPayload =
+      datos_registro?.email ||
+      datos_registro?.conductor_email ||
+      datos_registro?.usuario_email ||
+      null;
+
+    let nombreAfectado = nombrePayload;
+    let emailAfectado = emailPayload;
+    const registroIdNumerico = Number.parseInt(registro_id, 10);
+
+    if (
+      (!nombreAfectado || !emailAfectado) &&
+      Number.isInteger(registroIdNumerico) &&
+      registroIdNumerico > 0
+    ) {
+      const pagoDb = await db('pagos_diarios as p')
+        .leftJoin('asignaciones as a', 'p.asignacion_id', 'a.id')
+        .leftJoin('conductores as c', 'a.conductor_id', 'c.id')
+        .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
+        .where('p.id', registroIdNumerico)
+        .select('c.nombre_conductor', 'c.email', 'v.numero_vehiculo')
+        .first();
+
+      if (pagoDb) {
+        if (!nombreAfectado) {
+          nombreAfectado = pagoDb.nombre_conductor || pagoDb.numero_vehiculo;
+        }
+        if (!emailAfectado) {
+          emailAfectado = pagoDb.email;
+        }
+      }
+    }
+
+    return {
+      name:
+        nombreAfectado ||
+        (Number.isInteger(registroIdNumerico) && registroIdNumerico > 0
+          ? `Pago ID ${registroIdNumerico}`
+          : 'N/A'),
+      email: emailAfectado || 'N/A'
+    };
+  }
+
   /**
    * Registra una acciÃ³n en la tabla audit_logs
    */
@@ -202,9 +409,15 @@ class AuditService {
     if (!user) return;
     
     try {
-      await connection.raw(`SET LOCAL app.current_user_id = '${user.id}'`);
-      await connection.raw(`SET LOCAL app.current_user_email = '${user.email}'`);
-      await connection.raw(`SET LOCAL app.current_user_rol = '${user.rol}'`);
+      const userId = Number.isInteger(Number(user.id)) && Number(user.id) > 0
+        ? String(Number(user.id))
+        : '';
+      const userEmail = typeof user.email === 'string' ? user.email : '';
+      const userRol = typeof user.rol === 'string' ? user.rol : '';
+
+      await connection.raw('SELECT set_config(?, ?, true)', ['app.current_user_id', userId]);
+      await connection.raw('SELECT set_config(?, ?, true)', ['app.current_user_email', userEmail]);
+      await connection.raw('SELECT set_config(?, ?, true)', ['app.current_user_rol', userRol]);
     } catch (error) {
       console.error('Error estableciendo contexto de usuario:', error);
     }
@@ -274,27 +487,31 @@ class AuditService {
         }
       })();
 
+      const esPagoRenta = ['pagos', 'pagos_diarios', 'rentas'].includes(tabla_afectada);
+
       const usuarioAfectado = tabla_afectada === 'vehiculos'
-        ? {
-            tipo: 'vehiculo',
-            numero_vehiculo:
-              datos_registro?.numero_vehiculo ||
-              datos_registro?.nombre ||
-              (registro_id ? `ID ${registro_id}` : 'N/A'),
-            placa: datos_registro?.placa || 'N/A'
-          }
-        : {
-            name: objetivoNombre,
-            email:
-              datos_registro?.email ||
-              datos_registro?.usuario_email ||
-              datos_registro?.conductor_email ||
-              'N/A'
-          };
+        ? await this.resolveVehiculoAfectado({ datos_registro, registro_id })
+        : tabla_afectada === 'conductores'
+          ? await this.resolveConductorAfectado({ datos_registro, registro_id })
+          : esPagoRenta
+            ? await this.resolvePagoRentaAfectado({ datos_registro, registro_id })
+          : {
+              name: objetivoNombre,
+              email:
+                datos_registro?.email ||
+                datos_registro?.usuario_email ||
+                datos_registro?.conductor_email ||
+                'N/A'
+            };
+      const registroDetalle = tabla_afectada === 'vehiculos'
+        ? (usuarioAfectado?.numero_vehiculo || 'N/A')
+        : tabla_afectada === 'conductores'
+          ? (usuarioAfectado?.name || 'N/A')
+          : (registro_id || objetivoNombre || 'N/A');
 
       const detallesCambio = [
         `Tabla: ${tabla_afectada || 'N/A'}`,
-        `Registro: ${registro_id || 'N/A'}`,
+        `Registro: ${registroDetalle}`,
         `Fecha y hora: ${fechaTexto}`
       ].join(' | ');
 
@@ -363,24 +580,98 @@ class AuditService {
         }
       })();
 
-      const usuarioAfectado = tabla_afectada === 'vehiculos'
-        ? {
-            tipo: 'vehiculo',
-            numero_vehiculo:
-              datos_registro?.numero_vehiculo ||
-              datos_registro?.nombre ||
-              (registro_id ? `ID ${registro_id}` : 'N/A'),
-            placa: datos_registro?.placa || 'N/A'
-          }
-        : {
-            name: objetivoNombre,
-            email:
-              datos_registro?.email ||
-              datos_registro?.usuario_email ||
-              datos_registro?.conductor_email ||
-              'N/A'
-          };
+      const esPagoRenta = ['pagos', 'pagos_diarios', 'rentas'].includes(tabla_afectada);
 
+      const usuarioAfectado = tabla_afectada === 'vehiculos'
+        ? await this.resolveVehiculoAfectado({ datos_registro, registro_id })
+        : tabla_afectada === 'conductores'
+          ? await this.resolveConductorAfectado({ datos_registro, registro_id })
+          : esPagoRenta
+            ? await this.resolvePagoRentaAfectado({ datos_registro, registro_id })
+          : {
+              name: objetivoNombre,
+              email:
+                datos_registro?.email ||
+                datos_registro?.usuario_email ||
+                datos_registro?.conductor_email ||
+                'N/A'
+            };
+      const registroDetalle = tabla_afectada === 'vehiculos'
+        ? (usuarioAfectado?.numero_vehiculo || 'N/A')
+        : tabla_afectada === 'conductores'
+          ? (usuarioAfectado?.name || 'N/A')
+          : (registro_id || objetivoNombre || 'N/A');
+
+      const detallesCambio = [
+        `Tabla: ${tabla_afectada || 'N/A'}`,
+        `Registro: ${registroDetalle}`,
+        `Fecha y hora: ${fechaTexto}`
+      ].join(' | ');
+
+      await sendAuditNotification({
+        to: destinatarios,
+        subject,
+        subtitle,
+        actorNombre,
+        usuarioAfectado,
+        accion: accionEspecifica,
+        detallesCambio
+      });
+    } catch (error) {
+      console.error('Error enviando notificacion de eliminacion (coordinador):', error);
+    }
+  }
+
+  /**
+   * Notifica eliminaciones de solicitudes hechas por gerente o superior
+   * hacia los roles jerarquicamente superiores.
+   */
+  async notificarEliminacionRolSuperior({
+    actor = {},
+    tabla_afectada = null,
+    registro_id = null,
+    fecha = new Date(),
+    datos_registro = null
+  }) {
+    try {
+      if (!isEmailConfigured()) return;
+
+      const rolesDestino = ['super_admin', 'director', 'direccion', 'gerente_ops'];
+
+      let destinatarios = await db('usuarios')
+        .whereIn('rol', rolesDestino)
+        .where('estado_cuenta', 'Activo')
+        .whereNotNull('email')
+        .pluck('email');
+
+      destinatarios = [...new Set(
+        (destinatarios || [])
+          .map((email) => String(email || '').trim().toLowerCase())
+          .filter(Boolean)
+      )];
+
+      if (destinatarios.length === 0) return;
+
+      const subject = 'Notificacion de Auditoria';
+      const actorNombre = actor.nombre || actor.nombre_completo || actor.name || actor.email || 'N/A';
+      const subtitle = this.getAuditSubtitleByRole(actor?.rol);
+      const objetivoNombre =
+        datos_registro?.nombre_completo ||
+        datos_registro?.nombre ||
+        datos_registro?.email ||
+        (registro_id ? `ID ${registro_id}` : 'N/A');
+      const fechaTexto = new Date(fecha).toLocaleString('es-MX', {
+        timeZone: 'America/Mexico_City'
+      });
+
+      const accionEspecifica = tabla_afectada === 'solicitudes'
+        ? 'Eliminacion de solicitud'
+        : 'Eliminacion de registro';
+
+      const usuarioAfectado = {
+        name: objetivoNombre,
+        email: datos_registro?.email || 'N/A'
+      };
       const detallesCambio = [
         `Tabla: ${tabla_afectada || 'N/A'}`,
         `Registro: ${registro_id || 'N/A'}`,
@@ -397,7 +688,84 @@ class AuditService {
         detallesCambio
       });
     } catch (error) {
-      console.error('Error enviando notificacion de eliminacion (coordinador):', error);
+      console.error('Error enviando notificacion de eliminacion (gerente/superior):', error);
+    }
+  }
+
+  /**
+   * Notifica eliminaciones de mantenimientos al super admin
+   */
+  async notificarEliminacionMantenimientoSuperAdmin({
+    actor = {},
+    ruta_api = null,
+    tabla_afectada = 'mantenimientos',
+    registro_id = null,
+    ip_address = null,
+    user_agent = null,
+    fecha = new Date(),
+    datos_registro = null
+  }) {
+    try {
+      if (!isEmailConfigured()) return;
+
+      let destinatarios = await db('usuarios')
+        .whereIn('rol', ['super_admin', 'director', 'gerente', 'finanzas'])
+        .where('estado_cuenta', 'Activo')
+        .whereNotNull('email')
+        .pluck('email');
+
+      destinatarios = [...new Set(
+        (destinatarios || [])
+          .map((email) => String(email || '').trim().toLowerCase())
+          .filter(Boolean)
+      )];
+
+      if (destinatarios.length === 0) return;
+
+      const subject = 'Notificacion de Auditoria';
+      const actorNombre = actor.nombre || actor.nombre_completo || actor.name || actor.email || 'N/A';
+      const subtitle = this.getAuditSubtitleByRole(actor?.rol);
+      const fechaTexto = new Date(fecha).toLocaleString('es-MX', {
+        timeZone: 'America/Mexico_City'
+      });
+
+      const folioServicio =
+        datos_registro?.folio_servicio ||
+        (registro_id ? `#${String(registro_id).padStart(4, '0')}` : 'N/A');
+
+      const numeroVehiculo = datos_registro?.numero_vehiculo || 'N/A';
+      const usuarioAfectado = {
+        tipo: 'vehiculo',
+        titulo: 'Vehiculo afectado',
+        etiqueta_principal: 'Folio de servicio',
+        valor_principal: folioServicio,
+        etiqueta_secundaria: 'Numero de vehiculo',
+        valor_secundaria: numeroVehiculo,
+        numero_vehiculo: numeroVehiculo,
+        placa: datos_registro?.placa || 'N/A'
+      };
+
+      const detallesCambio = [
+        `Folio de servicio: ${folioServicio}`,
+        `Vehiculo: ${numeroVehiculo}`,
+        `Placa: ${datos_registro?.placa || 'N/A'}`,
+        `Tipo de servicio: ${datos_registro?.tipo_servicio || 'N/A'}`,
+        `Estado previo: ${datos_registro?.estado || 'N/A'}`,
+        `Fecha programada: ${datos_registro?.fecha_programada || 'N/A'}`,
+        `Fecha y hora: ${fechaTexto}`
+      ].join(' | ');
+
+      await sendAuditNotification({
+        to: destinatarios,
+        subject,
+        subtitle,
+        actorNombre,
+        usuarioAfectado,
+        accion: 'Eliminacion de mantenimiento',
+        detallesCambio
+      });
+    } catch (error) {
+      console.error('Error enviando notificacion de eliminacion de mantenimiento:', error);
     }
   }
 

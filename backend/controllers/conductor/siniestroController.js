@@ -2,6 +2,7 @@
 const { db } = require('../../config/database');
 const cloudinary = require('cloudinary').v2;
 const streamifier = require('streamifier');
+const { resolveConductorId } = require('./conductorContextHelper');
 
 // Configurar Cloudinary
 cloudinary.config({
@@ -31,7 +32,10 @@ const uploadToCloudinary = (fileBuffer, options) => {
 // =====================================================
 const getMisSiniestros = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
     const limit = parseInt(req.query.limit) || 50;
 
     const siniestros = await db('siniestros')
@@ -68,7 +72,10 @@ const getMisSiniestros = async (req, res) => {
 // =====================================================
 const getSiniestroById = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
     const { id } = req.params;
 
     const siniestro = await db('siniestros')
@@ -109,7 +116,10 @@ const getSiniestroById = async (req, res) => {
 // =====================================================
 const registrarSiniestro = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const conductorId = await resolveConductorId(req.user);
+    if (!conductorId) {
+      return res.status(400).json({ success: false, message: 'No se pudo identificar al conductor autenticado' });
+    }
     const {
       tipo_siniestro,
       descripcion,

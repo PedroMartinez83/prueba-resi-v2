@@ -2,6 +2,16 @@ import { useState, useEffect } from 'react';
 import { X, User, UserPlus, DollarSign, AlertCircle, CheckCircle, Search } from 'lucide-react';
 import { API_BASE_URL } from '@/services/api';
 
+const mapConductorContrato = (conductor = {}) => ({
+  id: conductor.id,
+  nombre: conductor.nombre || '',
+  telefono: conductor.telefono || '',
+  email: conductor.email || '',
+  calificacion: Number(conductor.calificacion || 0),
+  tiene_asignacion: Boolean(conductor.tiene_asignacion),
+  vehiculo_asignado_numero: conductor.vehiculo_asignado_numero || null
+});
+
 const CambiarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [conductoresDisponibles, setConductoresDisponibles] = useState([]);
@@ -47,8 +57,17 @@ const CambiarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
       );
       const dataConductores = await resConductores.json();
       if (dataConductores.success) {
-        setConductoresDisponibles(dataConductores.conductores);
-        setEstadisticas(dataConductores.estadisticas || { total: 0, disponibles: 0, ocupados: 0 });
+        const conductoresNormalizados = (dataConductores.conductores || [])
+          .map(mapConductorContrato)
+          .filter((conductor) => conductor.id != null);
+        setConductoresDisponibles(conductoresNormalizados);
+        setEstadisticas(
+          dataConductores.estadisticas || {
+            total: conductoresNormalizados.length,
+            disponibles: conductoresNormalizados.filter(c => !c.tiene_asignacion).length,
+            ocupados: conductoresNormalizados.filter(c => c.tiene_asignacion).length
+          }
+        );
       }
     } catch (error) {
       console.error('Error al cargar datos:', error);
@@ -70,12 +89,12 @@ const CambiarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
 
     // Advertencia si el conductor ya está ocupado
     if (conductorSeleccionado.tiene_asignacion) {
-      if (!confirm(`⚠️ ADVERTENCIA: ${conductorSeleccionado.nombre_conductor} ya está asignado al vehículo ${conductorSeleccionado.vehiculo_asignado_numero}.\n\n¿Deseas reasignarlo a este vehículo de todas formas?`)) {
+      if (!confirm(`⚠️ ADVERTENCIA: ${conductorSeleccionado.nombre} ya está asignado al vehículo ${conductorSeleccionado.vehiculo_asignado_numero}.\n\n¿Deseas reasignarlo a este vehículo de todas formas?`)) {
         return;
       }
     }
 
-    if (!confirm(`¿Cambiar conductor a ${conductorSeleccionado.nombre_conductor}?`)) {
+    if (!confirm(`¿Cambiar conductor a ${conductorSeleccionado.nombre}?`)) {
       return;
     }
 
@@ -118,10 +137,14 @@ const CambiarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
     }
   };
 
-  const conductoresFiltrados = conductoresDisponibles.filter(c =>
-    c.nombre_conductor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.numero_telefono?.includes(searchTerm)
-  );
+  const conductoresFiltrados = conductoresDisponibles.filter((c) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      (c.nombre || '').toLowerCase().includes(term) ||
+      (c.telefono || '').includes(searchTerm)
+    );
+  });
 
   const formatDate = (date) => {
     if (!date) return '-';
@@ -249,7 +272,7 @@ const CambiarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
                           <div className="flex items-center justify-between">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
-                                <p className="text-white font-semibold">{conductor.nombre_conductor}</p>
+                                <p className="text-white font-semibold">{conductor.nombre || 'Sin nombre'}</p>
                                 <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
                                   estaDisponible 
                                     ? 'bg-green-500/20 text-green-400' 
@@ -258,7 +281,7 @@ const CambiarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
                                   {estaDisponible ? 'Disponible' : 'Ocupado'}
                                 </span>
                               </div>
-                              <p className="text-gray-400 text-sm">{conductor.numero_telefono}</p>
+                              <p className="text-gray-400 text-sm">{conductor.telefono || 'Sin teléfono'}</p>
                               {!estaDisponible && conductor.vehiculo_asignado_numero && (
                                 <p className="text-yellow-400 text-xs mt-1">
                                   📍 Asignado a: {conductor.vehiculo_asignado_numero}

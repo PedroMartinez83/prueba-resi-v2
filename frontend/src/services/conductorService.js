@@ -46,11 +46,20 @@ class ConductorService {
           throw new Error('Sesión expirada');
         }
         
-        const error = await response.json().catch(() => ({
+        const errorPayload = await response.json().catch(() => ({
           message: `Error ${response.status}: ${response.statusText}`
         }));
         
-        throw new Error(error.message || 'Error en la petición');
+        const detail = errorPayload?.error ? `: ${errorPayload.error}` : '';
+        const requestError = new Error((errorPayload.message || 'Error en la petición') + detail);
+        requestError.status = response.status;
+        requestError.details = errorPayload;
+        throw requestError;
+      }
+
+      const refreshedToken = response.headers.get('x-refreshed-token');
+      if (refreshedToken) {
+        localStorage.setItem('token', refreshedToken);
       }
 
       if (response.status === 204) {
@@ -128,7 +137,13 @@ class ConductorService {
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.message || 'Error al subir documento');
+        const detail = error?.error ? `: ${error.error}` : '';
+        throw new Error((error.message || 'Error al subir documento') + detail);
+      }
+
+      const refreshedToken = response.headers.get('x-refreshed-token');
+      if (refreshedToken) {
+        localStorage.setItem('token', refreshedToken);
       }
 
       return await response.json();
@@ -150,6 +165,24 @@ class ConductorService {
       return data;
     } catch (error) {
       console.error('Error al obtener vehículo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Actualiza el kilometraje del vehículo asignado al conductor
+   * @param {number} kilometrajeActual - Nuevo kilometraje
+   * @returns {Promise<Object>} Confirmación y contexto preventivo
+   */
+  async actualizarKilometrajeVehiculo(kilometrajeActual) {
+    try {
+      const data = await this.fetchWithAuth('/conductor/vehiculo/actualizar-kilometraje', {
+        method: 'POST',
+        body: JSON.stringify({ kilometraje_actual: kilometrajeActual })
+      });
+      return data;
+    } catch (error) {
+      console.error('Error al actualizar kilometraje del vehículo:', error);
       throw error;
     }
   }
@@ -330,6 +363,36 @@ class ConductorService {
   }
 
   // ============= MANTENIMIENTOS =============
+
+  /**
+   * Obtiene opciones/contexto para solicitar mantenimiento
+   * @returns {Promise<Object>} Tipos de servicio y sugerencia por kilometraje
+   */
+  async getOpcionesSolicitudMantenimiento() {
+    try {
+      const data = await this.fetchWithAuth('/conductor/mantenimientos/opciones');
+      return data;
+    } catch (error) {
+      console.error('Error al obtener opciones de mantenimiento:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene disponibilidad de horarios para una fecha en agenda de mantenimientos
+   * @param {string} fecha - Formato YYYY-MM-DD
+   * @returns {Promise<Object>} Slots de horario disponibles/no disponibles
+   */
+  async getDisponibilidadSolicitudMantenimiento(fecha) {
+    try {
+      const encodedFecha = encodeURIComponent(String(fecha || '').trim());
+      const data = await this.fetchWithAuth(`/conductor/mantenimientos/disponibilidad?fecha=${encodedFecha}`);
+      return data;
+    } catch (error) {
+      console.error('Error al obtener disponibilidad de mantenimiento:', error);
+      throw error;
+    }
+  }
   
   /**
    * Solicita un mantenimiento
@@ -364,6 +427,20 @@ class ConductorService {
   }
 
   /**
+   * Obtiene resumen financiero de mantenimientos del conductor
+   * @returns {Promise<Object>} Resumen consolidado
+   */
+  async getResumenFinancieroMantenimientos() {
+    try {
+      const data = await this.fetchWithAuth('/conductor/mantenimientos/resumen-financiero');
+      return data;
+    } catch (error) {
+      console.error('Error al obtener resumen financiero de mantenimientos:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Obtiene detalle de un mantenimiento
    * @param {number} id - ID del mantenimiento
    * @returns {Promise<Object>} Detalle del mantenimiento
@@ -374,6 +451,25 @@ class ConductorService {
       return data;
     } catch (error) {
       console.error('Error al obtener mantenimiento:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Confirma entrega de mantenimiento completado
+   * @param {number} id - ID del mantenimiento
+   * @param {Object} datos - visto_bueno_entrega, satisfecho, calificacion, comentarios
+   * @returns {Promise<Object>} Confirmacion registrada
+   */
+  async confirmarEntregaMantenimiento(id, datos) {
+    try {
+      const data = await this.fetchWithAuth(`/conductor/mantenimientos/${id}/confirmar-entrega`, {
+        method: 'POST',
+        body: JSON.stringify(datos || {})
+      });
+      return data;
+    } catch (error) {
+      console.error('Error al confirmar entrega de mantenimiento:', error);
       throw error;
     }
   }

@@ -9,6 +9,7 @@ import {
   Menu, 
   X 
 } from 'lucide-react';
+import logo from '../assets/logo.png'; // Asegúrate de tener un logo en esta ruta
 
 const DriverLayout = () => {
   const navigate = useNavigate();
@@ -51,7 +52,12 @@ const DriverLayout = () => {
   };
 
   return (
-    <div className="min-h-screen w-full flex bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white">
+    <div className="min-h-screen w-full flex bg-gradient-to-br from-[#009ee6] to-[#07425E] text-white">
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute top-1/2 -left-40 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl"></div>
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-pink-500/5 rounded-full blur-3xl"></div>
+      </div>
       
       {/* --- Barra Lateral (Sidebar) --- */}
       <aside 
@@ -68,6 +74,11 @@ const DriverLayout = () => {
         <div>
           {/* Logo */}
           <div className="text-center mb-10 p-4">
+            <img 
+                        src={logo} 
+                        alt="Auto Manager" 
+                        className="h-12 w-auto center mx-auto mb-2"
+                      />
             <h1 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">
               AutoManager
             </h1>

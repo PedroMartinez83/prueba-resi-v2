@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, FileText, DollarSign, TrendingUp, 
-  Filter, Search, Plus, Eye, CheckCircle, Clock
+  Filter, Search, Plus, Eye, CheckCircle, Clock, PersonStanding,
+  File
 } from 'lucide-react';
 import { API_BASE_URL } from '@/services/api';
+import ModalRegistrarPago from '../../components/inversiones/ModalRegistrarPago';
 
 const HubInversionesLista = () => {
   const navigate = useNavigate();
@@ -17,6 +19,25 @@ const HubInversionesLista = () => {
     status: '',
     busqueda: ''
   });
+  const [textoBusqueda, setTextoBusqueda] = useState('');
+  const [showModalPago, setShowModalPago] = useState(false);
+  const [contratoParaPago, setContratoParaPago] = useState(null);
+
+  //   NUEVO: Función que aplica la búsqueda
+  const ejecutarBusqueda = () => {
+    setFiltros({ ...filtros, busqueda: textoBusqueda });
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      ejecutarBusqueda();
+    }
+  };
+
+  const handleAbrirModalPago = (contrato) => {
+    setContratoParaPago(contrato);
+    setShowModalPago(true);
+  };
 
   useEffect(() => {
     fetchContratos();
@@ -91,13 +112,14 @@ const HubInversionesLista = () => {
     return (
       c.inversionista_nombre?.toLowerCase().includes(busqueda) ||
       c.numero_vehiculo?.toString().includes(busqueda) ||
-      c.id_inversion?.toString().includes(busqueda)
+      c.folio_contrato?.toLowerCase().includes(busqueda) || /* 👈 Ahora busca por Folio */
+      c.id?.toString().includes(busqueda)
     );
   });
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="glass rounded-2xl p-8 border border-white/10">
           <div className="flex items-center space-x-4">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-500"></div>
@@ -109,7 +131,7 @@ const HubInversionesLista = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         
         {/* Header */}
@@ -175,7 +197,7 @@ const HubInversionesLista = () => {
                 <CheckCircle className="w-5 h-5 text-yellow-400" />
               </div>
               <div className="text-sm text-gray-300 space-y-1">
-                <p>SI: {stats.contratos_si_legado}</p>
+                <p>SI_Legado: {stats.contratos_si_legado}</p>
                 <p>PLUS: {stats.contratos_plus_60} | SMART: {stats.contratos_smart_40}</p>
               </div>
             </div>
@@ -189,15 +211,28 @@ const HubInversionesLista = () => {
             
             {/* Búsqueda */}
             <div className="md:col-span-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Buscar por inversionista, vehículo o ID..."
-                  value={filtros.busqueda}
-                  onChange={(e) => setFiltros({ ...filtros, busqueda: e.target.value })}
-                  className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500/30"
-                />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por inversionista, vehículo o ID..."
+                    //   Usamos el estado temporal
+                    value={textoBusqueda}
+                    onChange={(e) => setTextoBusqueda(e.target.value)}
+                    //   Detectamos el Enter
+                    onKeyDown={handleKeyDown}
+                    className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-cyan-500/30 transition-colors"
+                  />
+                </div>
+                
+                {/*   Botón de Búsqueda */}
+                <button
+                  onClick={ejecutarBusqueda}
+                  className="px-6 py-2 bg-cyan-500 hover:bg-cyan-600 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+                >
+                  Buscar
+                </button>
               </div>
             </div>
 
@@ -221,7 +256,8 @@ const HubInversionesLista = () => {
             >
               <option value="">Todos los estados</option>
               <option value="Activa">Activos</option>
-              <option value="Completada">Completados</option>
+              <option value="Rescindido">Cancelados</option>
+              <option value="Pausado">Pausados</option>
             </select>
 
           </div>
@@ -229,9 +265,15 @@ const HubInversionesLista = () => {
 
         {/* Lista de Contratos */}
         <div className="glass rounded-2xl border border-white/10 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-white/5">
+          
+          {/*   1. Scroll en ambas direcciones, altura tope de 60vh y la barra bonita   */}
+          <div className="overflow-auto max-h-[60vh] sidebar-scroll">
+            
+            {/*   2. relative y un ancho mínimo de 1100px para las 8 columnas   */}
+            <table className="w-full min-w-[1100px] relative">
+              
+              {/*   3. Fondo sólido (bg-[#1a1a2e]), sticky, top-0, z-10 y sombra   */}
+              <thead className="bg-[#1a1a2e] sticky top-0 z-10 shadow-sm border-b border-white/10">
                 <tr>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-300">ID</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-300">Inversionista</th>
@@ -244,17 +286,49 @@ const HubInversionesLista = () => {
                 </tr>
               </thead>
               <tbody>
-                {contratosFiltrados.map((contrato) => {
-                  const progreso = ((contrato.pagos_realizados / contrato.plazo_para_inversionistas) * 100).toFixed(1);
+                {contratosFiltrados
+                  // 🚀 NUEVO FILTRO LÓGICO: Ocultamos los contratos eliminados
+                  .filter((contrato) => contrato.status !== 'Eliminado')
+                  .map((contrato) => {
+                  // 🚀 NUEVA LÓGICA DE PROGRESO: Usamos el porcentaje de la BD o lo calculamos
+                  const progreso = contrato.porcentaje_pagado 
+                    ? parseFloat(contrato.porcentaje_pagado).toFixed(1)
+                    : contrato.monto_total_contrato > 0 
+                      ? ((contrato.total_pagado / contrato.monto_total_contrato) * 100).toFixed(1) 
+                      : 0;
+
+                  // 🎨 LÓGICA DE COLORES PARA LA FILA ENTERA
+                  const estaRescindido = !!contrato.motivo_rescision;
+                  const estaPagado = parseFloat(contrato.saldo_pendiente || 0) <= 0;
+                  const estaPausado = contrato.status === "Pausado";
+
+                  let colorFila = "transition-colors border-b "; // Clases base
+
+                  if (estaRescindido) {
+                    // 🔴 ROJO: Contrato cancelado/rescindido
+                    colorFila += "bg-red-500/10 border-red-500/20 hover:bg-red-500/20";
+                  } else if (estaPagado) {
+                    // 🟢 VERDE: Contrato liquidado al 100%
+                    colorFila += "bg-green-500/10 border-green-500/20 hover:bg-green-500/20";
+                  }else if (estaPausado) {
+                    // � AMARILLO: Contrato pausado
+                    colorFila += "bg-yellow-500/10 border-yellow-500/20 hover:bg-yellow-500/20";
+                  }  
+                  
+                  else {
+                    // ⚪ NORMAL: Contrato activo (Tu estilo original)
+                    colorFila += "border-white/10 hover:bg-white/5";
+                  }
                   
                   return (
-                    <tr key={contrato.id_inversion} className="border-b border-white/10 hover:bg-white/5">
+                    <tr key={contrato.id} className={colorFila}>
                       <td className="px-4 py-3 text-sm text-white font-mono">
-                        #{contrato.id_inversion}
+                        #{contrato.id}
                       </td>
                       <td className="px-4 py-3 text-sm">
-                        <p className="text-white font-medium">{contrato.inversionista_nombre}</p>
-                        <p className="text-gray-400 text-xs">{contrato.inversionista_email}</p>
+                        {/* OJO: Tu backend debe hacer JOIN para mandar el nombre y email del inversionista */}
+                        <p className="text-white font-medium">{contrato.inversionista_nombre || 'Sin Asignar'}</p>
+                        <p className="text-gray-400 text-xs">{contrato.inversionista_email || ''}</p>
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <span className={`px-3 py-1 rounded-full text-xs font-medium bg-gradient-to-r ${getModeloColor(contrato.modelo_negocio)} text-white`}>
@@ -262,25 +336,29 @@ const HubInversionesLista = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-300">
+                        {/* OJO: Tu backend debe hacer JOIN para mandar el numero_vehiculo */}
                         {contrato.numero_vehiculo 
-                          ? `Veh. ${contrato.numero_vehiculo}` 
-                          : 'Pool General'}
+                          ? ` ${contrato.numero_vehiculo}` 
+                          : contrato.vehiculo_id 
+                            ? `Veh. ID: ${contrato.vehiculo_id}` 
+                            : 'Pool General'}
                       </td>
                       <td className="px-4 py-3 text-sm text-right font-semibold text-green-400">
-                        {formatCurrency(contrato.inversion)}
+                        {formatCurrency(contrato.monto_invertido)}
                       </td>
                       <td className="px-4 py-3 text-sm text-right font-semibold text-cyan-400">
-                        {formatCurrency(contrato.pago_mensual_inversionista)}
+                        {formatCurrency(contrato.pago_mensual)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col items-center">
-                          <span className="text-xs text-gray-400 mb-1">
-                            {contrato.pagos_realizados}/{contrato.plazo_para_inversionistas}
+                          {/* Cambiamos la vista de "pagos 1/62" a mostrar Dinero Pagado vs Deuda Total */}
+                          <span className="text-xs text-gray-400 mb-1" title="Pagado / Total a Pagar">
+                            {formatCurrency(contrato.total_pagado || 0)} / {formatCurrency(contrato.monto_total_contrato || 0)}
                           </span>
                           <div className="w-full bg-white/5 rounded-full h-2">
                             <div 
                               className="h-full bg-gradient-to-r from-cyan-500 to-purple-500 rounded-full"
-                              style={{ width: `${progreso}%` }}
+                              style={{ width: `${Math.min(progreso, 100)}%` }}
                             />
                           </div>
                           <span className="text-xs text-cyan-400 mt-1">{progreso}%</span>
@@ -288,20 +366,47 @@ const HubInversionesLista = () => {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-center gap-2">
+                          
+                          {/* 🟢 BOTÓN: Registrar Pago (Con validación de saldo y rescisión) */}
                           <button
-                            onClick={() => navigate(`/admin/inversiones/${contrato.id_inversion}/detalle`)}
+                            onClick={() => handleAbrirModalPago(contrato)}
+                            // 🔒 MAGIA AQUÍ: Se desactiva si el saldo es 0 o si tiene motivo_rescision
+                            disabled={parseFloat(contrato.saldo_pendiente || 0) <= 0  || contrato.status === 'Pausado'}
+                            className={`p-2 rounded-lg transition-colors border ${
+                              (parseFloat(contrato.saldo_pendiente || 0) <= 0 )
+                                ? 'bg-gray-500/10 text-gray-500 border-gray-500/20 cursor-not-allowed' // ⚪ Estilo bloqueado (Gris)
+                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30 border-green-500/30' // 🟢 Estilo activo (Verde)
+                            }`}
+                            title={
+                                contrato.status === 'Pausado'
+                                  ? "Contrato pausado"
+                                  : parseFloat(contrato.saldo_pendiente || 0) <= 0 
+                                    ? "Contrato liquidado" 
+                                    : "Registrar Pago"
+                            }
+                          >
+                            <DollarSign className="w-4 h-4" />
+                          </button>
+
+                          {/* Botón: Ver Contrato */}
+                          <button
+                            onClick={() => navigate(`/admin/inversiones/${contrato.id}/detalle`)}
                             className="p-2 bg-cyan-500/20 text-cyan-400 rounded-lg hover:bg-cyan-500/30 transition-colors border border-cyan-500/30"
                             title="Ver Contrato"
                           >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => navigate(`/admin/inversionistas/${contrato.inversionista_id}`)}
-                            className="p-2 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 transition-colors border border-purple-500/30"
-                            title="Ver Inversionista"
-                          >
                             <FileText className="w-4 h-4" />
                           </button>
+                          
+                          {/* Botón: Ver Inversionista */}
+                          {contrato.inversionista_id && (
+                            <button
+                              onClick={() => navigate(`/admin/inversionistas/${contrato.inversionista_id}`)}
+                              className="p-2 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 transition-colors border border-purple-500/30"
+                              title="Ver Inversionista"
+                            >
+                              <PersonStanding className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -319,9 +424,23 @@ const HubInversionesLista = () => {
           )}
         </div>
 
+
+  {showModalPago && (
+        <ModalRegistrarPago
+          isOpen={showModalPago}
+          onClose={() => setShowModalPago(false)}
+          inversion={contratoParaPago}
+          datosInversionista={contratoParaPago}
+          onSuccess={() => {
+            fetchContratos(); // 👈 ¡Magia pura! Esto recarga la tabla automáticamente tras pagar
+          }}
+        />
+      )}
+      
       </div>
     </div>
   );
+
 };
 
 export default HubInversionesLista;

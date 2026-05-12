@@ -72,11 +72,7 @@ const ROL_NAMES = {
   gerente_ops: 'Gerente Operaciones',
   finanzas: 'Finanzas',
   coordinador: 'Coordinador Zona',
-  reclutador: 'Reclutador',
   jefe_taller: 'Jefe de Taller',
-  secretaria: 'Secretaria',
-  gestor_flota: 'Gestor de Flota',
-  compras: 'Compras',
   conductor: 'Conductor'
 };
 
@@ -111,6 +107,7 @@ const Usuarios = () => {
   const isDireccion = currentUser.rol === 'direccion';
   const isCoordinador = currentUser.rol === 'coordinador';
   const isGerenteOps = currentUser.rol === 'gerente_ops';
+  const isJefeTaller = currentUser.rol === 'jefe_taller';
   const canCreateUsuarios = isSuperAdmin || isFinanzas;
 
   useEffect(() => {
@@ -262,7 +259,7 @@ const Usuarios = () => {
 
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 p-6">
+    <div className="min-h-screen p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         
         {/* Header */}
@@ -366,9 +363,15 @@ const Usuarios = () => {
 
         {/* Tabla de Usuarios */}
         <div className="bg-black/40 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
+        
+        {/*  1. Scroll en ambas direcciones y altura límite  */}
+        <div className="overflow-auto max-h-[60vh] sidebar-scroll">
+          
+          {/*  2. relative y un ancho mínimo para proteger el diseño  */}
+          <table className="w-full min-w-[900px] relative">
+            
+            {/*  3. sticky, top-0, z-10 y fondo oscuro sólido  */}
+            <thead className="bg-gray-900 sticky top-0 z-10 shadow-md">
                 <tr className="border-b border-white/10">
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-400">Email</th>
                   <th className="text-left px-6 py-4 text-sm font-semibold text-gray-400">Nombre</th>
@@ -398,6 +401,9 @@ const Usuarios = () => {
               const esSuperiorParaCoordinador =
                 isCoordinador && COORDINADOR_ROLES_SUPERIORES.includes(usuario.rol);
               const puedeAccionar = tienePermiso && !esMiUsuario;
+              const puedeEditarUsuario =
+                !esMiUsuario &&
+                (isSuperAdmin || isFinanzas || isJefeTaller || tienePermiso);
               const bloqueoCoordinador = esSuperiorParaCoordinador;
                                 
                   return (
@@ -455,7 +461,7 @@ const Usuarios = () => {
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-end gap-2">
                           {/* Editar (Super Admin o direccion) */}
-                          {puedeAccionar && (
+                          {puedeEditarUsuario && (
                             <button
                               disabled={bloqueoCoordinador}
                               onClick={() => handleEditarUsuario(usuario)}

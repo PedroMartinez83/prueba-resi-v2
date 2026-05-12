@@ -157,10 +157,40 @@ const ModalDetalles = ({ pago, onClose }) => {
             <div className="glass border border-white/10 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Calendar className="h-4 w-4 text-primary" />
-                <p className="text-gray-400 text-sm">Fecha de Pago</p>
+                <p className="text-gray-400 text-sm">
+                  {pago.fecha_pago !== pago.fecha_pago_fin && pago.fecha_pago_fin 
+                    ? 'Periodo de Pago' 
+                    : 'Fecha de Pago'
+                  }
+                </p>
               </div>
-              <p className="text-white font-semibold">
-                {new Date(pago.fecha_pago).toLocaleDateString('es-MX')}
+              <p className="text-white font-semibold capitalize">
+                {(() => {
+                  if (!pago.fecha_pago) return 'Sin fecha';
+
+                  // Opciones base para formato largo con blindaje UTC
+                  const opciones = { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' };
+                  const inicioStr = new Date(pago.fecha_pago).toLocaleDateString('es-MX', opciones);
+
+                  // 1. Si NO hay fecha fin, o es exactamente el mismo día, mostramos solo una fecha
+                  if (!pago.fecha_pago_fin || pago.fecha_pago === pago.fecha_pago_fin) {
+                    return inicioStr;
+                  }
+
+                  // 2. Si HAY rango, formateamos la fecha fin
+                  const finStr = new Date(pago.fecha_pago_fin).toLocaleDateString('es-MX', opciones);
+                  
+                  const dInicio = new Date(pago.fecha_pago);
+                  const dFin = new Date(pago.fecha_pago_fin);
+                  
+                  // 3. Optimizacion visual: Si es el mismo mes y año, acortamos el texto
+                  if (dInicio.getUTCMonth() === dFin.getUTCMonth() && dInicio.getUTCFullYear() === dFin.getUTCFullYear()) {
+                     return `${dInicio.getUTCDate()} al ${finStr}`;
+                  }
+
+                  // 4. Si cruza de mes o año, mostramos ambas fechas completas
+                  return `${inicioStr} al ${finStr}`;
+                })()}
               </p>
             </div>
           </div>

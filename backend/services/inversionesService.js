@@ -9,13 +9,14 @@ class InversionesService {
     return param ? parseFloat(param.valor) : null;
   }
 
+
   // Calcular inversión para modelo SI_LEGADO
   calcularInversionSILegado(datos) {
     const { valorFactura, costoPoliza, placas, gps, otrosGastos } = datos;
     
     const inversionTotal = 
       parseFloat(valorFactura || 0) + 
-      (parseFloat(costoPoliza || 0) * 2) + 
+      (parseFloat(costoPoliza || 0) * 3) + 
       parseFloat(placas || 0) + 
       parseFloat(gps || 0) + 
       parseFloat(otrosGastos || 0);
@@ -45,7 +46,7 @@ class InversionesService {
     
     const inversionTotal = 
       parseFloat(valorFactura || 0) + 
-      (parseFloat(costoPoliza || 0) * 2) + 
+      (parseFloat(costoPoliza || 0) * 3) + 
       parseFloat(placas || 0) + 
       parseFloat(gps || 0) + 
       parseFloat(otrosGastos || 0);

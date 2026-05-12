@@ -242,7 +242,8 @@ const getVehiculoById = async (vehiculoId) => {
  */
 const getSolicitudesConPaginacion = async (filters = {}, pagination = { page: 1, limit: 10 }) => {
   try {
-    const { estatus, fecha_desde, fecha_hasta } = filters;
+    const { estatus, fecha_desde, fecha_hasta, incluir_migradas } = filters;
+    const incluirMigradas = incluir_migradas === true;
     const { page, limit } = pagination;
     const offset = (page - 1) * limit;
 
@@ -258,10 +259,21 @@ const getSolicitudesConPaginacion = async (filters = {}, pagination = { page: 1,
     // Query separada para count (sin joins)
     let countQuery = db(TABLES.SOLICITUDES_CONDUCTOR);
 
+    // Por defecto, ocultar solicitudes ya migradas a conductor del listado principal.
+    if (!incluirMigradas && (!estatus || estatus === 'Todos')) {
+      query = query.whereNot('solicitudes_conductor.estatus_solicitud', 'Migrado');
+      countQuery = countQuery.whereNot('estatus_solicitud', 'Migrado');
+    }
+
     // Aplicar filtros a ambas queries
     if (estatus && estatus !== 'Todos') {
+      if (!incluirMigradas && estatus === 'Migrado') {
+        query = query.whereRaw('1 = 0');
+        countQuery = countQuery.whereRaw('1 = 0');
+      } else {
       query = query.where('solicitudes_conductor.estatus_solicitud', estatus);
       countQuery = countQuery.where('estatus_solicitud', estatus);
+      }
     }
 
     if (fecha_desde) {
@@ -362,7 +374,9 @@ const getEstadisticasSolicitudes = async () => {
     // Procesar resultados
     estadisticas.forEach(stat => {
       const count = parseInt(stat.total);
-      stats.total += count;
+      if (stat.estatus_solicitud !== 'Migrado') {
+        stats.total += count;
+      }
       
       switch(stat.estatus_solicitud) {
         case 'Pendiente':
@@ -541,6 +555,7 @@ const migrarSolicitudAConductor = async (solicitudId, adminId, datosAdicionales 
       url_licencia_reverso: solicitud.url_licencia_reverso || null,
       url_ine_frente: solicitud.url_ine_frente || null,
       url_ine_reverso: solicitud.url_ine_reverso || null,
+      url_comprobante_domicilio: solicitud.url_comprobante_domicilio || null,
       numero_de_ine_ife: solicitud.numero_de_ine_ife || null, // Asegurar que venga de algún lado o sea null
       
       // Plan de Carrera
@@ -549,7 +564,6 @@ const migrarSolicitudAConductor = async (solicitudId, adminId, datosAdicionales 
       
       // Póliza Mecánica
       tipo_poliza: tipoPolizaPorDefecto,
-      saldo_poliza_mecanica: saldoPolizaInicial,
       saldo_ahorro_mantenimiento: 0.00,
       total_aportado_poliza: 0.00,
       
@@ -577,13 +591,23 @@ const migrarSolicitudAConductor = async (solicitudId, adminId, datosAdicionales 
 
     console.log('✅ Conductor creado. ID:', conductor.id);
 
-    // 7️⃣ Eliminar la solicitud original (Limpieza automática)
-    // Ya no la necesitamos porque toda la info se migró al conductor
+    // 7️⃣ Mantener la solicitud como histórico y marcarla como migrada
+    const notaMigracion = `Migrada a conductor ID ${conductor.id} por admin ID ${adminId} el ${new Date().toISOString()}`;
+    const notasRevisionActualizadas = solicitud.notas_revision
+      ? `${solicitud.notas_revision}\n${notaMigracion}`
+      : notaMigracion;
+
     await trx(TABLES.SOLICITUDES_CONDUCTOR)
       .where('id', solicitudId)
-      .delete();
+      .update({
+        conductor_id: conductor.id,
+        estatus_solicitud: 'Migrado',
+        admin_revisor_id: adminId,
+        notas_revision: notasRevisionActualizadas,
+        updated_at: new Date()
+      });
 
-    console.log('🗑️ Solicitud eliminada del inbox (Migración completada)');
+    console.log('🗂️ Solicitud conservada en historial con estatus Migrado');
 
     // 8️⃣ Commit de la transacción
     await trx.commit();

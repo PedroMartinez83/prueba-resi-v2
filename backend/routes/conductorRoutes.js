@@ -17,7 +17,6 @@ const {
   getMiInfo,
   getMisRentas,
   getMisMantenimientos,
-  registrarKilometraje,
   reportarSiniestro,
   getHistorialPagos
 } = require('../controllers/conductorController');
@@ -99,7 +98,7 @@ router.get('/vehiculo/revisiones', vehiculoController.getHistorialRevisiones);
  * POST /api/conductor/vehiculo/actualizar-kilometraje
  * Actualiza el kilometraje del vehículo
  */
-router.post('/vehiculo/actualizar-kilometraje', registrarKilometraje);
+router.post('/vehiculo/actualizar-kilometraje', vehiculoController.actualizarKilometraje);
 
 // ========================================
 // PAGOS DE RENTA
@@ -173,6 +172,9 @@ router.post(
  * Obtiene mis solicitudes de mantenimiento
  */
 router.get('/mantenimientos', mantenimientoController.getMisMantenimientos);
+router.get('/mantenimientos/opciones', mantenimientoController.getOpcionesSolicitud);
+router.get('/mantenimientos/disponibilidad', mantenimientoController.getDisponibilidadSolicitud);
+router.get('/mantenimientos/resumen-financiero', mantenimientoController.getResumenFinancieroMantenimientos);
 
 /**
  * GET /api/conductor/mantenimientos/:id
@@ -181,9 +183,15 @@ router.get('/mantenimientos', mantenimientoController.getMisMantenimientos);
 router.get('/mantenimientos/:id', mantenimientoController.getMantenimientoById);
 
 /**
+ * POST /api/conductor/mantenimientos/:id/confirmar-entrega
+ * Confirma satisfaccion y visto bueno del conductor al finalizar el servicio
+ */
+router.post('/mantenimientos/:id/confirmar-entrega', mantenimientoController.confirmarEntregaMantenimiento);
+
+/**
  * POST /api/conductor/mantenimientos/solicitar
  * Solicita un mantenimiento
- * Acepta: tipo_servicio, descripcion, urgente (boolean)
+ * Acepta: tipo_servicio, descripcion, servicio_especial, kilometraje_actual, urgente (boolean)
  */
 router.post('/mantenimientos/solicitar', mantenimientoController.solicitarMantenimiento);
 

@@ -38,6 +38,9 @@ const FileUploadZone = ({ label, accept, value, onChange, required = false, help
       .filter(Boolean);
 
     return acceptedTypes.some((type) => {
+      if (type.startsWith('.')) {
+        return (file.name || '').toLowerCase().endsWith(type.toLowerCase());
+      }
       if (type.endsWith('/*')) {
         const baseType = type.slice(0, -1);
         return file.type.startsWith(baseType);
@@ -219,6 +222,13 @@ const ConductorModalWizard = ({ isOpen, onClose, conductor, onSubmit }) => {
   });
 
   const sanitizePhoneNumber = (phone) => phone?.toString().replace(/\D/g, '') || '';
+  const sanitizeDigits = (value, maxLength) =>
+    (value?.toString() || '').replace(/\D/g, '').slice(0, maxLength);
+  const sanitizeCurp = (value) =>
+    (value?.toString() || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 18);
 
   const getEmailForSubmission = (data = formData) => {
     const providedEmail = data.email?.trim();
@@ -406,15 +416,22 @@ useEffect(() => {
     console.log('📋 Datos del formulario:', formData);
     
     switch (step) {
-      case 1:
+      case 1: {
         if (!formData.nombre_conductor?.trim()) {
           newErrors.nombre_conductor = 'Nombre requerido';
         }
         const telefono = formData.numero_telefono?.trim() || '';
         if (!telefono) {
           newErrors.numero_telefono = 'Telefono requerido';
-        } else if (!/^[0-9+\s\-()]{10,20}$/.test(telefono)) {
-          newErrors.numero_telefono = 'Telefono invalido (usa entre 10 y 20 caracteres numericos)';
+        } else if (!/^\d{10}$/.test(telefono)) {
+          newErrors.numero_telefono = 'Telefono invalido (debe tener exactamente 10 digitos)';
+        }
+        const telefonoEmergencia = formData.telefono_emergencia?.trim() || '';
+        if (telefonoEmergencia && !/^\d{10}$/.test(telefonoEmergencia)) {
+          newErrors.telefono_emergencia = 'Telefono de emergencia invalido (10 digitos)';
+        }
+        if (formData.curp && !/^[A-Z0-9]{18}$/.test(formData.curp)) {
+          newErrors.curp = 'CURP invalida (18 caracteres alfanumericos)';
         }
         const finalEmail = getEmailForSubmission(formData);
         if (!finalEmail) {
@@ -423,8 +440,9 @@ useEffect(() => {
           newErrors.email = 'Email inválido';
         }
         break;
+      }
         
-      case 2:
+      case 2: {
         // Los documentos son OPCIONALES - No bloquear avance
         console.log('✅ Paso 2: Documentos opcionales');
         
@@ -432,19 +450,22 @@ useEffect(() => {
         if (formData.rfc && (formData.rfc.length < 12 || formData.rfc.length > 13)) {
           newErrors.rfc = 'RFC debe tener 12 o 13 caracteres';
         }
-        if (formData.curp && formData.curp.length !== 18) {
-          newErrors.curp = 'CURP debe tener 18 caracteres';
-        }
         if (!formData.rfc?.trim()) {
           newErrors.rfc = 'RFC requerido';
         }
         if (!formData.licencia_conducir?.trim()) {
           newErrors.licencia_conducir = 'Licencia conducir requerida';
+        } else if (!/^\d{14}$/.test(formData.licencia_conducir.trim())) {
+          newErrors.licencia_conducir = 'Numero de licencia invalido (14 digitos)';
+        }
+        if (formData.numero_de_ine_ife && !/^\d{9}$/.test(formData.numero_de_ine_ife.trim())) {
+          newErrors.numero_de_ine_ife = 'INE/IFE invalido (9 digitos)';
         }
         if (!formData.licencia_vigencia?.trim()) {
           newErrors.licencia_vigencia = 'Licencia vigencia requerida';
         }
         break;
+      }
         
       case 3:
         // Configuración - todo opcional
@@ -577,11 +598,13 @@ useEffect(() => {
             <input
               type="tel"
               value={formData.numero_telefono}
-              onChange={(e) => setFieldValue('numero_telefono', e.target.value)}
+              onChange={(e) => setFieldValue('numero_telefono', sanitizeDigits(e.target.value, 10))}
               className={`w-full pl-10 pr-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
                 errors.numero_telefono ? 'border-red-500/60' : 'border-white/10'
               }`}
-              placeholder="+52 311 123 4567"
+              placeholder="3111234567"
+              maxLength="10"
+              inputMode="numeric"
             />
           </div>
           {errors.numero_telefono && (
@@ -650,7 +673,7 @@ useEffect(() => {
           <input
             type="text"
             value={formData.curp}
-            onChange={(e) => setFieldValue('curp', e.target.value.toUpperCase())}
+            onChange={(e) => setFieldValue('curp', sanitizeCurp(e.target.value))}
             className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
               errors.curp ? 'border-red-500/60' : 'border-white/10'
             }`}
@@ -700,10 +723,17 @@ useEffect(() => {
           <input
             type="tel"
             value={formData.telefono_emergencia}
-            onChange={(e) => setFormData({...formData, telefono_emergencia: e.target.value})}
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-            placeholder="+52 311 123 4567"
+            onChange={(e) => setFieldValue('telefono_emergencia', sanitizeDigits(e.target.value, 10))}
+            className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+              errors.telefono_emergencia ? 'border-red-500/60' : 'border-white/10'
+            }`}
+            placeholder="3111234567"
+            maxLength="10"
+            inputMode="numeric"
           />
+          {errors.telefono_emergencia && (
+            <p className="text-red-400 text-xs mt-1">{errors.telefono_emergencia}</p>
+          )}
         </div>
 
         <div>
@@ -756,10 +786,17 @@ useEffect(() => {
           <input
             type="text"
             value={formData.numero_de_ine_ife}
-            onChange={(e) => setFormData({...formData, numero_de_ine_ife: e.target.value})}
-            className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
-            placeholder="1234567890123"
+            onChange={(e) => setFieldValue('numero_de_ine_ife', sanitizeDigits(e.target.value, 9))}
+            className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+              errors.numero_de_ine_ife ? 'border-red-500/60' : 'border-white/10'
+            }`}
+            placeholder="123456789"
+            maxLength="9"
+            inputMode="numeric"
           />
+          {errors.numero_de_ine_ife && (
+            <p className="text-red-400 text-xs mt-1">{errors.numero_de_ine_ife}</p>
+          )}
         </div>
 
         <div>
@@ -769,7 +806,9 @@ useEffect(() => {
           <input
             type="text"
             value={formData.licencia_conducir}
-            onChange={(e) => setFieldValue('licencia_conducir', e.target.value)}
+            onChange={(e) => setFieldValue('licencia_conducir', sanitizeDigits(e.target.value, 14))}
+            maxLength="14"
+            inputMode="numeric"
             className={`w-full px-4 py-2.5 bg-white/5 border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
               errors.licencia_conducir ? 'border-red-500/60' : 'border-white/10'
             }`}
@@ -821,7 +860,7 @@ useEffect(() => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FileUploadZone
             label="INE - Frente"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif"
             value={formData.ine_frente}
             onChange={(file) => setFormData({...formData, ine_frente: file})}
             helpText="Foto clara del frente de la INE"
@@ -829,7 +868,7 @@ useEffect(() => {
           
           <FileUploadZone
             label="INE - Reverso"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif"
             value={formData.ine_reverso}
             onChange={(file) => setFormData({...formData, ine_reverso: file})}
             helpText="Foto clara del reverso de la INE"
@@ -837,7 +876,7 @@ useEffect(() => {
           
           <FileUploadZone
             label="Licencia - Frente"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif"
             value={formData.licencia_frente}
             onChange={(file) => setFormData({...formData, licencia_frente: file})}
             helpText="Foto clara del frente de la licencia"
@@ -845,7 +884,7 @@ useEffect(() => {
           
           <FileUploadZone
             label="Licencia - Reverso"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif"
             value={formData.licencia_reverso}
             onChange={(file) => setFormData({...formData, licencia_reverso: file})}
             helpText="Foto clara del reverso de la licencia"
@@ -854,7 +893,7 @@ useEffect(() => {
           <div className="md:col-span-2">
             <FileUploadZone
               label="Comprobante de Domicilio"
-              accept="image/*,application/pdf"
+              accept=".jpg,.jpeg,.png,.webp,.heic,.heif,.pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,application/pdf"
               value={formData.comprobante_domicilio}
               onChange={(file) => setFormData({...formData, comprobante_domicilio: file})}
               helpText="Recibo de luz, agua, teléfono o estado de cuenta bancario (no mayor a 3 meses)"
@@ -1353,3 +1392,4 @@ useEffect(() => {
 };
 
 export default ConductorModalWizard;
+

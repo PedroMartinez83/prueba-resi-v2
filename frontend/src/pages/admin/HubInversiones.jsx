@@ -52,15 +52,15 @@ const HubInversiones = () => {
     },
     'PLUS_60': {
       label: 'PLUS 60',
-      descripcion: 'Plan premium 60 meses - 60% utilidad',
-      plazo: 60,
+      descripcion: 'Plan premium 53 meses - 60% utilidad',
+      plazo: 53,
       multiplicador: 1.60,
       color: 'from-cyan-500 to-blue-500'
     },
     'SMART_40': {
       label: 'SMART 40',
-      descripcion: 'Plan inteligente 40 meses - 40% utilidad',
-      plazo: 40,
+      descripcion: 'Plan inteligente 35 meses - 40% utilidad',
+      plazo: 35,
       multiplicador: 1.40,
       color: 'from-purple-500 to-pink-500'
     }
@@ -71,12 +71,14 @@ const HubInversiones = () => {
     cargarVehiculosDisponibles();
   }, []);
 
+
+
   // Calcular métricas del simulador
   const calcularMetricas = () => {
     const monto = parseFloat(formData.monto_inversion) || 0;
-    const plan = planesConfig[formData.modelo_negocio];
     
-    if (!plan || monto === 0) {
+    // Si no hay monto, regresamos ceros
+    if (monto === 0) {
       return {
         pagoMensual: 0,
         totalRecibir: 0,
@@ -87,24 +89,36 @@ const HubInversiones = () => {
 
     let pagoMensual = 0;
     let totalRecibir = 0;
+    let plazo = 0;
 
+    // Reglas exactas alineadas con el Backend
     if (formData.modelo_negocio === 'SI_LEGADO') {
-      // SI Legado: flujo fijo mensual
-      pagoMensual = monto * plan.tasa_mensual;
-      totalRecibir = pagoMensual * plan.plazo;
-    } else {
-      // AutoManager (PLUS/SMART): multiplicador
-      totalRecibir = monto * plan.multiplicador;
-      pagoMensual = totalRecibir / plan.plazo;
+      plazo = 62;
+      pagoMensual = 8000; // 👈 Regla fija del cliente
+      totalRecibir = pagoMensual * plazo; // 8000 * 62 = 496,000
+    } 
+    else if (formData.modelo_negocio === 'PLUS_60') {
+      plazo = 53;
+      totalRecibir = monto * 1.60;
+      pagoMensual = totalRecibir / plazo;
+    } 
+    else if (formData.modelo_negocio === 'SMART_40') {
+      plazo = 35;
+      totalRecibir = monto * 1.40;
+      pagoMensual = totalRecibir / plazo;
+    }
+    else {
+      return { pagoMensual: 0, totalRecibir: 0, plazo: 0, roi: 0 };
     }
 
+    // Calcular el Retorno de Inversión (ROI)
     const roi = ((totalRecibir - monto) / monto) * 100;
 
     return {
-      pagoMensual: pagoMensual.toFixed(2),
-      totalRecibir: totalRecibir.toFixed(2),
-      plazo: plan.plazo,
-      roi: roi.toFixed(2)
+      pagoMensual: pagoMensual, // Lo mandamos como número, el formatCurrency ya le pone los decimales
+      totalRecibir: totalRecibir,
+      plazo: plazo,
+      roi: roi.toFixed(1) // Dejamos el ROI con 1 decimal para que se vea más limpio
     };
   };
 
@@ -154,31 +168,40 @@ const HubInversiones = () => {
   const handleVehiculoChange = (e) => {
     const vehiculoId = e.target.value;
     
-    // Si seleccionó un vehículo Y el plan es SI_LEGADO, auto-rellenar valor_factura
+    // Si seleccionó un vehículo Y el plan es SI_LEGADO
     if (vehiculoId && formData.modelo_negocio === 'SI_LEGADO') {
+      
+      // 🚨 CORRECCIÓN 1: Buscamos por "id" en lugar de número de serie
       const vehiculoSeleccionado = vehiculosDisponibles.find(
-        v => v.numero_de_serie_vehiculo === vehiculoId
+        v => String(v.id) === String(vehiculoId)
       );
       
-      if (vehiculoSeleccionado && vehiculoSeleccionado.precio_compra > 0) {
-        setFormData(prev => ({
-          ...prev,
-          vehiculo_id: vehiculoId,
-          valor_factura: vehiculoSeleccionado.precio_compra
-        }));
-        console.log('💰 Auto-rellenado valor_factura:', vehiculoSeleccionado.precio_compra);
+      if (vehiculoSeleccionado) {
+        // Extraemos el precio de forma segura (como lo haces en el map)
+        const precio = parseFloat(vehiculoSeleccionado.precio_compra || vehiculoSeleccionado.PrecioCompra || 0);
+        
+        if (precio > 0) {
+          setFormData(prev => ({
+            ...prev,
+            vehiculo_id: vehiculoId,
+            valor_factura: precio,    // Lo dejamos por si tu backend aún lo ocupa
+            monto_inversion: precio  // 🚨 CORRECCIÓN 2: Llenamos el campo que se bloquea
+          }));
+          console.log('💰 Auto-rellenado monto_inversion:', precio);
+        } else {
+          setFormData(prev => ({ ...prev, vehiculo_id: vehiculoId }));
+        }
       } else {
-        setFormData(prev => ({
-          ...prev,
-          vehiculo_id: vehiculoId
-        }));
+        setFormData(prev => ({ ...prev, vehiculo_id: vehiculoId }));
       }
+      
     } else {
-      // Para PLUS_60 y SMART_40, solo actualizar el ID sin valor_factura
+      // Para PLUS_60 y SMART_40, o si deseleccionan el vehículo
       setFormData(prev => ({
         ...prev,
         vehiculo_id: vehiculoId,
-        valor_factura: ''
+        valor_factura: '',
+        monto_inversion: '' // Limpiamos el monto para que lo escriban a mano
       }));
     }
   };
@@ -236,6 +259,8 @@ const HubInversiones = () => {
     }
   };
 
+  
+
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -246,7 +271,7 @@ const HubInversiones = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-6xl mx-auto space-y-6">
         
         {/* Header */}
@@ -291,11 +316,16 @@ const HubInversiones = () => {
                   required
                 >
                   <option value="">Seleccionar inversionista</option>
-                  {inversionistas.map(inv => (
+                  
+                  {/* 🔒 MAGIA AQUÍ: Filtramos por status antes de renderizar */}
+                  {inversionistas
+                    .filter(inv => inv.status === 'Activo') 
+                    .map(inv => (
                     <option key={inv.id} value={inv.id}>
                       {inv.nombre} - {inv.email}
                     </option>
                   ))}
+                  
                 </select>
               </div>
 
@@ -344,12 +374,28 @@ const HubInversiones = () => {
                   required
                 >
                   <option value="">Seleccionar vehículo</option>
-                  {vehiculosDisponibles.map(veh => (
-                    <option key={veh.id} value={veh.numero_de_serie_vehiculo}>
-                      {veh.numero_vehiculo} - {veh.marca || 'Sin marca'} {veh.modelo || 'Sin modelo'} ({veh.ano || 'N/A'})
-                      {veh.precio_compra > 0 && ` - ${formatCurrency(veh.precio_compra)}`}
-                    </option>
-                  ))}
+                  
+                  {vehiculosDisponibles
+                    .filter(veh => {
+                      // 🛡️ Filtro estricto por tipo_socio (más seguro)
+                      const tipoLimpio = String(veh.tipo_socio || veh.TipoSocio || '').trim().toUpperCase();
+                      return tipoLimpio === 'SI' || tipoLimpio === 'SÍ';
+                    })
+                    .map(veh => {
+                      const id = veh.id;
+                      const numero = veh.NumeroVehiculo || veh.numero_vehiculo;
+                      const marca = veh.Marca || veh.marca || 'Sin marca';
+                      const modelo = veh.Modelo || veh.modelo || 'Sin modelo';
+                      const anio = veh.Año || veh.ano || veh.año || 'N/A';
+                      const precio = parseFloat(veh.precio_compra || veh.PrecioCompra || 0);
+
+                      return (
+                        <option key={id} value={id}>
+                          {numero} - {marca} {modelo} ({anio})
+                          {precio > 0 && ` - $${precio.toFixed(2)}`}
+                        </option>
+                      );
+                    })}
                 </select>
                 <p className="text-xs text-gray-400 mt-1">
                   ℹ️ Plan SI Legado: Contrato 1-a-1 con vehículo específico
@@ -377,7 +423,7 @@ const HubInversiones = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               
-              {/* Monto */}
+              {/* Monto de Inversión (Actualizado dinámicamente) */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
                   Monto de Inversión *
@@ -388,33 +434,11 @@ const HubInversiones = () => {
                   onChange={(e) => setFormData({...formData, monto_inversion: e.target.value})}
                   placeholder="0.00"
                   step="0.01"
-                  min="0"
-                  className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-cyan-500/50 transition-colors"
+                  min="20000"
                   required
+                  className="w-full px-4 py-3 h-12 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-cyan-500/30 transition-all"
                 />
               </div>
-
-              {/* Valor Factura (solo para SI_LEGADO) */}
-              {formData.modelo_negocio === 'SI_LEGADO' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Valor Factura del Vehículo *
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.valor_factura}
-                    onChange={(e) => setFormData({...formData, valor_factura: e.target.value})}
-                    placeholder="Auto-rellenado del vehículo"
-                    step="0.01"
-                    min="0"
-                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-cyan-500/50 transition-colors"
-                    required
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    💡 Se auto-rellena del vehículo seleccionado. Puedes editarlo si incluye gastos adicionales.
-                  </p>
-                </div>
-              )}
 
               {/* Fecha Inicio */}
               <div>
@@ -430,20 +454,6 @@ const HubInversiones = () => {
                 />
               </div>
 
-            </div>
-
-            {/* Notas */}
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Notas Adicionales (opcional)
-              </label>
-              <textarea
-                value={formData.notas}
-                onChange={(e) => setFormData({...formData, notas: e.target.value})}
-                rows={3}
-                placeholder="Agrega observaciones sobre este contrato..."
-                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500/50 transition-colors resize-none"
-              />
             </div>
           </div>
 

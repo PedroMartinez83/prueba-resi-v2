@@ -93,11 +93,11 @@ const getDriverDashboard = async (req, res) => {
       .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
       .select(
         'c.id as conductor_id', 'c.nombre_conductor', 'c.status', 'c.status_trabajo', 'c.categoria', 'c.fecha_ingreso',
-        'c.tipo_poliza', 'c.saldo_poliza_mecanica', 'c.total_aportado_poliza', 'c.saldo_ahorro_mantenimiento',
+        'c.tipo_poliza', 'c.total_aportado_poliza', 'c.saldo_ahorro_mantenimiento', 'c.saldo_poliza_mecanica',
         'v.id as vehiculo_id', 'v.numero_vehiculo', 'v.marca', 'v.modelo', 'v.placa', 'v.kilometraje_actual',
         'v.proximo_mantenimiento as proximo_mantenimiento_km',
-        // Traemos datos de costos de la asignación para calcular deuda
-        'a.id as asignacion_id', 'a.renta_diaria', 'a.abono_poliza_mantenimiento as poliza_diaria'
+        // 🚨 AGREGAMOS a.fecha_inicio AQUÍ PARA SABER CUÁNDO ARRANCÓ EL CHOFER 🚨
+        'a.id as asignacion_id', 'a.fecha_inicio as fecha_asignacion', 'a.renta_diaria', 'a.abono_poliza_mantenimiento as poliza_diaria'
       );
 
     if (conductorIdFromToken) {
@@ -108,7 +108,7 @@ const getDriverDashboard = async (req, res) => {
 
     let conductorInfo = await conductorInfoQuery.first();
 
-    // Fallback de email (tu lógica original se mantiene igual aquí)
+    // Fallback de email
     if (!conductorInfo && usuarioId) {
       const emailRaw = req.user?.email || req.user?.name || '';
       const emailNormalized = emailRaw.toString().trim().toLowerCase();
@@ -132,29 +132,46 @@ const getDriverDashboard = async (req, res) => {
     // 2. OBTENER ESTADO DE RENTAS (NUEVA LÓGICA INTELIGENTE 🧠)
     // =========================================================================
     
-    // A. Buscamos el último pago confirmado para saber hasta dónde cubrió
-    // Ordenamos por fecha_pago_fin para ver el rango más lejano
     const ultimoPago = await db('pagos_diarios')
       .where('asignacion_id', conductorInfo.asignacion_id)
       .whereIn('status', ['Confirmado', 'Pagada']) 
       .orderByRaw('COALESCE(fecha_pago_fin, fecha_pago) DESC')
       .first();
 
-    // B. Determinamos la fecha límite cubierta
-    const fechaCubierta = ultimoPago 
-      ? (ultimoPago.fecha_pago_fin || ultimoPago.fecha_pago) 
-      : null; // Si es null, el helper usará '2026-01-01'
+    // B. Determinamos la fecha límite cubierta o LA FECHA DE ASIGNACIÓN
+    let fechaCubierta = null;
+    let esChoferNuevo = false;
 
-    // C. Calculamos los días de atraso reales (excluyendo domingos)
-    const hoyISO = new Date().toISOString().split('T')[0];
+    if (ultimoPago) {
+      fechaCubierta = ultimoPago.fecha_pago_fin || ultimoPago.fecha_pago;
+    } else if (conductorInfo.fecha_asignacion) {
+      // 🛡️ ESCUDO: Si no hay pagos, no debe desde 1970, debe empezar a contar desde su asignación
+      fechaCubierta = conductorInfo.fecha_asignacion;
+      esChoferNuevo = true;
+    }
+
+    // C. Calculamos los días de atraso reales
+    const hoyISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mazatlan' }); // Forzamos el formato ISO limpio YYYY-MM-DD
     
-    // Si no tiene vehículo asignado, no tiene deuda
     let rentas_pendientes = 0;
     let monto_deuda_total = 0;
 
-    if (conductorInfo.vehiculo_id) {
-        rentas_pendientes = contarDiasDeuda(fechaCubierta, hoyISO);
-        console.log(`📊 CALCULO DEUDA: Último Pago: ${fechaCubierta} | Hoy: ${hoyISO} | Días Deuda: ${rentas_pendientes}`);
+    if (conductorInfo.vehiculo_id && fechaCubierta) {
+        // Aseguramos que la fecha cubierta esté en el formato correcto para tu helper
+        const fechaCorte = new Date(fechaCubierta).toISOString().split('T')[0];
+        
+        // Llamamos a tu función para que calcule los días hábiles
+        rentas_pendientes = contarDiasDeuda(fechaCorte, hoyISO);
+        
+        // 🛡️ PARCHE PARA NUEVOS: Si se lo diste hoy o en el futuro, los días de deuda se fuerzan a 0
+        if (esChoferNuevo && fechaCorte >= hoyISO) {
+          rentas_pendientes = 0;
+        }
+
+        // Si sale negativo (porque va adelantado), lo topamos a 0
+        rentas_pendientes = Math.max(0, rentas_pendientes);
+
+        console.log(`📊 CALCULO DEUDA: Último Pago/Asig: ${fechaCorte} | Hoy: ${hoyISO} | Días Deuda: ${rentas_pendientes}`);
         
         const costoDiario = parseFloat(conductorInfo.renta_diaria || 400) + parseFloat(conductorInfo.poliza_diaria || 100);
         monto_deuda_total = rentas_pendientes * costoDiario;
@@ -165,10 +182,8 @@ const getDriverDashboard = async (req, res) => {
     const estado_cuenta = rentas_pendientes > 0 ? 'Atrasado' : 'Al Corriente';
 
     // =========================================================================
-    // FIN DE LA NUEVA LÓGICA
+    // 3. OBTENER ALERTAS 
     // =========================================================================
-
-    // 3. OBTENER ALERTAS (Se mantiene igual)
     const [amonestaciones, mant_pendiente, siniestro_pendiente] = await Promise.all([
       db('amonestaciones_conductores').where('conductor_id', conductorInfo.conductor_id).count('id as total').first(),
       db('mantenimientos').where('vehiculo_id', conductorInfo.vehiculo_id).where('estado', 'Programado').orderBy('fecha_programada', 'asc').first(),
@@ -186,9 +201,10 @@ const getDriverDashboard = async (req, res) => {
     // 3.1 Revisión diaria
     const inicioHoy = new Date();
     inicioHoy.setHours(0, 0, 0, 0);
+    const hoyLimpio = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mazatlan' });
     const revisionHoy = await db('revisiones_diarias')
       .where({ conductor_id: conductorInfo.conductor_id })
-      .whereRaw('DATE(fecha_revision) = ?', [hoyISO])
+      .whereRaw('DATE(fecha_revision) = ?', [hoyLimpio])
       .first();
     
     const proximoReinicio = new Date(inicioHoy);
@@ -220,11 +236,13 @@ const getDriverDashboard = async (req, res) => {
         saldo_ahorro_mantenimiento: parseFloat(conductorInfo.saldo_ahorro_mantenimiento || 0)
       },
       estado_rentas: {
-        rentas_pendientes: rentas_pendientes, // <--- DATO CORREGIDO
+        rentas_pendientes: rentas_pendientes, 
         dias_de_tolerancia_restantes: dias_de_tolerancia_restantes,
-        monto_deuda_total: monto_deuda_total, // <--- DATO CORREGIDO
+        monto_deuda_total: monto_deuda_total, 
         estado_cuenta: estado_cuenta,
-        ultimo_pago_fecha: fechaCubierta // Extra útil para el frontend
+        // 🚨 Le mandamos la fecha de asignación al frontend para que la use como salvavidas
+        fecha_inicio_asignacion: conductorInfo.fecha_asignacion ? new Date(conductorInfo.fecha_asignacion).toISOString() : null,
+        ultimo_pago_fecha: fechaCubierta 
       },
       revision_diaria: {
         completada_hoy: !!revisionHoy,

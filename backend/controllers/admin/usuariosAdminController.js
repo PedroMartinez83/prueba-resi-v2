@@ -2,6 +2,7 @@ const postgresService = require('../../services/postgresService');
 const auditService = require('../../services/auditService');
 const bcrypt = require('bcryptjs');
 const emailService = require('../../utils/emailService');
+const { ROLE_HIERARCHY } = require('../../middleware/roleMiddleware');
 
 // Obtener db de postgresService
 const { db, TABLES } = postgresService;
@@ -14,6 +15,51 @@ const COORDINADOR_ROLES_BLOQUEADOS = new Set([
   'director',
   'finanzas'
 ]);
+
+const EMAIL_EDIT_ALLOWED_ROLES = new Set([
+  'super_admin',
+  'director',
+  'gerente_ops',
+  'finanzas'
+]);
+
+const GERENTE_EMAIL_ROLES_BLOQUEADOS = new Set(['super_admin', 'direccion', 'finanzas', 'gerente_ops']);
+const USER_ASSIGNABLE_ROLES = new Set([
+  'super_admin',
+  'direccion',
+  'director',
+  'gerente_ops',
+  'finanzas',
+  'coordinador',
+  'gestor_flota',
+  'reclutador',
+  'jefe_taller',
+  'compras',
+  'secretaria',
+  'conductor',
+  'cliente'
+]);
+
+const normalizeEmailValue = (value) => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+};
+
+const canEditTargetByHierarchyForEmail = (actorRole, targetRole) => {
+  if (!actorRole || !targetRole) return false;
+  if (actorRole === 'super_admin') return true;
+  if (actorRole === 'direccion') return targetRole !== 'super_admin';
+  if (actorRole === 'director') return targetRole !== 'super_admin';
+  if (actorRole === 'gerente_ops') return !GERENTE_EMAIL_ROLES_BLOQUEADOS.has(targetRole);
+  if (actorRole === 'coordinador') return !COORDINADOR_ROLES_BLOQUEADOS.has(targetRole);
+
+  const actorRank = ROLE_HIERARCHY?.[actorRole] ?? 0;
+  const targetRank = ROLE_HIERARCHY?.[targetRole] ?? 0;
+
+  // Mismo criterio que usa hoy el sistema: bloquear solo superiores (mismo nivel se permite)
+  return actorRank >= targetRank;
+};
 
 /**
  * Genera una contraseña temporal memorable
@@ -226,18 +272,7 @@ exports.createUsuario = async (req, res) => {
     }
 
     // Validar que el rol sea válido
-      const rolesValidos = [
-        'super_admin',
-        'direccion',
-        'gerente_ops',
-        'finanzas',
-        'coordinador',
-        'reclutador',
-      'jefe_taller',
-      'secretaria'
-    ];
-    
-    if (!rolesValidos.includes(rol)) {
+    if (!USER_ASSIGNABLE_ROLES.has(rol)) {
       await trx.rollback();
       return res.status(400).json({
         success: false,
@@ -250,14 +285,17 @@ exports.createUsuario = async (req, res) => {
 
     // Verificar que el email no exista
     const emailCheck = await trx(TABLES.USUARIOS)
-      .where('email', email)
+      .andWhere(function () {
+        this.whereRaw('LOWER(COALESCE(email, \'\')) = LOWER(?)', [email])
+          .orWhereRaw('LOWER(COALESCE(name, \'\')) = LOWER(?)', [email]);
+      })
       .first();
 
     if (emailCheck) {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        message: 'El email ya está registrado'
+        message: 'El email ya está registrado o entra en conflicto con otro usuario'
       });
     }
 
@@ -344,10 +382,11 @@ exports.updateUsuario = async (req, res) => {
 
   try {
     const { id } = req.params;
-    const { nombre_completo, rol, estado_cuenta } = req.body;
+    const { email, nombre_completo, rol, estado_cuenta } = req.body;
     
     // Validamos qué campos vienen en el body
     const hasNombreCompleto = Object.prototype.hasOwnProperty.call(req.body, 'nombre_completo');
+    const hasEmail = Object.prototype.hasOwnProperty.call(req.body, 'email');
     const hasRol = Object.prototype.hasOwnProperty.call(req.body, 'rol');
     const hasEstadoCuenta = Object.prototype.hasOwnProperty.call(req.body, 'estado_cuenta');
 
@@ -385,6 +424,15 @@ exports.updateUsuario = async (req, res) => {
       });
     }
 
+    // Regla adicional para gerente_ops respetando jerarquía/sensibilidad (alineada con frontend)
+    if (req.user?.rol === 'gerente_ops' && GERENTE_EMAIL_ROLES_BLOQUEADOS.has(usuarioActual.rol)) {
+      await trx.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'No puedes editar usuarios con rol restringido para tu jerarquía'
+      });
+    }
+
     // Protección: no permitir cambiar rol de otro super_admin
     if (usuarioActual.rol === 'super_admin' && rol && rol !== 'super_admin') {
       await trx.rollback();
@@ -396,6 +444,64 @@ exports.updateUsuario = async (req, res) => {
 
     const puedeEditarNombre = ['super_admin', 'finanzas', 'coordinador', 'gerente_ops'].includes(req.user.rol);
     const puedeEditarRol = ['super_admin', 'finanzas'].includes(req.user.rol);
+    const puedeEditarEmail = EMAIL_EDIT_ALLOWED_ROLES.has(req.user.rol);
+
+    if (hasEmail) {
+      if (!puedeEditarEmail) {
+        await trx.rollback();
+        return res.status(403).json({
+          success: false,
+          message: 'Tu rol no tiene permiso para editar correos'
+        });
+      }
+
+      if (!canEditTargetByHierarchyForEmail(req.user?.rol, usuarioActual.rol)) {
+        await trx.rollback();
+        return res.status(403).json({
+          success: false,
+          message: 'No puedes editar el correo de un usuario con rol superior'
+        });
+      }
+
+      const emailNormalizado = normalizeEmailValue(email);
+      if (!emailNormalizado) {
+        await trx.rollback();
+        return res.status(400).json({ success: false, message: 'El email es obligatorio' });
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(emailNormalizado)) {
+        await trx.rollback();
+        return res.status(400).json({ success: false, message: 'Formato de email inválido' });
+      }
+
+      const emailActualNormalizado = normalizeEmailValue(usuarioActual.email);
+      if (emailNormalizado !== emailActualNormalizado) {
+        const emailExistente = await trx(TABLES.USUARIOS)
+          .whereNot('id', id)
+          .andWhere(function () {
+            this.whereRaw('LOWER(COALESCE(email, \'\')) = ?', [emailNormalizado])
+              .orWhereRaw('LOWER(COALESCE(name, \'\')) = ?', [emailNormalizado]);
+          })
+          .first();
+
+        if (emailExistente) {
+          await trx.rollback();
+          return res.status(400).json({
+            success: false,
+            message: 'El email ya está registrado o entra en conflicto con otro usuario'
+          });
+        }
+
+        updateData.email = emailNormalizado;
+
+        // Compatibilidad con cuentas legacy: si `name` almacenaba el email anterior, sincronizarlo
+        const legacyName = normalizeEmailValue(usuarioActual.name);
+        if (!hasNombreCompleto && legacyName && legacyName === emailActualNormalizado) {
+          updateData.name = emailNormalizado;
+        }
+      }
+    }
 
     // Super admin y finanzas pueden cambiar nombre y rol (coordinador solo nombre)
     if (puedeEditarNombre) {
@@ -405,6 +511,13 @@ exports.updateUsuario = async (req, res) => {
         updateData.name = nombreFinal || null; 
       }
       if (puedeEditarRol && hasRol && rol) {
+        if (!USER_ASSIGNABLE_ROLES.has(rol)) {
+          await trx.rollback();
+          return res.status(400).json({
+            success: false,
+            message: 'Rol inválido'
+          });
+        }
         updateData.rol = rol;
       }
     }
@@ -424,6 +537,15 @@ exports.updateUsuario = async (req, res) => {
       .where('id', id)
       .update(updateData)
       .returning('*');
+
+    if (updateData.email) {
+      await trx('conductores')
+        .where({ usuario_id: usuarioActualizado.id })
+        .update({
+          email: updateData.email,
+          updated_at: trx.fn.now()
+        });
+    }
 
     // 5. LOG EN BD (Audit Service)
     await auditService.logCriticalChange({
@@ -455,6 +577,10 @@ exports.updateUsuario = async (req, res) => {
       }
       if (updateData.rol && updateData.rol !== usuarioActual.rol) {
           detalleHtml += `<li><strong>Rol:</strong> De "<em>${usuarioActual.rol}</em>" a "<em>${updateData.rol}</em>"</li>`;
+          huboCambiosReales = true;
+      }
+      if (updateData.email && updateData.email !== usuarioActual.email) {
+          detalleHtml += `<li><strong>Email:</strong> De "<em>${usuarioActual.email || 'Sin email'}</em>" a "<em>${updateData.email}</em>"</li>`;
           huboCambiosReales = true;
       }
 if (updateData.estado_cuenta !== undefined && updateData.estado_cuenta != usuarioActual.estado_cuenta) {

@@ -1,27 +1,27 @@
 // frontend/src/components/vehiculos/VehiculosGrid.jsx
 import React from 'react';
-import { Car, Edit, Trash2, MapPin, Calendar, Gauge } from 'lucide-react';
+import { Car, Edit, Trash2, MapPin, Calendar, Gauge, ClipboardCheck, RotateCcw } from 'lucide-react';
 
-const VehiculosGrid = ({ vehiculos, onEdit, onDelete }) => {
+const VehiculosGrid = ({ vehiculos, onEdit, onDelete, onOpenInventario }) => {
   const getEstadoBadge = (estado) => {
     const badges = {
-      'Disponible': 'bg-green-500/20 text-green-400 border-green-500/30',
-      'Rentado': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-      'Asignado': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-      'Mantenimiento': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-      'Siniestro': 'bg-red-500/20 text-red-400 border-red-500/30',
-      'Baja': 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+      Disponible: 'bg-green-500/20 text-green-400 border-green-500/30',
+      Rentado: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+      Asignado: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+      Mantenimiento: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+      Siniestro: 'bg-red-500/20 text-red-400 border-red-500/30',
+      Baja: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
     };
-    return badges[estado] || badges['Disponible'];
+    return badges[estado] || badges.Disponible;
   };
 
   const getTipoBadge = (tipo) => {
     const badges = {
-      'SD': 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-      'SI': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-      'SA': 'bg-green-500/20 text-green-400 border-green-500/30'
+      SD: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+      SI: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+      SA: 'bg-green-500/20 text-green-400 border-green-500/30'
     };
-    return badges[tipo] || badges['SD'];
+    return badges[tipo] || badges.SD;
   };
 
   return (
@@ -31,7 +31,6 @@ const VehiculosGrid = ({ vehiculos, onEdit, onDelete }) => {
           key={vehiculo.id}
           className="glass rounded-xl border border-primary/20 overflow-hidden hover:border-primary/40 transition-all transform hover:scale-105"
         >
-          {/* Header con Ícono y Estado */}
           <div className="p-4 bg-gradient-to-br from-primary/10 to-transparent border-b border-primary/10">
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
@@ -53,7 +52,6 @@ const VehiculosGrid = ({ vehiculos, onEdit, onDelete }) => {
             </div>
           </div>
 
-          {/* Información Principal */}
           <div className="p-4 space-y-3">
             <div>
               <p className="text-sm text-gray-400">Marca y Modelo</p>
@@ -83,11 +81,36 @@ const VehiculosGrid = ({ vehiculos, onEdit, onDelete }) => {
                   {vehiculo.TipoVehiculo} • {vehiculo.TipoCombustible} • {vehiculo.Color}
                 </span>
               </div>
+              <span className={`inline-flex mt-2 text-[10px] px-2 py-0.5 rounded border ${
+                vehiculo.tiene_inventario_inicial
+                  ? 'text-green-300 border-green-500/30 bg-green-500/10'
+                  : 'text-yellow-300 border-yellow-500/30 bg-yellow-500/10'
+              }`}>
+                {vehiculo.tiene_inventario_inicial ? 'Inventario inicial OK' : 'Inventario inicial pendiente'}
+              </span>
+              {vehiculo.inventario_alerta && (
+                <span className="inline-flex mt-2 text-[10px] px-2 py-0.5 rounded border text-orange-300 border-orange-500/30 bg-orange-500/10">
+                  {vehiculo.inventario_alerta}
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Acciones */}
           <div className="p-3 bg-dark/30 border-t border-primary/10 flex gap-2">
+            <button
+              onClick={() => onOpenInventario?.(vehiculo)}
+              className="flex items-center justify-center gap-2 px-3 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 rounded-lg transition-all text-sm font-medium"
+              title="Llenar inventario"
+            >
+              <ClipboardCheck className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onOpenInventario?.(vehiculo, 'devolucion_conductor')}
+              className="flex items-center justify-center gap-2 px-3 py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 rounded-lg transition-all text-sm font-medium"
+              title="Regreso del conductor"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
             <button
               onClick={() => onEdit(vehiculo)}
               className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-primary/20 hover:bg-primary/30 text-primary rounded-lg transition-all text-sm font-medium"

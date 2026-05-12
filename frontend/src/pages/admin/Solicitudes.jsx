@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import solicitudesService from '../../services/solicitudesService';
+import { useAuth } from '../../contexts/AuthContext';
 import { 
   Users, 
   Clock, 
@@ -21,6 +22,7 @@ import {
 
 const SolicitudesConductores = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [solicitudes, setSolicitudes] = useState([]);
   const [estadisticas, setEstadisticas] = useState({
     total: 0,
@@ -38,6 +40,8 @@ const SolicitudesConductores = () => {
     fechaDesde: '',
     fechaHasta: ''
   });
+  const canViewCitas = ['super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador']
+    .includes(user?.rol || user?.role);
 
   useEffect(() => {
     cargarDatos();
@@ -113,7 +117,7 @@ const SolicitudesConductores = () => {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 bg-[#07425E] p-6">
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
@@ -125,6 +129,14 @@ const SolicitudesConductores = () => {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {canViewCitas && (
+            <button
+              onClick={() => navigate('/admin/solicitudes/citas')}
+              className="px-4 py-2 bg-white/10 text-gray-200 rounded-lg hover:bg-white/20 transition-colors text-sm font-medium"
+            >
+              Ver agenda de citas
+            </button>
+          )}
           <div className="text-right">
             <p className="text-sm text-gray-400">Última actualización</p>
             <p className="text-white font-medium text-sm">
@@ -280,7 +292,6 @@ const SolicitudesConductores = () => {
               <option value="Aprobado" className="bg-gray-800">Aprobado</option>
               <option value="Aprobado (a prueba)" className="bg-gray-800">Aprobado (a prueba)</option>
               <option value="Rechazado" className="bg-gray-800">Rechazado</option>
-              <option value="Migrado" className="bg-gray-800">Migrado</option>
             </select>
           </div>
           
@@ -329,14 +340,20 @@ const SolicitudesConductores = () => {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
+            <>
+              {/*  1. Scroll vertical/horizontal, altura máxima y borde suave  */}
+              <div className="overflow-auto max-h-[60vh] sidebar-scroll rounded-lg border border-white/5">
+              
+              {/*  2. Tabla con relative y min-w para que no se apachurre  */}
+              <table className="w-full min-w-[900px] relative">
+                
+                {/*  3. Encabezado pegajoso con fondo sólido para tapar el scroll  */}
+                <thead className="bg-[#1a1a2e] sticky top-0 z-10 shadow-sm">
                   <tr className="border-b border-white/10">
+                    <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">FECHA</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">CANDIDATO</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">CONTACTO</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">ESTADO</th>
-                    <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">FECHA</th>
                     <th className="text-left py-3 px-4 text-gray-400 font-medium text-sm">EXPERIENCIA</th>
                     <th className="text-center py-3 px-4 text-gray-400 font-medium text-sm">ACCIONES</th>
                   </tr>
@@ -347,6 +364,14 @@ const SolicitudesConductores = () => {
                       key={solicitud.id} 
                       className="border-b border-white/5 hover:bg-white/5 transition-colors"
                     >
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4 text-gray-400" />
+                          <span className="text-gray-300 text-sm">
+                            {formatFecha(solicitud.fecha_solicitud)}
+                          </span>
+                        </div>
+                      </td>
                       <td className="py-4 px-4">
                         <div>
                           <p className="text-white font-medium">{solicitud.nombre_completo}</p>
@@ -373,14 +398,6 @@ const SolicitudesConductores = () => {
                         <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium border ${getStatusBadge(solicitud.estatus_solicitud)}`}>
                           {solicitud.estatus_solicitud}
                         </span>
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center gap-2">
-                          <Calendar className="w-4 h-4 text-gray-400" />
-                          <span className="text-gray-300 text-sm">
-                            {formatFecha(solicitud.fecha_solicitud)}
-                          </span>
-                        </div>
                       </td>
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-2">
@@ -422,7 +439,8 @@ const SolicitudesConductores = () => {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
         </div>
       </div>

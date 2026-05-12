@@ -9,9 +9,25 @@ import {
   User,
   FileText,
   Save,
-  Package
+  Package,
+  Paperclip
 } from 'lucide-react';
 import { API_BASE_URL } from '@/services/api';
+import { formatMaintenanceDate } from '@/utils/maintenanceDateFormat';
+
+const MAX_ADMIN_ADJUNTOS = 6;
+const MAX_ADMIN_ADJUNTO_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_ADMIN_ADJUNTO_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence'
+]);
 
 const CompletarMantenimiento = () => {
   const [loading, setLoading] = useState(true);
@@ -29,6 +45,7 @@ const CompletarMantenimiento = () => {
   metodo_distribucion: ''  // ← AÑADIDO
 });
   const [errors, setErrors] = useState({});
+  const [adjuntosAdmin, setAdjuntosAdmin] = useState([]);
 
   useEffect(() => {
     cargarMantenimiento();
@@ -58,10 +75,28 @@ const CompletarMantenimiento = () => {
         return;
       }
       
-      const response = await fetch(`${API_BASE_URL}/admin/mantenimientos/${id}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const payload = new FormData();
+      payload.append('fecha_realizada', formData.fecha_realizada || '');
+      payload.append('kilometraje_real', String(parseInt(formData.kilometraje_real, 10)));
+      payload.append('servicios_realizados', formData.servicios_realizados || '');
+      payload.append('refacciones', formData.refacciones || '');
+      payload.append('costo_mano_obra', String(parseFloat(formData.costo_mano_obra) || 0));
+      payload.append('costo_refacciones', String(parseFloat(formData.costo_refacciones) || 0));
+      payload.append('costo_total', String(calcularTotal()));
+      payload.append('mecanico', formData.mecanico || '');
+      payload.append('observaciones_final', formData.observaciones_final || '');
+      payload.append('metodo_distribucion', formData.metodo_distribucion || '');
+      payload.append('conductor_id', mantenimiento.conductor_id ? String(mantenimiento.conductor_id) : '');
+      adjuntosAdmin.forEach((file) => payload.append('adjuntos_admin', file));
+
+      const response = await fetch(`${API_BASE_URL}/admin/mantenimientos/${id}/completar`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+        body: payload
       });
-      
+
       const data = await response.json();
       if (data.success) {
         setMantenimiento(data.mantenimiento);
@@ -95,7 +130,49 @@ const CompletarMantenimiento = () => {
     }
   };
 
-  const validarFormulario = () => {
+    const handleAdjuntosChange = (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const merged = [...adjuntosAdmin, ...files];
+    if (merged.length > MAX_ADMIN_ADJUNTOS) {
+      setErrors((prev) => ({
+        ...prev,
+        adjuntos_admin: `Solo puedes adjuntar hasta ${MAX_ADMIN_ADJUNTOS} archivos`
+      }));
+      event.target.value = '';
+      return;
+    }
+
+    for (const file of files) {
+      const mime = String(file.type || '').toLowerCase();
+      if (!ALLOWED_ADMIN_ADJUNTO_MIME_TYPES.has(mime)) {
+        setErrors((prev) => ({
+          ...prev,
+          adjuntos_admin: 'Solo se permiten archivos JPG, PNG, WEBP, HEIC o PDF'
+        }));
+        event.target.value = '';
+        return;
+      }
+      if (file.size > MAX_ADMIN_ADJUNTO_SIZE_BYTES) {
+        setErrors((prev) => ({
+          ...prev,
+          adjuntos_admin: `El archivo "${file.name}" supera el limite de 10MB`
+        }));
+        event.target.value = '';
+        return;
+      }
+    }
+
+    setAdjuntosAdmin(merged);
+    setErrors((prev) => ({ ...prev, adjuntos_admin: '' }));
+    event.target.value = '';
+  };
+
+  const removeAdjunto = (index) => {
+    setAdjuntosAdmin((prev) => prev.filter((_, i) => i !== index));
+  };
+const validarFormulario = () => {
     const newErrors = {};
 
     if (!formData.fecha_realizada) {
@@ -131,26 +208,26 @@ const CompletarMantenimiento = () => {
       const token = localStorage.getItem('token');
       const id = mantenimiento.id;
 
+      const payload = new FormData();
+      payload.append('fecha_realizada', formData.fecha_realizada || '');
+      payload.append('kilometraje_real', String(parseInt(formData.kilometraje_real, 10)));
+      payload.append('servicios_realizados', formData.servicios_realizados || '');
+      payload.append('refacciones', formData.refacciones || '');
+      payload.append('costo_mano_obra', String(parseFloat(formData.costo_mano_obra) || 0));
+      payload.append('costo_refacciones', String(parseFloat(formData.costo_refacciones) || 0));
+      payload.append('costo_total', String(calcularTotal()));
+      payload.append('mecanico', formData.mecanico || '');
+      payload.append('observaciones_final', formData.observaciones_final || '');
+      payload.append('metodo_distribucion', formData.metodo_distribucion || '');
+      payload.append('conductor_id', mantenimiento.conductor_id ? String(mantenimiento.conductor_id) : '');
+      adjuntosAdmin.forEach((file) => payload.append('adjuntos_admin', file));
+
       const response = await fetch(`${API_BASE_URL}/admin/mantenimientos/${id}/completar`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
         },
-       body: JSON.stringify({
-  fecha_realizada: formData.fecha_realizada,
-  kilometraje_real: parseInt(formData.kilometraje_real),
-  servicios_realizados: formData.servicios_realizados,
-  refacciones: formData.refacciones,
-  costo_mano_obra: parseFloat(formData.costo_mano_obra),
-  costo_refacciones: parseFloat(formData.costo_refacciones),
-  costo_total: calcularTotal(),
-  mecanico: formData.mecanico,
-  observaciones_final: formData.observaciones_final,
-  // ← AÑADIDOS:
-  metodo_distribucion: formData.metodo_distribucion,
-  conductor_id: mantenimiento.conductor_id || null
-})
+        body: payload
       });
 
       const data = await response.json();
@@ -177,14 +254,8 @@ const CompletarMantenimiento = () => {
     }).format(amount || 0);
   };
 
-  const formatDate = (date) => {
-    if (!date) return '-';
-    return new Date(date).toLocaleDateString('es-MX', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric'
-    });
-  };
+  const formatDate = (date) =>
+    formatMaintenanceDate(date, { fallback: '-', month: 'long' });
 
   const calcularTotal = () => {
     const costoManoObra = parseFloat(formData.costo_mano_obra) || 0;
@@ -194,7 +265,7 @@ const CompletarMantenimiento = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="text-white text-xl">Cargando datos...</div>
       </div>
     );
@@ -205,7 +276,7 @@ const CompletarMantenimiento = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-4xl mx-auto">
         
         {/* Header */}
@@ -570,6 +641,48 @@ const CompletarMantenimiento = () => {
               placeholder="Notas adicionales, recomendaciones, próximos servicios sugeridos..."
               className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 resize-none"
             />
+          </div>
+
+          <div className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 p-6">
+            <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+              <Paperclip className="w-6 h-6 text-cyan-400" />
+              Adjuntos de Servicio (Opcional)
+            </h2>
+            <input
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp,.heic,.heif,.pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,application/pdf"
+              multiple
+              onChange={handleAdjuntosChange}
+              className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white file:mr-4 file:py-2 file:px-3 file:rounded file:border-0 file:bg-cyan-500/20 file:text-cyan-200 hover:file:bg-cyan-500/30"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              Hasta {MAX_ADMIN_ADJUNTOS} archivos. Maximo 10MB por archivo.
+            </p>
+            {errors.adjuntos_admin && (
+              <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
+                <AlertCircle className="w-3 h-3" />
+                {errors.adjuntos_admin}
+              </p>
+            )}
+            {adjuntosAdmin.length > 0 && (
+              <div className="mt-3 space-y-1">
+                {adjuntosAdmin.map((file, index) => (
+                  <div
+                    key={`${file.name}-${index}`}
+                    className="flex items-center justify-between rounded bg-white/5 border border-white/10 px-3 py-2 text-xs"
+                  >
+                    <span className="text-gray-200 truncate pr-3">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAdjunto(index)}
+                      className="text-red-300 hover:text-red-200"
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Botones */}

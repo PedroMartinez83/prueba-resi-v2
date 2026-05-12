@@ -342,6 +342,11 @@ const SiniestrosRegistrar = () => {
 
       if (data.success) {
         const nuevoSiniestro = data.siniestro;
+        const numeroVehiculoConfirmacion =
+          vehiculoSeleccionado?.numero_vehiculo ||
+          vehiculoSeleccionado?.NumeroVehiculo ||
+          opciones.vehiculos.find(v => String(v.id) === String(formData.vehiculo_id))?.numero_vehiculo ||
+          'N/A';
         
         fotos.forEach(foto => URL.revokeObjectURL(foto.preview));
         
@@ -349,7 +354,7 @@ const SiniestrosRegistrar = () => {
           const crearMantenimiento = window.confirm(
             '✅ Siniestro registrado exitosamente\n\n' +
             `📋 Folio: #${nuevoSiniestro.folio_siniestro}\n` +
-            `🚗 Vehículo: ${vehiculoSeleccionado?.numero_vehiculo || 'N/A'}\n` +
+            `🚗 Vehículo: ${numeroVehiculoConfirmacion}\n` +
             (hayFotos ? `📸 Fotos subidas: ${fotos.length}\n` : '') +
             '\n🔧 ¿Deseas crear la Orden de Mantenimiento (reparación) ahora?\n\n' +
             '• SÍ → Programar mantenimiento con datos pre-llenados\n' +
@@ -394,7 +399,7 @@ const SiniestrosRegistrar = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       {loadingOpciones ? (
         <div className="max-w-4xl mx-auto">
           <div className="bg-white/5 backdrop-blur-sm p-12 rounded-xl border border-white/10 text-center">

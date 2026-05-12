@@ -7,52 +7,54 @@ const ConductoresMorosos = ({ datos = [], loading = false, limite = 5 }) => {
     .filter((conductor) => (conductor?.deuda_aproximada ?? 0) > 0)
     .slice(0, limite);
 
-  const getDelayStyles = (deuda = 0, debido = 0) => {
-    if (!debido || deuda <= 0) {
-      return {
-        badge: 'text-gray-300 bg-white/10',
-        card: 'border border-white/10 bg-white/5 hover:border-white/20',
-        amount: 'text-gray-300',
-        deudaBg: 'bg-emerald-500/10 border-emerald-500/30'
-      };
-    }
-
-    // Calcular porcentaje de deuda pendiente
-    const porcentajeDeuda = (deuda / debido) * 100;
-
-    if (porcentajeDeuda >= 80) {
-      return {
-        badge: 'text-red-400 bg-red-500/20',
-        card: 'border border-red-500/20 bg-red-500/5 hover:border-red-500/40',
-        amount: 'text-red-400',
-        deudaBg: 'bg-red-500/10 border-red-500/30'
-      };
-    }
-
-    if (porcentajeDeuda >= 50) {
-      return {
-        badge: 'text-amber-400 bg-amber-500/20',
-        card: 'border border-amber-500/20 bg-amber-500/5 hover:border-amber-500/40',
-        amount: 'text-amber-400',
-        deudaBg: 'bg-amber-500/10 border-amber-500/30'
-      };
-    }
-
-    if (porcentajeDeuda >= 20) {
-      return {
-        badge: 'text-yellow-400 bg-yellow-500/20',
-        card: 'border border-yellow-500/20 bg-yellow-500/5 hover:border-yellow-500/40',
-        amount: 'text-yellow-400',
-        deudaBg: 'bg-yellow-500/10 border-yellow-500/30'
-      };
-    }
-
-    return {
+  const severityStyles = {
+    neutral: {
+      badge: 'text-gray-300 bg-white/10',
+      card: 'border border-white/10 bg-white/5 hover:border-white/20',
+      amount: 'text-gray-300',
+      deudaBg: 'bg-white/5 border-white/10',
+      progress: 'from-slate-500 to-slate-400'
+    },
+    green: {
       badge: 'text-emerald-400 bg-emerald-500/20',
       card: 'border border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/40',
       amount: 'text-emerald-400',
-      deudaBg: 'bg-emerald-500/10 border-emerald-500/30'
-    };
+      deudaBg: 'bg-emerald-500/10 border-emerald-500/30',
+      progress: 'from-emerald-500 to-emerald-400'
+    },
+    yellow: {
+      badge: 'text-amber-400 bg-amber-500/20',
+      card: 'border border-amber-500/20 bg-amber-500/5 hover:border-amber-500/40',
+      amount: 'text-amber-400',
+      deudaBg: 'bg-amber-500/10 border-amber-500/30',
+      progress: 'from-amber-500 to-yellow-400'
+    },
+    red: {
+      badge: 'text-red-400 bg-red-500/20',
+      card: 'border border-red-500/20 bg-red-500/5 hover:border-red-500/40',
+      amount: 'text-red-400',
+      deudaBg: 'bg-red-500/10 border-red-500/30',
+      progress: 'from-red-500 to-red-400'
+    }
+  };
+
+  // Devuelve el estilo más severo entre días y monto adeudado (%)
+  const getDelayStyles = (diasAdeudados = 0, deuda = 0, debido = 0) => {
+    if (deuda <= 0) return severityStyles.neutral;
+
+    // Severidad por días (regla cliente):
+    // 1 día = verde | 2 días = amarillo | 3+ días = rojo
+    const severidadDias = diasAdeudados >= 3 ? 3 : diasAdeudados === 2 ? 2 : diasAdeudados === 1 ? 1 : 0;
+
+    // Severidad por monto pendiente relativo al total debido.
+    // <20% = verde | 20-49% = amarillo | >=50% = rojo
+    const porcentajeDeuda = debido > 0 ? (deuda / debido) * 100 : 100;
+    const severidadMonto = porcentajeDeuda >= 50 ? 3 : porcentajeDeuda >= 20 ? 2 : 1;
+
+    const severidadFinal = Math.max(severidadDias, severidadMonto);
+    if (severidadFinal >= 3) return severityStyles.red;
+    if (severidadFinal === 2) return severityStyles.yellow;
+    return severityStyles.green;
   };
 
   if (loading) {
@@ -82,8 +84,11 @@ const ConductoresMorosos = ({ datos = [], loading = false, limite = 5 }) => {
           const debido = conductor.total_debido || 1;
           const pagado = conductor.total_pagado || 0;
           const porcentajePago = conductor.porcentaje_pago || 0;
-          const diasAdeudados = parseInt(conductor.dias_transcurridos || 0);
-          const styles = getDelayStyles(deuda, debido);
+          const diasAdeudados = parseInt(
+            conductor.dias_adeudados ?? conductor.dias_transcurridos ?? 0,
+            10
+          );
+          const styles = getDelayStyles(diasAdeudados, deuda, debido);
 
           return (
             <div
@@ -137,7 +142,7 @@ const ConductoresMorosos = ({ datos = [], loading = false, limite = 5 }) => {
                 {/* Barra de progreso */}
                 <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden">
                   <div 
-                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500"
+                    className={`h-full bg-gradient-to-r ${styles.progress} transition-all duration-500`}
                     style={{ width: `${Math.min(parseFloat(porcentajePago), 100)}%` }}
                   />
                 </div>

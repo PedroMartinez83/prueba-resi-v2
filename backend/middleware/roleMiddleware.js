@@ -13,7 +13,8 @@ const ROLES = {
   ENCARGADO_COMPRAS: 'compras',     // Inventario y proveedores
   SECRETARIA: 'secretaria',         // Soporte administrativo
   CONDUCTOR: 'conductor',            // Acceso limitado a su informaciÃ³n
-  CLIENTE: 'cliente'                // Solo sus rentas y pagos
+  CLIENTE: 'cliente',                // Solo sus rentas y pagos
+  INVERSIONISTA: 'inversionista'         // Acceso a su portafolio y dashboard de inversiones
 };
 
 // JerarquÃ­a de roles (mayor nÃºmero = mÃ¡s permisos)
@@ -83,7 +84,7 @@ const PERMISSIONS = {
   'mantenimiento.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES, ROLES.JEFE_TALLER, ROLES.ENCARGADO_COMPRAS],
   'mantenimiento.create': [ROLES.SUPER_ADMIN, ROLES.JEFE_TALLER, ROLES.DIRECCION],
   'mantenimiento.update': [ROLES.SUPER_ADMIN, ROLES.JEFE_TALLER, ROLES.DIRECCION],
-  'mantenimiento.delete': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.JEFE_TALLER],
+  'mantenimiento.delete': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.JEFE_TALLER, ROLES.GERENTE_OPERACIONES, 'gerente'],
   'mantenimiento.approve': [ROLES.SUPER_ADMIN, ROLES.GERENTE_OPERACIONES, ROLES.DIRECCION, ROLES.JEFE_TALLER],
   
   // INVENTARIO Y COMPRAS
@@ -104,19 +105,19 @@ const PERMISSIONS = {
   'reportes.operativos': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.GERENTE_OPERACIONES],
   
   // ðŸ†• ADMINISTRACIÃ“N DE USUARIOS (ACTUALIZADO)
-  'usuarios.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS, ROLES.COORDINADOR, ROLES.GERENTE_OPERACIONES],
+  'usuarios.view': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS, ROLES.COORDINADOR, ROLES.GERENTE_OPERACIONES, ROLES.JEFE_TALLER],
   'usuarios.create': [ROLES.SUPER_ADMIN, ROLES.FINANZAS, ROLES.GERENTE_OPERACIONES],
-  'usuarios.update': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS, ROLES.COORDINADOR, ROLES.GERENTE_OPERACIONES], // direccion solo puede cambiar estado
+  'usuarios.update': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS, ROLES.COORDINADOR, ROLES.GERENTE_OPERACIONES, ROLES.JEFE_TALLER], // direccion solo puede cambiar estado
   'usuarios.delete': [ROLES.SUPER_ADMIN, ROLES.FINANZAS, ROLES.GERENTE_OPERACIONES],
   'usuarios.reset_password': [ROLES.SUPER_ADMIN, ROLES.DIRECCION, ROLES.FINANZAS, ROLES.GERENTE_OPERACIONES],
   'sistema.config': [ROLES.SUPER_ADMIN],
 
   // Permisos de inversiones
-  'inversiones.view': ['super_admin', 'direccion'],
-  'inversiones.create': ['super_admin', 'direccion'],
-  'inversiones.update': ['super_admin', 'direccion'],
-  'inversiones.delete': ['super_admin'],
-  'inversiones.payment': ['direccion', 'super_admin']
+  'inversiones.view': ['super_admin', 'direccion', 'inversionista', 'finanzas', 'gerente_ops', 'coordinador'],
+  'inversiones.create': ['super_admin', 'direccion', 'inversionista', 'finanzas', 'gerente_ops', 'coordinador'],
+  'inversiones.update': ['super_admin', 'direccion','inversionista', 'finanzas', 'gerente_ops', 'coordinador'],
+  'inversiones.delete': ['super_admin', 'inversionista', 'direccion', 'finanzas', 'gerente_ops', 'coordinador'],
+  'inversiones.payment': ['direccion', 'super_admin', 'inversionista', 'finanzas', 'gerente_ops', 'coordinador']
 };
 
 /**
@@ -125,22 +126,43 @@ const PERMISSIONS = {
  * @param {string} permission - Permiso a verificar
  * @returns {boolean}
  */
-const hasPermission = (userRole, permission) => {
-  // Super admin siempre tiene todos los permisos
-  if (userRole === ROLES.SUPER_ADMIN) return true;
+const normalizeRole = (role) => String(role || '').trim().toLowerCase();
 
-  if (userRole === ROLES.GERENTE_OPERACIONES) return true; // Por seguridad, verificar ambas formas
+const resolvePermissionAliases = (permission) => {
+  const perm = String(permission || '').trim();
+  if (!perm) return [];
+
+  const aliases = [perm];
+  if (perm.startsWith('mantenimientos.')) {
+    aliases.push(perm.replace(/^mantenimientos\./, 'mantenimiento.'));
+  } else if (perm.startsWith('mantenimiento.')) {
+    aliases.push(perm.replace(/^mantenimiento\./, 'mantenimientos.'));
+  }
+
+  return [...new Set(aliases)];
+};
+
+const hasPermission = (userRole, permission) => {
+  const role = normalizeRole(userRole);
+  // Super admin siempre tiene todos los permisos
+  if (role === ROLES.SUPER_ADMIN) return true;
+
+  if (role === ROLES.GERENTE_OPERACIONES) return true; // Por seguridad, verificar ambas formas
 
   // Finanzas tiene todos los accesos segÃºn configuraciÃ³n
-  if (userRole === ROLES.FINANZAS) return true;
+  if (role === ROLES.FINANZAS) return true;
 
-  if (userRole === ROLES.JEFE_TALLER) return true; // Jefe de taller tiene acceso amplio a mantenimientos e inventario
+  if (role === ROLES.JEFE_TALLER) return true; // Jefe de taller tiene acceso amplio a mantenimientos e inventario
   
+  const permissionAliases = resolvePermissionAliases(permission);
+
   // Verificar si el permiso existe y el rol estÃ¡ en la lista
-  const allowedRoles = PERMISSIONS[permission];
+  const allowedRoles = permissionAliases
+    .map((perm) => PERMISSIONS[perm])
+    .find(Boolean);
   if (!allowedRoles) return false;
   
-  return allowedRoles.includes(userRole);
+  return allowedRoles.includes(role);
 };
 
 /**
@@ -168,7 +190,7 @@ const requirePermission = (requiredPermissions) => {
       });
     }
     
-    const userRole = req.user.rol || req.user.role || ROLES.CONDUCTOR;
+    const userRole = normalizeRole(req.user.rol || req.user.role || ROLES.CONDUCTOR);
     
     // âœ… BYPASS EXPLÃCITO PARA SUPER_ADMIN - AGREGADO PARA SEGURIDAD
     if (userRole === 'super_admin' || userRole === ROLES.SUPER_ADMIN) {

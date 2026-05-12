@@ -5,9 +5,10 @@ import {
 } from 'lucide-react';
 import adminService from '../../services/adminService';
 
-const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
+const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {}, tipoSocio }) => {
   const [modeloNegocio, setModeloNegocio] = useState('SD'); // 🔄 Cambiado de 'AUTOMANAGER' a 'SD'
   const [multiplicadorSistema, setMultiplicadorSistema] = useState(2.82);
+  
   
   const [formData, setFormData] = useState({
     valorFactura: '',
@@ -22,27 +23,59 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
     ...datosIniciales
   });
 
+
   const [calculos, setCalculos] = useState(null);
   const [calculando, setCalculando] = useState(false);
   const [modoEdicion, setModoEdicion] = useState('multiplicador');
 
-  // Cargar multiplicador del sistema
+  // =========================================================================
+  // 🧠 MEMORIA: Recuperar datos si el usuario vuelve a abrir la calculadora
+  // =========================================================================
+  useEffect(() => {
+    // Verificamos que datosIniciales exista y tenga al menos el valorFactura guardado
+    if (datosIniciales && datosIniciales.valor_factura > 0) {
+      
+      // ...sobreescribimos los ceros con los datos exactos que ya había capturado
+      setFormData({
+        valorFactura: datosIniciales.valor_factura || 0,
+        costoPoliza: datosIniciales.polizas || 0,
+        placas: datosIniciales.placas || 0,
+        gps: datosIniciales.gps || 0,
+        otrosGastos: datosIniciales.otros_gastos || 0,
+        rentaDiaria: datosIniciales.renta_diaria || 400,
+        plazoMeses: datosIniciales.plazo_meses || 62,
+        multiplicadorCustom: datosIniciales.tasa_rendimiento || 2.82
+      });
+    }
+  }, [datosIniciales]); // Se ejecuta al abrir si los datos iniciales cambian
+
+// Cargar multiplicador del sistema O usar el guardado en memoria
   useEffect(() => {
     if (isOpen) {
       adminService.getMultiplicadorSistema()
         .then(response => {
           if (response.success) {
-            setMultiplicadorSistema(response.multiplicador);
+            setMultiplicadorSistema(response.multiplicador); // Lo guardamos por si acaso
+            
+            // 🛡️ EL ESCUDO: Revisamos si ya traíamos un multiplicador guardado en memoria
+            const multiplicadorGuardado = datosIniciales?.tasa_rendimiento;
+            
             setFormData(prev => ({
               ...prev,
-              multiplicadorCustom: response.multiplicador.toString(),
-              utilidadPorcentaje: ((response.multiplicador - 1) * 100).toFixed(0)
+              // Forzamos el 2.82 si no hay nada guardado, ignorando response.multiplicador
+              multiplicadorCustom: multiplicadorGuardado 
+                ? multiplicadorGuardado.toString() 
+                : '2.82', // 👈 ¡Adiós al 1.56 del backend!
+                
+              utilidadPorcentaje: multiplicadorGuardado 
+                ? ((parseFloat(multiplicadorGuardado) - 1) * 100).toFixed(0)
+                : '182' // (2.82 - 1 = 1.82 * 100)
             }));
           }
         })
         .catch(console.error);
     }
-  }, [isOpen]);
+  }, [isOpen, datosIniciales]); // 👈 Agregamos datosIniciales a las dependencias
 
   // Sincronización bidireccional multiplicador ↔ utilidad
   const handleMultiplicadorChange = (valor) => {
@@ -86,7 +119,17 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
     return () => clearTimeout(timer);
   }, [formData, modeloNegocio]);
 
-  const calcularInversion = async () => {
+  // 🛡️ AUTO-CORRECTOR DE PLAZOS 
+  useEffect(() => {
+    const minRequerido = tipoSocio === 'SI' ? 62 : 12;
+    
+    // Si la calculadora tiene un número menor al mínimo permitido, lo corrige solo.
+    if (formData.plazoMeses && formData.plazoMeses < minRequerido) {
+      setFormData(prev => ({ ...prev, plazoMeses: minRequerido }));
+    }
+  }, [tipoSocio, formData.plazoMeses]);
+
+const calcularInversion = async () => {
     setCalculando(true);
     try {
       let response;
@@ -102,7 +145,7 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
       } else {
         const inversionTotal = 
           parseFloat(formData.valorFactura || 0) + 
-          (parseFloat(formData.costoPoliza || 0) * 2) + 
+          (parseFloat(formData.costoPoliza || 0) * 3) + 
           parseFloat(formData.placas || 0) + 
           parseFloat(formData.gps || 0) + 
           parseFloat(formData.otrosGastos || 0);
@@ -126,8 +169,8 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
             rentaDiaria: parseFloat(formData.rentaDiaria || 400),
             multiplicadorUsado: multiplicador,
             utilidadTotal: corridaTotal - inversionTotal,
-            utilidadPorcentaje: ((multiplicador - 1) * 100).toFixed(2),
-            modelo: 'SD' // 🔄 Cambiado de 'AUTOMANAGER' a 'SD'
+            utilidadPorcentaje: ((multiplicador - 1) * 100).toFixed(2)
+            // 🚀 BRAM: Eliminamos la línea "modelo: 'SD'" de aquí.
           }
         };
       }
@@ -158,27 +201,25 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
   // 🔄 FUNCIÓN CORREGIDA - handleConfirmar
   const handleConfirmar = () => {
     if (calculos && onClose) {
-      // 🎯 Determinar valores según el modelo de negocio
       let datosVehiculo;
       
       if (modeloNegocio === 'SI_LEGADO') {
-        // ✅ SI_LEGADO: Valores FIJOS siempre
         datosVehiculo = {
           valor_factura: formData.valorFactura,
           polizas: formData.costoPoliza,
           placas: formData.placas,
           gps: formData.gps,
           otros_gastos: formData.otrosGastos,
-          renta_diaria: 10400,           // ✅ FIJO: $10,400
-          plazo_meses: 62,                // ✅ FIJO: 62 meses
-          tasa_rendimiento: 1.56,         // ✅ FIJO: 1.56x
+          renta_diaria: 10400,
+          plazo_meses: 62,
+          tasa_rendimiento: 1.56,
           inversion_total: calculos.inversionTotal,
           corrida_total: calculos.inversionTotal * 1.56,
           utilidad_total: calculos.utilidadMensual * 62,
           multiplicador_usado: 1.56
+          // 🚀 NO forzamos TipoSocio ni siquiera aquí.
         };
       } else {
-        // ✅ SD (Socio Dueño): Valores variables del formulario
         datosVehiculo = {
           valor_factura: formData.valorFactura,
           polizas: formData.costoPoliza,
@@ -187,23 +228,24 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
           otros_gastos: formData.otrosGastos,
           renta_diaria: formData.rentaDiaria,
           plazo_meses: formData.plazoMeses,
-          tasa_rendimiento: parseFloat(formData.multiplicadorCustom), // ✅ Multiplicador, no utilidad
+          tasa_rendimiento: parseFloat(formData.multiplicadorCustom),
           inversion_total: calculos.inversionTotal,
           corrida_total: calculos.corridaTotal,
           utilidad_total: calculos.utilidadTotal,
           multiplicador_usado: calculos.multiplicadorUsado
+          // 🚀 NO forzamos TipoSocio.
         };
       }
 
       onClose({
         usarDatos: true,
-        modelo: modeloNegocio, // Enviará 'SI_LEGADO' o 'SD'
+        // 🚀 BRAM: NO mandamos el `modelo` de regreso. Solo mandamos los números.
         datosVehiculo,
         calculos
       });
     }
   };
-
+  
   if (!isOpen) return null;
 
   return (
@@ -231,56 +273,27 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
           </div>
         </div>
 
-        {/* Selector de Modelo */}
-        <div className="p-4 sm:p-6 border-b border-gray-700">
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 sm:items-center">
-            <label className="text-gray-400 font-medium text-sm sm:text-base">
-              Modelo de Negocio:
-            </label>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setModeloNegocio('SI_LEGADO')}
-                className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-all text-sm sm:text-base ${
-                  modeloNegocio === 'SI_LEGADO' 
-                    ? 'bg-blue-600 text-white' 
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                <Building2 className="w-4 h-4" />
-                <span className="hidden sm:inline">SI Legado</span>
-                <span className="sm:hidden">Legado</span>
-              </button>
-              {/* 🔄 BOTÓN RENOMBRADO */}
-              <button
-                onClick={() => setModeloNegocio('SD')}
-                className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-all text-sm sm:text-base ${
-                  modeloNegocio === 'SD' 
-                    ? 'bg-green-600 text-white' 
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                <Car className="w-4 h-4" />
-                <span className="hidden sm:inline">Socio Dueño (SD)</span>
-                <span className="sm:hidden">SD</span>
-              </button>
+        {/* Encabezado de la Calculadora Inteligente */}
+        <div className="p-4 sm:p-6 border-b border-gray-700 bg-gradient-to-r from-cyan-900/10 via-transparent to-transparent">
+          <div className="flex items-start sm:items-center gap-4">
+            {/* Ícono Vistoso */}
+            <div className="p-3 bg-cyan-500/20 text-cyan-400 rounded-xl border border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.15)] flex-shrink-0">
+              <span className="text-2xl block">🧠</span> 
+              {/* Nota: Si usas lucide-react, puedes cambiar el emoji por <Calculator className="w-6 h-6" /> o <Zap className="w-6 h-6" /> */}
             </div>
-          </div>
-          
-          {/* 🔄 INFO DEL MODELO ACTUALIZADA */}
-          <div className="mt-3 sm:mt-4 p-3 bg-gray-800/50 rounded-lg">
-            {modeloNegocio === 'SI_LEGADO' ? (
-              <div className="text-xs sm:text-sm text-gray-400">
-                <strong className="text-blue-400">Modelo SI Legado:</strong> (Modo informativo) 
-                Calcula la utilidad fija de la empresa. Flujo fijo: $10,400/mes del conductor, 
-                $8,000/mes al inversionista, $2,400/mes de utilidad.
-              </div>
-            ) : (
-              <div className="text-xs sm:text-sm text-gray-400">
-                <strong className="text-green-400">Modelo Socio Dueño (SD):</strong> (Modo interactivo) 
-                Calcula la "Corrida" o deuda total del conductor. Todos los valores son editables 
-                para simular diferentes escenarios.
-              </div>
-            )}
+            
+            {/* Textos Introductorios */}
+            <div>
+              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                Calculadora Financiera
+                <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-400 text-[10px] uppercase tracking-wider font-bold border border-cyan-500/30">
+                  Inteligente
+                </span>
+              </h3>
+              <p className="text-xs sm:text-sm text-gray-400 mt-1.5 leading-relaxed max-w-3xl">
+                Ingresa los costos iniciales del vehículo. El motor inteligente proyectará automáticamente la corrida total, los plazos y la rentabilidad con precisión matemática, eliminando errores manuales.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -297,72 +310,86 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
                 Costos de Inversión
               </h3>
               <div className="space-y-3">
+                
+                {/* VALOR FACTURA */}
                 <div>
                   <label className="block text-xs sm:text-sm text-gray-400 mb-1">
                     Valor Factura
                   </label>
                   <input
                     type="number"
-                    value={formData.valorFactura}
-                    onChange={(e) => setFormData({...formData, valorFactura: e.target.value})}
+                    value={formData.valorFactura !== undefined ? formData.valorFactura : 0}
+                    onFocus={(e) => e.target.select()} /* 👈 El truco mágico para seleccionar el 0 */
+                    onChange={(e) => setFormData({...formData, valorFactura: e.target.value.replace(/^0+(?=\d)/, '')})}
                     className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="250,000"
+                    placeholder="0"
                   />
                 </div>
                 
+                {/* COSTO PÓLIZA */}
                 <div>
                   <label className="block text-xs sm:text-sm text-gray-400 mb-1">
                     Costo de Póliza (Anual)
                   </label>
                   <input
                     type="number"
-                    value={formData.costoPoliza}
-                    onChange={(e) => setFormData({...formData, costoPoliza: e.target.value})}
+                    value={formData.costoPoliza !== undefined ? formData.costoPoliza : 0}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setFormData({...formData, costoPoliza: e.target.value.replace(/^0+(?=\d)/, '')})}
                     className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="15,000"
+                    placeholder="0"
                   />
                   {/* 🔄 Feedback inline SOLO para SD */}
-                  {formData.costoPoliza && modeloNegocio === 'SD' && (
+                  {formData.costoPoliza > 0 && modeloNegocio === 'SD' && (
                     <div className="mt-1 text-xs text-primary">
-                      💡 Calculado: {formatCurrency(parseFloat(formData.costoPoliza) * 2)} (x2 años)
+                      💡 Calculado: {formatCurrency(parseFloat(formData.costoPoliza) * 3)} (x3 años)
                     </div>
                   )}
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* PLACAS */}
                   <div>
                     <label className="block text-xs sm:text-sm text-gray-400 mb-1">Placas</label>
                     <input
                       type="number"
-                      value={formData.placas}
-                      onChange={(e) => setFormData({...formData, placas: e.target.value})}
+                      value={formData.placas !== undefined ? formData.placas : 0}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setFormData({...formData, placas: e.target.value.replace(/^0+(?=\d)/, '')})}
                       className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder="5,000"
+                      placeholder="0"
                     />
                   </div>
+                  
+                  {/* GPS */}
                   <div>
                     <label className="block text-xs sm:text-sm text-gray-400 mb-1">GPS</label>
                     <input
                       type="number"
-                      value={formData.gps}
-                      onChange={(e) => setFormData({...formData, gps: e.target.value})}
+                      value={formData.gps !== undefined ? formData.gps : 0}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setFormData({...formData, gps: e.target.value.replace(/^0+(?=\d)/, '')})}
                       className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder="3,000"
+                      placeholder="0"
                     />
                   </div>
+                  
+                  {/* OTROS GASTOS */}
                   <div>
                     <label className="block text-xs sm:text-sm text-gray-400 mb-1">Otros</label>
                     <input
                       type="number"
-                      value={formData.otrosGastos}
-                      onChange={(e) => setFormData({...formData, otrosGastos: e.target.value})}
+                      value={formData.otrosGastos !== undefined ? formData.otrosGastos : 0}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => setFormData({...formData, otrosGastos: e.target.value.replace(/^0+(?=\d)/, '')})}
                       className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      placeholder="2,000"
+                      placeholder="0"
                     />
                   </div>
                 </div>
               </div>
             </div>
+
 
             {/* 🔄 Secciones SOLO para SD (antes AUTOMANAGER) */}
             {modeloNegocio === 'SD' && (
@@ -480,31 +507,58 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
                       </div>
                     </div>
                     
-                    {/* Plazo */}
-                    <div>
-                      <label className="block text-xs sm:text-sm text-gray-400 mb-1">
-                        Plazo de Recuperación
-                      </label>
-                      <input
-                        type="number"
-                        value={formData.plazoMeses}
-                        onChange={(e) => setFormData({...formData, plazoMeses: e.target.value})}
-                        className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                      />
-                      <input
-                        type="range"
-                        min="12"
-                        max="90"
-                        value={formData.plazoMeses}
-                        onChange={(e) => setFormData({...formData, plazoMeses: e.target.value})}
-                        className="w-full mt-2 accent-primary"
-                      />
-                      <div className="flex justify-between text-xs text-gray-500 mt-1">
-                        <span>12 meses</span>
-                        <span className="text-primary font-semibold">{formData.plazoMeses} meses</span>
-                        <span>90 meses</span>
-                      </div>
-                    </div>
+                    {/* PLAZO DE RECUPERACIÓN (BLINDADO) */}
+                    {(() => {
+                      const esSocioSI = tipoSocio === 'SI';
+                      const minPlazo = esSocioSI ? 62 : 12; 
+                      
+                      // 🛡️ MAGIA: Math.max obliga a que NUNCA se muestre un número menor a minPlazo
+                      const plazoSeguro = Math.max(parseInt(formData.plazoMeses) || 0, minPlazo);
+
+                      return (
+                        <div>
+                          <label className="block text-xs sm:text-sm text-gray-400 mb-1">
+                            Plazo de Recuperación
+                          </label>
+                          
+                          {/* INPUT DE NÚMERO */}
+                          <input
+                            type="number"
+                            min={minPlazo}
+                            value={plazoSeguro}
+                            onFocus={(e) => e.target.select()}
+                            onChange={(e) => {
+                              let valor = parseInt(e.target.value) || 0;
+                              if (valor < minPlazo) valor = minPlazo;
+                              setFormData({...formData, plazoMeses: valor});
+                            }}
+                            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                          />
+                          
+                          {/* BARRA DESLIZABLE */}
+                          <input
+                            type="range"
+                            min={minPlazo}
+                            max="90"
+                            value={plazoSeguro}
+                            onChange={(e) => setFormData({...formData, plazoMeses: parseInt(e.target.value)})}
+                            className="w-full mt-2 accent-primary"
+                          />
+                          
+                          <div className="flex justify-between text-xs text-gray-500 mt-1">
+                            <span>{minPlazo} meses</span>
+                            <span className="text-primary font-semibold">{plazoSeguro} meses</span>
+                            <span>90 meses</span>
+                          </div>
+
+                          {esSocioSI && (
+                            <p className="text-xs text-blue-400 mt-1">
+                              * El plazo mínimo para socio "SI" es de 62 meses.
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -799,14 +853,33 @@ const CalculadoraInversion = ({ isOpen, onClose, datosIniciales = {} }) => {
             >
               Cancelar
             </button>
-            {calculos && (
-              <button
-                onClick={handleConfirmar}
-                className="flex-1 sm:flex-none px-4 py-2 bg-primary text-dark font-semibold rounded-lg hover:bg-primary-light transition-colors text-sm sm:text-base"
-              >
-                ✓ Confirmar y Usar Cifras
-              </button>
-            )}
+                        {/* BOTÓN CONFIRMAR CON BLOQUEO INTELIGENTE */}
+            {calculos && (() => {
+              // Calculamos si la suma de todos los campos da 0 o menos
+              const totalInversion = 
+                (parseFloat(formData.valorFactura) || 0) + 
+                (parseFloat(formData.costoPoliza) || 0) + 
+                (parseFloat(formData.placas) || 0) + 
+                (parseFloat(formData.gps) || 0) + 
+                (parseFloat(formData.otrosGastos) || 0);
+                
+              const botonBloqueado = totalInversion <= 0;
+
+              return (
+                <button
+                  onClick={handleConfirmar}
+                  disabled={botonBloqueado}
+                  className={`flex-1 sm:flex-none px-4 py-2 font-semibold rounded-lg transition-colors text-sm sm:text-base mt-4 ${
+                    botonBloqueado 
+                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed opacity-50' /* 👈 Estilo de botón apagado */
+                      : 'bg-primary text-dark hover:bg-primary-light'
+                  }`}
+                  title={botonBloqueado ? "Debes ingresar al menos un costo mayor a $0" : ""}
+                >
+                  {botonBloqueado ? '⚠️ Ingresa costos para confirmar' : '✓ Confirmar y Usar Cifras'}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>

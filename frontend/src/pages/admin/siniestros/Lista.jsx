@@ -317,14 +317,14 @@ const SiniestrosLista = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="text-white text-xl">Cargando siniestros...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-7xl mx-auto">
         
         {/* Toast Notification */}
@@ -455,11 +455,17 @@ const SiniestrosLista = () => {
         </div>
 
         {/* Tabla */}
-        <div className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-white/10">
+      <div className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden">
+        
+        {/*   1. Cambiamos a overflow-auto, altura máxima de 60vh y la barra estilizada   */}
+        <div className="overflow-auto max-h-[60vh] sidebar-scroll">
+          
+          {/*   2. Agregamos relative y min-w-[1100px] para que las 9 columnas respiren   */}
+          <table className="w-full min-w-[1100px] relative">
+            
+            {/*   3. Quitamos la transparencia y ponemos fondo sólido, sticky, top-0, z-10   */}
+            <thead className="bg-[#1a1a2e] sticky top-0 z-10 shadow-sm">
+              <tr className="border-b border-white/10">
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Folio</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Fecha</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-300">Vehículo</th>

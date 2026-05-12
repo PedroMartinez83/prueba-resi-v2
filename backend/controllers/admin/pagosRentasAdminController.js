@@ -1,4 +1,4 @@
-// backend/controllers/admin/pagosRentasAdminController.js
+///// backend/controllers/admin/pagosRentasAdminController.js
 const { db } = require('../../config/database');
 const auditService = require('../../services/auditService');
 const { format, subDays } = require('date-fns');
@@ -76,6 +76,20 @@ const normalizeDateString = (value) => {
   return trimmed;
 };
 
+
+
+// Convierte a entero positivo o retorna null si no es válido
+const toPositiveIntOrNull = (value) => {
+  if (value === null || value === undefined) return null;
+  const parsed = Number.parseInt(String(value).trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const toMoney = (value) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const parseRangeFromObservaciones = (observaciones = '') => {
   if (!observaciones) return null;
 
@@ -129,35 +143,51 @@ exports.getPagosRentas = async (req, res) => {
       metodo_pago,
       status,
       tipo_socio,
+      busqueda,
       page = 1,
-      limit = 50
+      limit: rawLimit = 50
     } = req.query;
 
-    const offset = (page - 1) * limit;
+    // 🚀 CAMBIO 2: Asegúrate de que 'limit' sea un número válido. 
+    // Si desde el frontend mandamos 100000 como string, hay que convertirlo.
+    let limit = parseInt(rawLimit);
+    if (isNaN(limit) || limit <= 0) {
+      limit = 50; 
+    }
+
+    const offset = (parseInt(page) - 1) * limit;
 
     // Query base usando la vista
     let queryBuilder = db('vista_pagos_rentas');
-    let countQuery = db('pagos_diarios');
+    let countQuery = db('vista_pagos_rentas');
 
     // Aplicar filtros
-    if (conductor_id) {
-      queryBuilder = queryBuilder.where('conductor_id', conductor_id);
-      countQuery = countQuery.whereExists(function() {
-        this.select('*')
-          .from('asignaciones')
-          .whereRaw('asignaciones.id = pagos_diarios.asignacion_id')
-          .where('asignaciones.conductor_id', conductor_id);
-      });
+
+    // Aplicar filtros
+
+    // 🔍 NUEVO: Filtro de Búsqueda Global (Backend) - ¡Simplificado!
+    if (busqueda) {
+      const terminoBusqueda = `%${busqueda}%`;
+      const funcionBusqueda = function() {
+        this.where('nombre_conductor', 'ILIKE', terminoBusqueda)
+            .orWhere('numero_vehiculo', 'ILIKE', terminoBusqueda)
+            .orWhereRaw('CAST(id AS TEXT) ILIKE ?', [terminoBusqueda]); 
+      };
+
+      queryBuilder = queryBuilder.where(funcionBusqueda);
+      countQuery = countQuery.where(funcionBusqueda);
     }
 
+    // 🧑‍✈️ Filtro por Conductor
+    if (conductor_id) {
+      queryBuilder = queryBuilder.where('conductor_id', conductor_id);
+      countQuery = countQuery.where('conductor_id', conductor_id);
+    }
+
+    // 🚗 Filtro por Vehículo
     if (vehiculo_id) {
       queryBuilder = queryBuilder.where('vehiculo_id', vehiculo_id);
-      countQuery = countQuery.whereExists(function() {
-        this.select('*')
-          .from('asignaciones')
-          .whereRaw('asignaciones.id = pagos_diarios.asignacion_id')
-          .where('asignaciones.vehiculo_id', vehiculo_id);
-      });
+      countQuery = countQuery.where('vehiculo_id', vehiculo_id);
     }
 
     if (fecha_registro_desde) {
@@ -184,10 +214,15 @@ exports.getPagosRentas = async (req, res) => {
     if (status) {
       queryBuilder = queryBuilder.where('status', status);
       countQuery = countQuery.where('status', status);
+    } 
+    // 🚀 NUEVO: Si no buscaron un status específico, escóndeme los eliminados
+    else {
+      queryBuilder = queryBuilder.where('status', '!=', 'Eliminado');
+      countQuery = countQuery.where('status', '!=', 'Eliminado');
     }
-
     if (tipo_socio) {
       queryBuilder = queryBuilder.where('tipo_socio', tipo_socio);
+      countQuery = countQuery.where('tipo_socio', tipo_socio);
     }
 
     // Obtener total para paginación
@@ -195,8 +230,8 @@ exports.getPagosRentas = async (req, res) => {
     const total = parseInt(count);
 
     // Obtener pagos
-    const pagos = await queryBuilder
-      .orderBy('fecha_pago', 'desc')
+      const pagos = await queryBuilder
+      .orderBy('created_at', 'desc') // 👈 Ahora ordena por la fecha en que se registró el pago en sistema
       .limit(limit)
       .offset(offset);
 
@@ -291,8 +326,8 @@ exports.getEstadisticasPagos = async (req, res) => {
   console.log('🔍 Iniciando getEstadisticasPagos...');
 
   try {
-    const { fecha_desde, fecha_hasta, tz_offset } = req.query;
-    const tzOffsetMinutes = Number.isFinite(Number(tz_offset)) ? Number(tz_offset) : 0;
+    const { fecha_desde, fecha_hasta } = req.query;
+    const tzName = 'America/Mazatlan';
 
     let baseQuery = db('pagos_diarios');
     const baseConfirmados = db('pagos_diarios').where('status', 'Confirmado');
@@ -315,10 +350,19 @@ exports.getEstadisticasPagos = async (req, res) => {
         db.raw("COUNT(CASE WHEN status = 'Rechazado' THEN 1 END) as rechazados"),
         
         // 🎯 CAMBIO CLAVE: Usar monto_renta_pagado (ganancia empresa)
-        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_renta_pagado ELSE 0 END) as total_cobrado"),
-        
+        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN COALESCE(monto_total, COALESCE(monto_renta_pagado, 0) + COALESCE(monto_poliza_pagado, 0)) ELSE 0 END) as total_cobrado"), 
         // 🔵 NUEVO: Total cobrado incluyendo póliza (monto_total)
-        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_total ELSE 0 END) as total_cobrado_total"),
+        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN COALESCE(monto_renta_pagado, 0) ELSE 0 END) as total_cobrado_renta"),
+
+        // Total cobrado incluyendo póliza (dia de hoy)
+        db.raw(`SUM(
+          CASE 
+            WHEN status = 'Confirmado' 
+            AND DATE(created_at AT TIME ZONE 'America/Mazatlan') = DATE(now() AT TIME ZONE 'America/Mazatlan') 
+            THEN COALESCE(monto_total, COALESCE(monto_renta_pagado, 0) + COALESCE(monto_poliza_pagado, 0)) 
+            ELSE 0 
+          END
+        ) as total_cobrado_hoy`),
         
         // 🆕 NUEVO: Total ahorrado en póliza (dinero conductor)
         db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_poliza_pagado ELSE 0 END) as total_ahorrado_poliza"),
@@ -328,60 +372,66 @@ exports.getEstadisticasPagos = async (req, res) => {
         db.raw("COUNT(DISTINCT asignacion_id) as conductores_activos")
       );
 
-    // Cobrado HOY (renta + póliza; por fecha de registro)
-    const hoyResult = await db('pagos_diarios')
-      .where('status', 'Confirmado')
-      .whereRaw(
-        "DATE((created_at AT TIME ZONE 'UTC') - (? || ' minutes')::interval) = " +
-        "DATE((now() AT TIME ZONE 'UTC') - (? || ' minutes')::interval)",
-        [tzOffsetMinutes, tzOffsetMinutes]
+    // Cobrado HOY (renta + póliza; por fecha de aceptación/validación)
+    const resumenTemporalResult = await db.raw(`
+      WITH validaciones AS (
+        SELECT
+          NULLIF((ccl.datos_sensibles::jsonb->>'pago_id'), '')::int AS pago_id,
+          MIN(ccl.created_at) AS fecha_validacion
+        FROM critical_changes_log ccl
+        WHERE ccl.tipo_cambio IN ('validacion_pago_renta', 'validacion_pago_renta_masivo')
+          AND ccl.datos_sensibles IS NOT NULL
+        GROUP BY 1
+      ),
+      pagos_evento AS (
+        SELECT
+          (COALESCE(v.fecha_validacion, pd.created_at) AT TIME ZONE ?)::timestamp AS fecha_evento_local,
+          COALESCE(pd.monto_total, COALESCE(pd.monto_renta_pagado, 0) + COALESCE(pd.monto_poliza_pagado, 0)) AS monto_total,
+          COALESCE(pd.monto_renta_pagado, 0) AS monto_renta,
+          COALESCE(pd.monto_poliza_pagado, 0) AS monto_poliza
+        FROM pagos_diarios pd
+        LEFT JOIN validaciones v ON v.pago_id = pd.id
+        WHERE pd.status = 'Confirmado'
+      ),
+      limites AS (
+        SELECT
+          (NOW() AT TIME ZONE ?)::date AS hoy,
+          DATE_TRUNC('week', NOW() AT TIME ZONE ?)::date AS semana_inicio,
+          (DATE_TRUNC('week', NOW() AT TIME ZONE ?) + INTERVAL '7 day')::date AS semana_fin_exclusivo,
+          DATE_TRUNC('month', NOW() AT TIME ZONE ?)::date AS mes_inicio,
+          (DATE_TRUNC('month', NOW() AT TIME ZONE ?) + INTERVAL '1 month')::date AS mes_fin_exclusivo
       )
-      .sum('monto_total as total');
-    const cobradoHoy = parseFloat(hoyResult[0]?.total || 0);
-
-    // Cobrado SEMANA (lunes a sabado, por fecha de registro)
-    const semanaResult = await db('pagos_diarios')
-      .where('status', 'Confirmado')
-      .whereRaw("DATE(created_at) >= date_trunc('week', CURRENT_DATE)::date")
-      .whereRaw("DATE(created_at) <= (date_trunc('week', CURRENT_DATE) + INTERVAL '5 days')::date")
-      .sum('monto_total as total');
-    const cobradoSemana = parseFloat(semanaResult[0]?.total || 0);
-
-    // Cobrado MES actual (por fecha de registro)
-    const mesResult = await db('pagos_diarios')
-      .where('status', 'Confirmado')
-      .whereRaw("created_at >= date_trunc('month', CURRENT_DATE)")
-      .whereRaw("created_at < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'")
-      .sum('monto_total as total');
-    const cobradoMes = parseFloat(mesResult[0]?.total || 0);
-
-    // Cobrado MES actual solo renta (por fecha de registro)
-    const mesRentaResult = await db('pagos_diarios')
-      .where('status', 'Confirmado')
-      .whereRaw("created_at >= date_trunc('month', CURRENT_DATE)")
-      .whereRaw("created_at < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'")
-      .sum('monto_renta_pagado as total');
-    const cobradoMesRenta = parseFloat(mesRentaResult[0]?.total || 0);
-
-    // Fondo de polizas MES actual (por fecha de registro)
-    const polizaMesResult = await db('pagos_diarios')
-      .where('status', 'Confirmado')
-      .whereRaw("created_at >= date_trunc('month', CURRENT_DATE)")
-      .whereRaw("created_at < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'")
-      .sum('monto_poliza_pagado as total');
-    const polizaMes = parseFloat(polizaMesResult[0]?.total || 0);
+      SELECT
+        COALESCE(SUM(CASE WHEN pe.fecha_evento_local::date = l.hoy THEN pe.monto_total ELSE 0 END), 0) AS cobrado_hoy,
+        COALESCE(SUM(CASE WHEN pe.fecha_evento_local::date >= l.semana_inicio AND pe.fecha_evento_local::date < l.semana_fin_exclusivo THEN pe.monto_total ELSE 0 END), 0) AS cobrado_semana,
+        COALESCE(SUM(CASE WHEN pe.fecha_evento_local::date >= l.mes_inicio AND pe.fecha_evento_local::date < l.mes_fin_exclusivo THEN pe.monto_total ELSE 0 END), 0) AS cobrado_mes,
+        COALESCE(SUM(CASE WHEN pe.fecha_evento_local::date >= l.mes_inicio AND pe.fecha_evento_local::date < l.mes_fin_exclusivo THEN pe.monto_renta ELSE 0 END), 0) AS cobrado_mes_renta,
+        COALESCE(SUM(CASE WHEN pe.fecha_evento_local::date >= l.mes_inicio AND pe.fecha_evento_local::date < l.mes_fin_exclusivo THEN pe.monto_poliza ELSE 0 END), 0) AS poliza_mes
+      FROM pagos_evento pe
+      CROSS JOIN limites l
+    `, [tzName, tzName, tzName, tzName, tzName, tzName]);
+    const cobradoHoy = parseFloat(resumenTemporalResult.rows?.[0]?.cobrado_hoy || 0);
+    const cobradoSemana = parseFloat(resumenTemporalResult.rows?.[0]?.cobrado_semana || 0);
+    const cobradoMes = parseFloat(resumenTemporalResult.rows?.[0]?.cobrado_mes || 0);
+    const cobradoMesRenta = parseFloat(resumenTemporalResult.rows?.[0]?.cobrado_mes_renta || 0);
+    const polizaMes = parseFloat(resumenTemporalResult.rows?.[0]?.poliza_mes || 0);
 
     // Conductores con deuda PENDIENTE (ultimo pago confirmado)
     const deudaResult = await db.raw(`
       WITH pagos_confirmados AS (
         SELECT
           asignacion_id,
-          MAX(fecha_pago) as ultimo_pago
+          MAX(COALESCE(fecha_pago_fin, fecha_pago))::date as ultimo_pago
         FROM pagos_diarios
-        WHERE status = 'Confirmado'
+        WHERE status IN ('Confirmado', 'Pagada')
         GROUP BY asignacion_id
       )
-      SELECT COUNT(DISTINCT c.id) as total
+      SELECT
+        COUNT(DISTINCT c.id) as total,
+        COALESCE(SUM(
+          COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0))
+        ), 0) as deuda_total
       FROM conductores c
       INNER JOIN asignaciones a ON c.id = a.conductor_id
       LEFT JOIN pagos_confirmados p ON a.id = p.asignacion_id
@@ -392,7 +442,7 @@ exports.getEstadisticasPagos = async (req, res) => {
             COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
             DATE '2026-01-01'
           ),
-          CURRENT_DATE,
+          (NOW() AT TIME ZONE 'America/Mazatlan')::date,
           interval '1 day'
         ) as d(fecha)
         WHERE EXTRACT(DOW FROM d.fecha) <> 0
@@ -402,6 +452,7 @@ exports.getEstadisticasPagos = async (req, res) => {
           * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) > 0
     `);
     const conductoresDeuda = parseInt(deudaResult.rows[0]?.total || 0);
+    const deudaTotalConductores = parseFloat(deudaResult.rows[0]?.deuda_total || 0);
 
     // Proyección mensual: NumConductores × MontoRenta × DíasDelMessinDomingos
     
@@ -451,23 +502,32 @@ exports.getEstadisticasPagos = async (req, res) => {
       .count('id as cantidad')
       .groupBy('metodo_pago');
 
-    // Indicadores avanzados (mejor dia, hora pico, metodo preferido)
-    const rangoBase = baseConfirmados.clone();
-    const mejorDiaResult = await rangoBase.clone()
-      .select(db.raw('EXTRACT(DOW FROM fecha_pago)::int as dow'))
+    // Indicadores avanzados (segun fecha/hora de registro del conductor)
+    const rangoInsights = db('pagos_diarios')
+      .where('status', 'Confirmado');
+
+    if (fecha_desde) {
+      rangoInsights.andWhereRaw("DATE(created_at AT TIME ZONE ?) >= ?", [tzName, fecha_desde]);
+    }
+    if (fecha_hasta) {
+      rangoInsights.andWhereRaw("DATE(created_at AT TIME ZONE ?) <= ?", [tzName, fecha_hasta]);
+    }
+
+    const mejorDiaResult = await rangoInsights.clone()
+      .select(db.raw("EXTRACT(DOW FROM (created_at AT TIME ZONE ?))::int as dow", [tzName]))
       .sum('monto_total as total')
       .groupBy('dow')
       .orderBy('total', 'desc')
       .first();
 
-    const horaPicoResult = await rangoBase.clone()
-      .select(db.raw("EXTRACT(HOUR FROM (created_at AT TIME ZONE 'UTC') - (? || ' minutes')::interval)::int as hour", [tzOffsetMinutes]))
+    const horaPicoResult = await rangoInsights.clone()
+      .select(db.raw("EXTRACT(HOUR FROM (created_at AT TIME ZONE ?))::int as hour", [tzName]))
       .count('id as total')
       .groupBy('hour')
       .orderBy('total', 'desc')
       .first();
 
-    const metodoPreferidoResult = await rangoBase.clone()
+    const metodoPreferidoResult = await rangoInsights.clone()
       .select('metodo_pago')
       .count('id as total')
       .groupBy('metodo_pago')
@@ -505,7 +565,8 @@ exports.getEstadisticasPagos = async (req, res) => {
         
         // 💰 GANANCIAS DE LA EMPRESA (solo renta)
         total_cobrado: parseFloat(stats.total_cobrado || 0),
-        total_cobrado_total: parseFloat(stats.total_cobrado_total || 0),
+        total_cobrado_total: parseFloat(stats.total_cobrado || 0),
+        total_cobrado_renta: parseFloat(stats.total_cobrado_renta || 0),
         
         // 🆕 NUEVO: Dinero ahorrado en póliza (conductores)
         total_ahorrado_poliza: parseFloat(stats.total_ahorrado_poliza || 0),
@@ -513,6 +574,11 @@ exports.getEstadisticasPagos = async (req, res) => {
         pendientes_validar: parseInt(stats.pendientes || 0),
         pendiente_validar_renta: parseFloat(stats.pendiente_validar_renta || 0),
         conductores_activos: parseInt(stats.conductores_activos || 0),
+
+        // Saldos pendientes
+        saldos_pendientes: parseFloat(stats.pendiente_validar || 0),
+
+        total_cobrado_hoy: cobradoHoy,
         
         // Temporales
         cobrado_hoy: cobradoHoy,
@@ -520,8 +586,10 @@ exports.getEstadisticasPagos = async (req, res) => {
         cobrado_mes: cobradoMes,
         cobrado_mes_renta: cobradoMesRenta,
         conductores_deuda: conductoresDeuda,
+        total_deuda_conductores: deudaTotalConductores,
         proyeccion_mes: parseFloat(proyeccion),
         proyeccion_poliza_mes: parseFloat(proyeccionPoliza),
+        poliza_mes_real: polizaMes,
         cambio_dia: 0,
         cambio_semana: 0,
         cambio_mes: 0
@@ -691,15 +759,23 @@ exports.validarPago = async (req, res) => {
     const asignacion = await trx('asignaciones').where('id', pago.asignacion_id).first();
     if (!asignacion) throw new Error('Asignación no encontrada');
 
-    const vehiculo = await trx('vehiculos').where('id', asignacion.vehiculo_id).first();
-    if (!vehiculo) throw new Error('Vehículo no encontrado');
+    const vehiculoId = toPositiveIntOrNull(asignacion.vehiculo_id);
+    if (!vehiculoId) throw new Error(`Asignación inválida: vehiculo_id "${asignacion.vehiculo_id}"`);
 
-    // 3. Cálculos financieros (Protegidos contra nulos)
-    const montoAbonar = parseFloat(pago.monto_total || 0);
+    const vehiculo = await trx('vehiculos').where('id', vehiculoId).first();
+    if (!vehiculo) throw new Error(`Vehículo no encontrado (ID ${vehiculoId})`);
+
+    // 3. Cálculos financieros (SEPARACIÓN DE FONDOS)
+    // 👉 El abono a la deuda es SOLO la renta pagada
+    const montoRentaAbonar = parseFloat(pago.monto_renta_pagado || 0); 
+    // 👉 El fondo de póliza es SOLO la póliza pagada
+    const montoPolizaAbonar = parseFloat(pago.monto_poliza_pagado || 0); 
+    
+    // --- Cálculos de la Deuda del Vehículo ---
     const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
     const pagadoActual = parseFloat(vehiculo.total_pagado_corrida || 0);
 
-    const nuevoPagado = pagadoActual + montoAbonar;
+    const nuevoPagado = pagadoActual + montoRentaAbonar; // 👈 Solo suma la renta
     const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoPagado);
     
     let nuevoPorcentaje = 0;
@@ -707,16 +783,24 @@ exports.validarPago = async (req, res) => {
       nuevoPorcentaje = (nuevoPagado / totalCorrida) * 100;
     }
 
-    console.log(`💰 Actualizando finanzas: ${vehiculo.numero_vehiculo} | Abono: ${montoAbonar} | Nuevo %: ${nuevoPorcentaje.toFixed(2)}`);
+    // --- Cálculos del Fondo de Póliza ---
+    // Si la columna poliza_mecanica no existe o es nula, empezamos de cero
+    const fondoPolizaActual = parseFloat(vehiculo.poliza_mecanica || 0); 
+    const nuevoFondoPoliza = fondoPolizaActual + montoPolizaAbonar; // 👈 Sumamos los $100/día
+
+    console.log(`💰 Actualizando finanzas auto ${vehiculo.numero_vehiculo}:`);
+    console.log(`   - Abono a deuda (Renta): $${montoRentaAbonar} | Nuevo %: ${nuevoPorcentaje.toFixed(2)}`);
+    console.log(`   - Abono a fondo (Póliza): $${montoPolizaAbonar} | Nuevo Fondo: $${nuevoFondoPoliza}`);
 
 
     // 4. ACTUALIZAR VEHÍCULO
     await trx('vehiculos')
-      .where('id', vehiculo.id)
+      .where('id', vehiculoId)
       .update({
         total_pagado_corrida: nuevoPagado,
         saldo_pendiente_corrida: nuevoSaldoPendiente,
-        porcentaje_pagado: nuevoPorcentaje, // PostgreSQL maneja float a numeric
+        porcentaje_pagado: nuevoPorcentaje,
+        poliza_mecanica: nuevoFondoPoliza, // 👈 ¡NUEVO CAMPO AFECTADO!
         updated_at: new Date()
       });
 
@@ -744,11 +828,11 @@ exports.validarPago = async (req, res) => {
       await auditService.logCriticalChange({
         usuario_id: usuarioActual.id,
         tipo_cambio: 'validacion_pago_renta',
-        descripcion: `Pago validado ($${montoAbonar}) - Avance auto: ${nuevoPorcentaje.toFixed(2)}%`,
+        descripcion: `Pago validado ($${montoRentaAbonar}) - Avance auto: ${nuevoPorcentaje.toFixed(2)}%`,
         datos_sensibles: {
           pago_id: id,
           vehiculo_id: vehiculo.id,
-          monto_abonado: montoAbonar
+          monto_abonado: montoRentaAbonar
         },
         ip_address: req.ip || '0.0.0.0'
       });
@@ -780,6 +864,156 @@ exports.validarPago = async (req, res) => {
       message: 'Error interno al validar pago',
       error: error.message, 
       details: error.stack // Opcional: ver dónde tronó
+    });
+  }
+};
+
+
+// =====================================================================
+// 🚀 VALIDAR MÚLTIPLES PAGOS (MASIVO)
+// =====================================================================
+exports.validarPagosMasivos = async (req, res) => {
+  console.log(`🔍 Iniciando validación masiva de pagos...`);
+  const trx = await db.transaction();
+  
+  try {
+    const { pagosIds } = req.body;
+    
+    if (!pagosIds || !Array.isArray(pagosIds) || pagosIds.length === 0) {
+      await trx.rollback();
+      return res.status(400).json({ success: false, message: 'No se enviaron pagos para validar.' });
+    }
+
+    const usuarioActual = req.user || { id: 0, email: 'sistema@admin.com', nombre: 'Sistema' };
+    console.log('👤 Usuario realizando acción masiva:', usuarioActual.email);
+
+    try {
+      if (auditService && auditService.setUserContext) {
+        await auditService.setUserContext(trx, usuarioActual);
+      }
+    } catch (auditErr) {
+      console.warn('⚠️ Advertencia: No se pudo configurar contexto de auditoría', auditErr.message);
+    }
+
+    // 1. Obtenemos TODOS los pagos seleccionados y los ORDENAMOS por fecha (del más viejo al nuevo)
+    const pagosAProcesar = await trx('pagos_diarios')
+      .whereIn('id', pagosIds)
+      .orderBy('fecha_pago', 'asc');
+
+    let totalAbonadoGlobal = 0;
+
+    // 2. Procesamos uno por uno en estricto orden
+    for (const pago of pagosAProcesar) {
+      console.log(`⏳ Procesando pago masivo ID: ${pago.id} de fecha ${pago.fecha_pago}`);
+
+      if (pago.status !== 'Pendiente') {
+          throw new Error(`El pago #${pago.id} ya no está pendiente (Estado: ${pago.status}).`);
+      }
+
+      // 🛡️ VALIDACIÓN FIFO (Igual que en el individual)
+      const pagoAnteriorPendiente = await trx('pagos_diarios')
+        .where('asignacion_id', pago.asignacion_id)
+        .where('status', 'Pendiente')
+        .andWhere('fecha_pago', '<', pago.fecha_pago)
+        .orderBy('fecha_pago', 'asc')
+        .first();
+
+      if (pagoAnteriorPendiente) {
+          const fechaPendiente = new Date(pagoAnteriorPendiente.fecha_pago).toISOString().split('T')[0];
+          throw new Error(`⛔ ORDEN INCORRECTO: Para el pago #${pago.id} existe uno ANTERIOR (del ${fechaPendiente}) pendiente de aprobar. La validación masiva se ha cancelado para proteger los saldos.`);
+      }
+
+      // Obtener Asignación y Vehículo
+      const asignacion = await trx('asignaciones').where('id', pago.asignacion_id).first();
+      if (!asignacion) throw new Error(`Asignación no encontrada para el pago #${pago.id}`);
+
+      // Usar tu utilidad para evitar errores de ID
+      // OJO: Si no tienes importada la función toPositiveIntOrNull aquí arriba, usa parseInt()
+      const vehiculoId = parseInt(asignacion.vehiculo_id);
+      if (!vehiculoId || isNaN(vehiculoId)) throw new Error(`Asignación inválida: vehiculo_id "${asignacion.vehiculo_id}"`);
+
+      // ⚠️ BLOQUEAMOS la fila del vehículo con .forUpdate() para que nadie más la modifique mientras hacemos mates
+      const vehiculo = await trx('vehiculos').where('id', vehiculoId).first().forUpdate();
+      if (!vehiculo) throw new Error(`Vehículo no encontrado (ID ${vehiculoId})`);
+
+      // ==========================================
+      // 💰 CÁLCULOS FINANCIEROS (SEPARACIÓN DE FONDOS)
+      // ==========================================
+      const montoRentaAbonar = parseFloat(pago.monto_renta_pagado || 0);
+      const montoPolizaAbonar = parseFloat(pago.monto_poliza_pagado || 0);
+      const montoTotalAbonar = parseFloat(pago.monto_total || 0); // Lo guardamos para el mensaje final
+      
+      // --- Cálculos de la Deuda del Vehículo ---
+      const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
+      const pagadoActual = parseFloat(vehiculo.total_pagado_corrida || 0);
+
+      const nuevoPagado = pagadoActual + montoRentaAbonar; // 👈 Solo la renta
+      const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoPagado);
+      
+      let nuevoPorcentaje = 0;
+      if (totalCorrida > 0) {
+        nuevoPorcentaje = (nuevoPagado / totalCorrida) * 100;
+      }
+
+      // --- Cálculos del Fondo de Póliza ---
+      const fondoPolizaActual = parseFloat(vehiculo.poliza_mecanica || 0);
+      const nuevoFondoPoliza = fondoPolizaActual + montoPolizaAbonar; // 👈 Solo la póliza
+
+      // Sumamos el total global para el mensaje de éxito que sale al final
+      totalAbonadoGlobal += montoTotalAbonar;
+
+      // ACTUALIZAR VEHÍCULO
+      await trx('vehiculos')
+        .where('id', vehiculoId)
+        .update({
+          total_pagado_corrida: nuevoPagado,
+          saldo_pendiente_corrida: nuevoSaldoPendiente,
+          porcentaje_pagado: nuevoPorcentaje,
+          poliza_mecanica: nuevoFondoPoliza, // 👈 ¡Nuevo campo actualizado!
+          updated_at: new Date()
+        });
+      // ==========================================
+
+      // CONFIRMAR EL PAGO
+      const datosUpdate = {
+        status: 'Confirmado',
+        updated_at: new Date()
+      };
+      
+      if (usuarioActual.email) {
+        datosUpdate.registrado_por = usuarioActual.email;
+      }
+
+      await trx('pagos_diarios').where('id', pago.id).update(datosUpdate);
+
+      // Auditoría
+      try {
+        await auditService.logCriticalChange({
+          usuario_id: usuarioActual.id,
+          tipo_cambio: 'validacion_pago_renta_masivo',
+          descripcion: `Pago masivo validado ($${montoAbonar}) - Avance auto: ${nuevoPorcentaje.toFixed(2)}%`,
+          datos_sensibles: { pago_id: pago.id, vehiculo_id: vehiculo.id, monto_abonado: montoAbonar },
+          ip_address: req.ip || '0.0.0.0'
+        });
+      } catch (logErr) {}
+    }
+
+    // SI LLEGAMOS AQUÍ, NADA FALLÓ. ¡GUARDAMOS TODO!
+    await trx.commit();
+    console.log(`✅ Validación masiva exitosa. Se aprobaron ${pagosIds.length} pagos.`);
+
+    res.json({
+      success: true,
+      message: `¡Se han validado ${pagosIds.length} pagos exitosamente por un total de $${totalAbonadoGlobal}!`,
+      pagosAprobados: pagosIds.length
+    });
+
+  } catch (error) {
+    await trx.rollback();
+    console.error('❌ ERROR FATAL EN VALIDACIÓN MASIVA:', error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Ocurrió un error al procesar los pagos masivos.'
     });
   }
 };
@@ -909,7 +1143,7 @@ const contarDiasCobrables = (fechaInicio, fechaFin) => {
   return contador;
 };
 
-// ========== REGISTRAR PAGO MANUAL (ADMIN) - CON DESTINO DE AHORRO ==========
+// ========== REGISTRAR PAGO MANUAL (ADMIN) - CON DESTINO DE AHORRO SEPARADO ==========
 exports.registrarPagoManual = async (req, res) => {
   const { conductor_id, monto_renta, monto_extra, fecha_pago, fecha_fin, metodo_pago, observaciones, referencia } = req.body;
 
@@ -922,16 +1156,17 @@ exports.registrarPagoManual = async (req, res) => {
         .first();
       
       if (!asignacion) throw new Error('❌ El conductor no tiene asignación activa.');
-      if (!asignacion.vehiculo_id) throw new Error(`❌ La asignación #${asignacion.id} no tiene vehículo vinculado.`);
+      const vehiculoId = toPositiveIntOrNull(asignacion.vehiculo_id);
+      if (!vehiculoId) throw new Error(`❌ La asignación #${asignacion.id} tiene vehiculo_id inválido: ${JSON.stringify(asignacion.vehiculo_id)}`);
 
-      // 2. BUSCAR VEHÍCULO CON VALIDACIÓN (AQUÍ ESTABA EL ERROR)
+      // 2. BUSCAR VEHÍCULO CON VALIDACIÓN
       const vehiculo = await trx('vehiculos')
-        .where('id', asignacion.vehiculo_id)
+        .where('id', vehiculoId)
         .first()
         .forUpdate();
       
       // 🛡️ ESTA LÍNEA EVITA EL ERROR "integer: «»"
-      if (!vehiculo) throw new Error(`❌ El vehículo ID ${asignacion.vehiculo_id} no existe en la base de datos.`);
+      if (!vehiculo) throw new Error(`❌ El vehículo ID ${vehiculoId} no existe en la base de datos.`);
 
       // 3. FECHAS Y RANGO
       const fInicio = toDateString(fecha_pago);
@@ -943,15 +1178,24 @@ exports.registrarPagoManual = async (req, res) => {
       const diasACobrar = contarDiasCobrables(fInicio, fFin);
       if (diasACobrar === 0) throw new Error('❌ El rango seleccionado solo contiene domingos.');
 
-      // 5. TOTALES
+      // 5. TOTALES SEPARADOS
       const rentaTotal = parseFloat(monto_renta || 0) * diasACobrar;
       const polizaTotal = parseFloat(monto_extra || 0) * diasACobrar;
-      const granTotal = rentaTotal + polizaTotal;
-      
-      const textoRango = (diasACobrar > 1) ? ` (Pago del dia: ${fInicio} al ${fFin})` : '';
-      const obsFinal = (observaciones || '') + textoRango;
+      const granTotal = rentaTotal + polizaTotal; // Solo se usa para el registro del pago y el total cobrado
 
-      // 6. INSERTAR
+      // 🟢 Formateo de fechas para el texto de observaciones
+      const opcionesFecha = { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' };
+      const fInicioLegible = new Date(fInicio).toLocaleDateString('es-MX', opcionesFecha);
+      const fFinLegible = new Date(fFin).toLocaleDateString('es-MX', opcionesFecha);
+      
+      const textoRango = (diasACobrar > 1) 
+          ? ` (Periodo: ${fInicioLegible} al ${fFinLegible})` 
+          : ` (Día: ${fInicioLegible})`;
+      const obsFinal = observaciones 
+          ? `${observaciones.trim()}\n${textoRango}` 
+          : textoRango.trim();
+
+      // 6. INSERTAR REGISTRO DE PAGO
       await trx('pagos_diarios').insert({
         asignacion_id: asignacion.id,
         fecha_pago: fInicio,
@@ -967,19 +1211,28 @@ exports.registrarPagoManual = async (req, res) => {
         updated_at: new Date()
       });
 
-      // 7. ACTUALIZAR VEHÍCULO
+      // 7. ACTUALIZAR VEHÍCULO (CÁLCULOS SEPARADOS)
       const totalCorrida = parseFloat(vehiculo.total_corrida || 0);
+      
+      // Dinero de la renta (Progreso)
       const pagadoAnterior = parseFloat(vehiculo.total_pagado_corrida || 0);
-      const nuevoTotalPagado = pagadoAnterior + granTotal;
+      const nuevoTotalPagado = pagadoAnterior + rentaTotal; // 👈 Solo sumamos la renta
+      
+      // Dinero de la póliza (Alcancía)
+      const polizaAnterior = parseFloat(vehiculo.poliza_mecanica || 0);
+      const nuevaPoliza = polizaAnterior + polizaTotal; // 👈 Sumamos la póliza a su fondo
+      
+      // Recálculo de deuda y porcentaje (Basado solo en la renta)
       const nuevoSaldoPendiente = Math.max(0, totalCorrida - nuevoTotalPagado);
       const nuevoPorcentaje = totalCorrida > 0 ? (nuevoTotalPagado / totalCorrida) * 100 : 0;
 
       await trx('vehiculos')
-        .where('id', vehiculo.id) // Ahora es seguro porque validamos 'vehiculo' arriba
+        .where('id', vehiculoId)
         .update({
           total_pagado_corrida: nuevoTotalPagado.toFixed(2),
           saldo_pendiente_corrida: nuevoSaldoPendiente.toFixed(2),
           porcentaje_pagado: nuevoPorcentaje.toFixed(2),
+          poliza_mecanica: nuevaPoliza.toFixed(2), // 👈 Inyectamos el fondo de la póliza
           updated_at: new Date()
         });
     });
@@ -988,9 +1241,12 @@ exports.registrarPagoManual = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error Admin Pago:', error.message);
+        if (error.detail) {
+      console.error('📌 Detalle SQL Admin Pago:', error.detail);
+    }
     res.status(400).json({ success: false, message: error.message });
   }
-};  
+};
 
 // 2. CORRECCIÓN EN OBTENER SIGUIENTE PAGO (PARA DETECTAR SI ES NUEVO)
 exports.getSiguientePagoPendiente = async (req, res) => {
@@ -1030,10 +1286,17 @@ exports.getSiguientePagoPendiente = async (req, res) => {
       fechaReferencia = null;
     }
 
+    // 🚨 LA MAGIA ESTÁ AQUÍ 🚨
+    // Formateamos la fecha de inicio de la asignación a YYYY-MM-DD de forma segura
+    const fechaInicioCarro = asignacion.fecha_inicio 
+        ? new Date(asignacion.fecha_inicio).toISOString().split('T')[0] 
+        : null;
+
     res.json({
       success: true,
       siguiente_fecha_pendiente: toDateString(fechaReferencia), // Enviamos la fecha fin correcta
-      sin_historial: sinHistorial
+      sin_historial: sinHistorial,
+      fecha_asignacion: fechaInicioCarro // 👈 ¡ESTO ERA LO QUE LE FALTABA A REACT!
     });
 
   } catch (error) {
@@ -1047,15 +1310,21 @@ exports.getSaldoPolizaConductor = async (req, res) => {
   try {
     const { conductorId } = req.params;
 
-    const conductor = await db('conductores')
-      .where('id', conductorId)
+    const conductor = await db('conductores as c')
+      .leftJoin('asignaciones as a', function() {
+        this.on('c.id', '=', 'a.conductor_id')
+          .andOn('a.activa', '=', db.raw('true'));
+      })
+      .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
+      .where('c.id', conductorId)
       .select(
-        'id',
-        'nombre_conductor',
-        'saldo_poliza_mecanica',
-        'saldo_ahorro_mantenimiento',
-        'tipo_poliza',
-        'total_aportado_poliza'
+        'c.id',
+        'c.nombre_conductor',
+        'c.saldo_ahorro_mantenimiento',
+        'c.tipo_poliza',
+        'c.total_aportado_poliza',
+        'v.poliza_mecanica',
+        'v.numero_vehiculo'
       )
       .first();
 
@@ -1067,7 +1336,7 @@ exports.getSaldoPolizaConductor = async (req, res) => {
     }
 
     const tipoPoliza = conductor.tipo_poliza || 'POLIZA_100';
-    const saldoPoliza = parseFloat(conductor.saldo_poliza_mecanica || 50000);
+    const saldoPoliza = parseFloat(conductor.poliza_mecanica || 0);
     const saldoMantenimiento = parseFloat(conductor.saldo_ahorro_mantenimiento || 0);
     const totalAportado = parseFloat(conductor.total_aportado_poliza || 0);
 
@@ -1167,32 +1436,169 @@ exports.getOpcionesPagos = async (req, res) => {
 // ========== TENDENCIA MENSUAL ==========
 exports.getTendenciaMensual = async (req, res) => {
   try {
-    const { meses = 6 } = req.query;
-    
-    const sql = `
-      SELECT 
-        TO_CHAR(fecha_pago, 'YYYY-MM') as mes,
-        SUM(monto_renta_pagado) as total_cobrado,
-        COUNT(*) as total_pagos,
-        COUNT(DISTINCT asignacion_id) as conductores_activos
-      FROM pagos_diarios
-      WHERE status = 'Confirmado'
-        AND fecha_pago >= CURRENT_DATE - INTERVAL '${parseInt(meses)} months'
-      GROUP BY TO_CHAR(fecha_pago, 'YYYY-MM')
-      ORDER BY mes ASC
+    const tzName = 'America/Mazatlan';
+    const mesesParam = parseInt(req.query.meses, 10);
+    const meses = Number.isInteger(mesesParam) && mesesParam > 0
+      ? Math.min(mesesParam, 36)
+      : 12;
+
+    const mensualSql = `
+      WITH params AS (
+        SELECT
+          DATE_TRUNC('month', NOW() AT TIME ZONE ?)::date AS mes_actual,
+          ?::int AS meses
+      ),
+      serie_meses AS (
+        SELECT
+          (p.mes_actual - make_interval(months => (p.meses - 1 - gs.idx)))::date AS mes_inicio
+        FROM params p
+        JOIN LATERAL generate_series(0, p.meses - 1) AS gs(idx) ON true
+      ),
+      validaciones AS (
+        SELECT
+          NULLIF((ccl.datos_sensibles::jsonb->>'pago_id'), '')::int AS pago_id,
+          MIN(ccl.created_at) AS fecha_validacion
+        FROM critical_changes_log ccl
+        WHERE ccl.tipo_cambio IN ('validacion_pago_renta', 'validacion_pago_renta_masivo')
+          AND ccl.datos_sensibles IS NOT NULL
+        GROUP BY 1
+      ),
+      pagos_evento AS (
+        SELECT
+          DATE_TRUNC('month', (COALESCE(v.fecha_validacion, pd.created_at) AT TIME ZONE ?))::date AS mes_inicio,
+          COALESCE(pd.monto_total, COALESCE(pd.monto_renta_pagado, 0) + COALESCE(pd.monto_poliza_pagado, 0)) AS monto_total,
+          COALESCE(pd.monto_renta_pagado, 0) AS monto_renta,
+          COALESCE(pd.monto_poliza_pagado, 0) AS monto_poliza,
+          pd.asignacion_id
+        FROM pagos_diarios pd
+        LEFT JOIN validaciones v ON v.pago_id = pd.id
+        WHERE pd.status = 'Confirmado'
+      ),
+      pagos_rango AS (
+        SELECT
+          pe.mes_inicio,
+          SUM(pe.monto_total)::numeric AS total_cobrado,
+          SUM(pe.monto_renta)::numeric AS total_renta,
+          SUM(pe.monto_poliza)::numeric AS total_poliza,
+          COUNT(*)::int AS total_pagos,
+          COUNT(DISTINCT pe.asignacion_id)::int AS conductores_activos
+        FROM pagos_evento pe
+        WHERE pe.mes_inicio >= (SELECT MIN(mes_inicio) FROM serie_meses)
+          AND pe.mes_inicio <= (SELECT MAX(mes_inicio) FROM serie_meses)
+        GROUP BY 1
+      )
+      SELECT
+        sm.mes_inicio,
+        COALESCE(pr.total_cobrado, 0) AS total_cobrado,
+        COALESCE(pr.total_renta, 0) AS total_renta,
+        COALESCE(pr.total_poliza, 0) AS total_poliza,
+        COALESCE(pr.total_pagos, 0) AS total_pagos,
+        COALESCE(pr.conductores_activos, 0) AS conductores_activos
+      FROM serie_meses sm
+      LEFT JOIN pagos_rango pr ON pr.mes_inicio = sm.mes_inicio
+      ORDER BY sm.mes_inicio ASC
     `;
-    
-    const result = await db.raw(sql);
-    
+
+    const mensualResult = await db.raw(mensualSql, [tzName, meses, tzName]);
+    const mesesLabel = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+    const datos = mensualResult.rows.map((row) => {
+      const mesInicio = row.mes_inicio instanceof Date
+        ? new Date(row.mes_inicio)
+        : new Date(`${row.mes_inicio}T12:00:00`);
+      const anio = mesInicio.getFullYear();
+      const mesNumero = mesInicio.getMonth() + 1;
+      const totalCobrado = parseFloat(row.total_cobrado || 0);
+      const totalRenta = parseFloat(row.total_renta || 0);
+      const totalPoliza = parseFloat(row.total_poliza || 0);
+      const totalPagos = parseInt(row.total_pagos || 0, 10);
+      const conductoresActivos = parseInt(row.conductores_activos || 0, 10);
+      const diasMes = new Date(anio, mesNumero, 0).getDate();
+
+      return {
+        anio,
+        mes_numero: mesNumero,
+        mes: `${anio}-${String(mesNumero).padStart(2, '0')}`,
+        mes_label: `${mesesLabel[mesNumero - 1]} ${anio}`,
+        total_cobrado: totalCobrado,
+        total_renta: totalRenta,
+        total_poliza: totalPoliza,
+        total_pagos: totalPagos,
+        conductores_activos: conductoresActivos,
+        promedio_diario: diasMes > 0 ? totalCobrado / diasMes : 0,
+        promedio: diasMes > 0 ? totalCobrado / diasMes : 0
+      };
+    });
+
+    const resumenBase = datos.reduce(
+      (acc, item) => {
+        acc.total_cobrado += item.total_cobrado;
+        acc.total_renta += item.total_renta;
+        acc.total_poliza += item.total_poliza;
+        acc.total_pagos += item.total_pagos;
+        return acc;
+      },
+      { total_cobrado: 0, total_renta: 0, total_poliza: 0, total_pagos: 0 }
+    );
+
+    const mejorMes = datos.reduce((max, item) =>
+      !max || item.total_cobrado > max.total_cobrado ? item : max, null);
+
+    const anualActualResult = await db.raw(
+      `
+      WITH validaciones AS (
+        SELECT
+          NULLIF((ccl.datos_sensibles::jsonb->>'pago_id'), '')::int AS pago_id,
+          MIN(ccl.created_at) AS fecha_validacion
+        FROM critical_changes_log ccl
+        WHERE ccl.tipo_cambio IN ('validacion_pago_renta', 'validacion_pago_renta_masivo')
+          AND ccl.datos_sensibles IS NOT NULL
+        GROUP BY 1
+      ),
+      pagos_evento AS (
+        SELECT
+          (COALESCE(v.fecha_validacion, pd.created_at) AT TIME ZONE ?)::timestamp AS fecha_evento_local,
+          COALESCE(pd.monto_total, COALESCE(pd.monto_renta_pagado, 0) + COALESCE(pd.monto_poliza_pagado, 0)) AS monto_total,
+          COALESCE(pd.monto_renta_pagado, 0) AS monto_renta,
+          COALESCE(pd.monto_poliza_pagado, 0) AS monto_poliza
+        FROM pagos_diarios pd
+        LEFT JOIN validaciones v ON v.pago_id = pd.id
+        WHERE pd.status = 'Confirmado'
+      )
+      SELECT
+        COALESCE(SUM(pe.monto_total), 0)::numeric AS total_cobrado,
+        COALESCE(SUM(pe.monto_renta), 0)::numeric AS total_renta,
+        COALESCE(SUM(pe.monto_poliza), 0)::numeric AS total_poliza
+      FROM pagos_evento pe
+      WHERE EXTRACT(YEAR FROM pe.fecha_evento_local)::int =
+            EXTRACT(YEAR FROM (NOW() AT TIME ZONE ?))::int
+      `,
+      [tzName, tzName]
+    );
+
+    const totalAnualCobrado = parseFloat(anualActualResult.rows?.[0]?.total_cobrado || 0);
+    const totalAnualRenta = parseFloat(anualActualResult.rows?.[0]?.total_renta || 0);
+    const totalAnualPoliza = parseFloat(anualActualResult.rows?.[0]?.total_poliza || 0);
+
     res.json({
       success: true,
-      datos: result.rows.map(row => ({
-        mes: row.mes,
-        total_cobrado: parseFloat(row.total_cobrado || 0),
-        total_pagos: parseInt(row.total_pagos || 0),
-        conductores_activos: parseInt(row.conductores_activos || 0),
-        promedio_diario: parseFloat(row.total_cobrado || 0) / 30
-      }))
+      meses_consultados: meses,
+      datos,
+      resumen_periodo: {
+        meses,
+        total_cobrado: resumenBase.total_cobrado,
+        total_renta: resumenBase.total_renta,
+        total_poliza: resumenBase.total_poliza,
+        total_pagos: resumenBase.total_pagos,
+        promedio_mensual: datos.length > 0 ? resumenBase.total_cobrado / datos.length : 0,
+        mejor_mes: mejorMes?.mes_label || null
+      },
+      resumen_anual: {
+        anio_actual: new Date().getFullYear(),
+        total_cobrado: totalAnualCobrado,
+        total_renta: totalAnualRenta,
+        total_poliza: totalAnualPoliza
+      }
     });
     
   } catch (error) {
@@ -1251,10 +1657,10 @@ exports.getTopConductores = async (req, res) => {
       WITH pagos_confirmados AS (
         SELECT
           asignacion_id,
-          MAX(fecha_pago) as ultimo_pago,
+          MAX(COALESCE(fecha_pago_fin, fecha_pago))::date as ultimo_pago,
           COALESCE(SUM(monto_total), 0) as total_pagado_confirmado
         FROM pagos_diarios
-        WHERE status = 'Confirmado'
+        WHERE status IN ('Confirmado', 'Pagada')
         GROUP BY asignacion_id
       )
       SELECT 
@@ -1285,12 +1691,12 @@ exports.getTopConductores = async (req, res) => {
             COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
             DATE '2026-01-01'
           ),
-          CURRENT_DATE,
+          (NOW() AT TIME ZONE 'America/Mazatlan')::date,
           interval '1 day'
         ) as d(fecha)
         WHERE EXTRACT(DOW FROM d.fecha) <> 0
       ) dias ON true
-      WHERE pd.status = 'Confirmado'
+      WHERE pd.status IN ('Confirmado', 'Pagada')
         AND pd.fecha_pago >= CURRENT_DATE - INTERVAL '30 days'
         AND a.activa = true
         AND COALESCE(dias.dias_adeudados, 0) = 0
@@ -1336,10 +1742,10 @@ exports.getConductoresMorosos = async (req, res) => {
       WITH pagos_confirmados AS (
         SELECT
           asignacion_id,
-          MAX(fecha_pago) as ultimo_pago,
+          MAX(COALESCE(fecha_pago_fin, fecha_pago))::date as ultimo_pago,
           COALESCE(SUM(monto_total), 0) as total_pagado
         FROM pagos_diarios
-        WHERE status = 'Confirmado'
+        WHERE status IN ('Confirmado', 'Pagada')
         GROUP BY asignacion_id
       )
       SELECT 
@@ -1374,7 +1780,7 @@ exports.getConductoresMorosos = async (req, res) => {
             COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
             DATE '2026-01-01'
           ),
-          CURRENT_DATE,
+          (NOW() AT TIME ZONE 'America/Mazatlan')::date,
           interval '1 day'
         ) as d(fecha)
         WHERE EXTRACT(DOW FROM d.fecha) <> 0
@@ -1425,9 +1831,21 @@ exports.getHistorialConductor = async (req, res) => {
     const { conductorId } = req.params;
     const { limite = 50 } = req.query;
     
-    const conductor = await db('conductores')
-      .where('id', conductorId)
-      .select('id', 'nombre_conductor', 'saldo_poliza_mecanica', 'saldo_ahorro_mantenimiento', 'tipo_poliza', 'total_aportado_poliza')
+    const conductor = await db('conductores as c')
+      .leftJoin('asignaciones as a', function() {
+        this.on('c.id', '=', 'a.conductor_id')
+          .andOn('a.activa', '=', db.raw('true'));
+      })
+      .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
+      .where('c.id', conductorId)
+      .select(
+        'c.id',
+        'c.nombre_conductor',
+        'c.saldo_ahorro_mantenimiento',
+        'c.tipo_poliza',
+        'c.total_aportado_poliza',
+        'v.poliza_mecanica'
+      )
       .first();
     
     if (!conductor) {
@@ -1452,6 +1870,12 @@ exports.getHistorialConductor = async (req, res) => {
       );
 
       historial.forEach((pago) => {
+        const montoTotalRaw = parseFloat(pago.monto_total || 0);
+        const montoRentaRaw = parseFloat(pago.monto_renta_pagado || 0);
+        const montoPolizaRaw = parseFloat(pago.monto_poliza_pagado || 0);
+        const montoCalculado = montoRentaRaw + montoPolizaRaw;
+        pago.monto_total = montoTotalRaw > 0 ? montoTotalRaw : montoCalculado;
+
         const detalle = detalleMap.get(pago.id);
         if (detalle?.fecha_pago) {
           const rangoInicio = normalizeDateString(detalle.fecha_pago);
@@ -1478,7 +1902,7 @@ exports.getHistorialConductor = async (req, res) => {
         db.raw('COUNT(*) as total_pagos'),
         db.raw("COUNT(CASE WHEN status = 'Confirmado' THEN 1 END) as pagos_confirmados"),
         db.raw("COUNT(CASE WHEN status = 'Pendiente' THEN 1 END) as pagos_pendientes"),
-        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_total ELSE 0 END) as total_pagado"),
+        db.raw("SUM(CASE WHEN status = 'Confirmado' THEN COALESCE(monto_total, COALESCE(monto_renta_pagado, 0) + COALESCE(monto_poliza_pagado, 0)) ELSE 0 END) as total_pagado"),
         db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_renta_pagado ELSE 0 END) as total_renta_pagada"),
         db.raw("SUM(CASE WHEN status = 'Confirmado' THEN monto_poliza_pagado ELSE 0 END) as total_poliza_acumulada")
       );
@@ -1489,7 +1913,7 @@ exports.getHistorialConductor = async (req, res) => {
         id: conductor.id,
         nombre: conductor.nombre_conductor,
         tipo_poliza: conductor.tipo_poliza || 'POLIZA_100',
-        saldo_poliza_actual: parseFloat(conductor.saldo_poliza_mecanica || 50000),
+        saldo_poliza_actual: parseFloat(conductor.poliza_mecanica || 0),
         saldo_ahorro_mantenimiento: parseFloat(conductor.saldo_ahorro_mantenimiento || 0),
         total_aportado_historico: parseFloat(conductor.total_aportado_poliza || 0)
       },
@@ -1549,13 +1973,36 @@ exports.editarPago = async (req, res) => {
       });
     }
 
-    const monto_total = parseFloat(monto_renta_pagado || 0) + parseFloat(monto_poliza_pagado || 0);
+    const montoRentaNuevo = monto_renta_pagado !== undefined
+      ? Number.parseFloat(monto_renta_pagado)
+      : Number.parseFloat(pago.monto_renta_pagado);
+    const montoPolizaNuevo = monto_poliza_pagado !== undefined
+      ? Number.parseFloat(monto_poliza_pagado)
+      : Number.parseFloat(pago.monto_poliza_pagado);
+
+    if (!Number.isFinite(montoRentaNuevo) || !Number.isFinite(montoPolizaNuevo)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'Los montos enviados no son validos'
+      });
+    }
+
+    if (montoRentaNuevo < 0 || montoPolizaNuevo < 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'No se permiten montos negativos'
+      });
+    }
+
+    const monto_total = montoRentaNuevo + montoPolizaNuevo;
 
     const [pagoActualizado] = await trx('pagos_diarios')
       .where('id', id)
       .update({
-        monto_renta_pagado: monto_renta_pagado !== undefined ? monto_renta_pagado : pago.monto_renta_pagado,
-        monto_poliza_pagado: monto_poliza_pagado !== undefined ? monto_poliza_pagado : pago.monto_poliza_pagado,
+        monto_renta_pagado: montoRentaNuevo,
+        monto_poliza_pagado: montoPolizaNuevo,
         monto_total: monto_total || pago.monto_total,
         metodo_pago: metodo_pago || pago.metodo_pago,
         fecha_pago: fecha_pago || pago.fecha_pago,
@@ -1607,6 +2054,271 @@ exports.editarPago = async (req, res) => {
   }
 };
 
+// ========== AJUSTAR PAGO CONFIRMADO (SOLO MONTO RENTA) ==========
+exports.editarPagoConfirmado = async (req, res) => {
+  const trx = await db.transaction();
+
+  try {
+    const { id } = req.params;
+    const { monto_renta_pagado, motivo_ajuste } = req.body;
+    const usuarioActual = req.user || {};
+    const rolesPermitidos = ['super_admin', 'direccion', 'finanzas'];
+
+    if (!rolesPermitidos.includes(String(usuarioActual.rol || ''))) {
+      await trx.rollback();
+      return res.status(403).json({
+        success: false,
+        error: 'No tienes permisos para ajustar pagos confirmados'
+      });
+    }
+
+    const montoRentaNuevoRaw = Number.parseFloat(monto_renta_pagado);
+    if (!Number.isFinite(montoRentaNuevoRaw)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'El monto de renta no es valido'
+      });
+    }
+
+    if (montoRentaNuevoRaw < 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'No se permiten montos negativos'
+      });
+    }
+    const montoRentaNuevo = toMoney(montoRentaNuevoRaw);
+    const motivoAjusteNormalizado = String(motivo_ajuste || '').trim();
+    const motivoAjusteTexto = motivoAjusteNormalizado || 'Sin motivo';
+
+    await auditService.setUserContext(trx, req.user);
+
+    const pago = await trx('pagos_diarios')
+      .where('id', id)
+      .forUpdate()
+      .first();
+
+    if (!pago) {
+      await trx.rollback();
+      return res.status(404).json({
+        success: false,
+        error: 'Pago no encontrado'
+      });
+    }
+
+    const statusPagoNormalizado = String(pago.status || '').trim().toLowerCase();
+    if (!['confirmado', 'pagada'].includes(statusPagoNormalizado)) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'Solo se pueden ajustar pagos en estado Confirmado o Pagada'
+      });
+    }
+
+    const asignacionIdPago = toPositiveIntOrNull(pago.asignacion_id);
+    if (!asignacionIdPago) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'El pago no tiene asignacion valida para recalcular saldos'
+      });
+    }
+
+    const pagoPendienteMismaAsignacion = await trx('pagos_diarios')
+      .where('asignacion_id', asignacionIdPago)
+      .whereNot('id', id)
+      .whereRaw("LOWER(TRIM(COALESCE(status, ''))) = 'pendiente'")
+      .first();
+
+    if (pagoPendienteMismaAsignacion) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'No puedes ajustar este pago mientras existan pagos Pendientes en la misma asignacion'
+      });
+    }
+
+    const asignacion = await trx('asignaciones')
+      .where('id', asignacionIdPago)
+      .first();
+
+    if (!asignacion) {
+      await trx.rollback();
+      return res.status(404).json({
+        success: false,
+        error: 'Asignacion no encontrada para este pago'
+      });
+    }
+
+    const vehiculo = await trx('vehiculos')
+      .where('id', asignacion.vehiculo_id)
+      .forUpdate()
+      .first();
+
+    if (!vehiculo) {
+      await trx.rollback();
+      return res.status(404).json({
+        success: false,
+        error: 'Vehiculo no encontrado para la asignacion'
+      });
+    }
+
+    const rentaAnterior = toMoney(pago.monto_renta_pagado);
+    const polizaActual = toMoney(pago.monto_poliza_pagado);
+    const totalAnterior = toMoney(pago.monto_total || (rentaAnterior + polizaActual));
+
+    const deltaRenta = montoRentaNuevo - rentaAnterior;
+    const montoTotalNuevo = montoRentaNuevo + polizaActual;
+    const deltaTotal = montoTotalNuevo - totalAnterior;
+
+    if (deltaRenta === 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'No hay cambios en el monto de renta'
+      });
+    }
+
+    const notaAjuste = `\n[AJUSTE_CONFIRMADO ${new Date().toISOString()}] Renta: ${rentaAnterior} -> ${montoRentaNuevo}. Delta: ${deltaRenta}. Motivo: ${motivoAjusteTexto}`;
+    const observacionesActualizadas = `${pago.observaciones || ''}${notaAjuste}`.trim();
+
+    const [pagoActualizado] = await trx('pagos_diarios')
+      .where('id', id)
+      .update({
+        monto_renta_pagado: Number(montoRentaNuevo.toFixed(2)),
+        monto_total: Number(montoTotalNuevo.toFixed(2)),
+        observaciones: observacionesActualizadas,
+        updated_at: new Date()
+      })
+      .returning('*');
+
+    // Regla operativa solicitada: aplicar SOLO la diferencia del ajuste
+    // (ej. 500 -> 850 => +350 en total_pagado_corrida).
+    const totalCorrida = toMoney(vehiculo.total_corrida);
+    const totalPagadoActual = toMoney(vehiculo.total_pagado_corrida);
+    const totalPagadoPorDelta = totalPagadoActual + deltaRenta;
+    if (totalPagadoPorDelta < 0) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'El ajuste dejaría total_pagado_corrida en negativo'
+      });
+    }
+
+    const nuevoSaldoPendiente = Math.max(0, totalCorrida - totalPagadoPorDelta);
+    const nuevoPorcentaje = totalCorrida > 0 ? (totalPagadoPorDelta / totalCorrida) * 100 : 0;
+
+    const updateVehiculoPayload = {
+      total_pagado_corrida: Number(totalPagadoPorDelta.toFixed(2)),
+      saldo_pendiente_corrida: Number(nuevoSaldoPendiente.toFixed(2)),
+      porcentaje_pagado: Number(nuevoPorcentaje.toFixed(2)),
+      updated_at: new Date()
+    };
+
+    const filasVehiculoActualizadas = await trx('vehiculos')
+      .where('id', vehiculo.id)
+      .update(updateVehiculoPayload);
+
+    if (!filasVehiculoActualizadas) {
+      await trx.rollback();
+      return res.status(500).json({
+        success: false,
+        error: 'No se pudo actualizar el vehiculo asociado al pago'
+      });
+    }
+
+    await auditService.logCriticalChange({
+      usuario_id: req.user?.id,
+      tipo_cambio: 'ajuste_pago_confirmado_renta',
+      descripcion: `Ajuste de pago confirmado #${id}. Delta renta: ${deltaRenta >= 0 ? '+' : ''}$${deltaRenta.toFixed(2)}.`,
+      datos_sensibles: {
+        pago_id: id,
+        asignacion_id: asignacionIdPago,
+        vehiculo_id: vehiculo.id,
+        renta_anterior: rentaAnterior,
+        renta_nueva: montoRentaNuevo,
+        delta_renta: Number(deltaRenta.toFixed(2)),
+        poliza_conservada: polizaActual,
+        total_anterior: totalAnterior,
+        total_nuevo: Number(montoTotalNuevo.toFixed(2)),
+        delta_total: Number(deltaTotal.toFixed(2)),
+        motivo_ajuste: motivoAjusteTexto
+      },
+      ip_address: auditService.getClientIp(req),
+      requiere_revision: true
+    });
+
+    const vehiculoPost = await trx('vehiculos')
+      .where('id', vehiculo.id)
+      .first();
+
+    const totalPagadoPersistido = toMoney(vehiculoPost?.total_pagado_corrida);
+    const saldoPersistido = toMoney(vehiculoPost?.saldo_pendiente_corrida);
+    const porcentajePersistido = toMoney(vehiculoPost?.porcentaje_pagado);
+
+    const totalEsperado = Number(totalPagadoPorDelta.toFixed(2));
+    const saldoEsperado = Number(nuevoSaldoPendiente.toFixed(2));
+    const porcentajeEsperado = Number(nuevoPorcentaje.toFixed(2));
+
+    // Verificacion estricta: si el vehiculo no queda persistido con los calculos esperados,
+    // se revierte toda la operacion para evitar inconsistencias silenciosas.
+    const tolerancia = 0.009;
+    const difTotal = Math.abs(totalPagadoPersistido - totalEsperado);
+    const difSaldo = Math.abs(saldoPersistido - saldoEsperado);
+    const difPorcentaje = Math.abs(porcentajePersistido - porcentajeEsperado);
+    if (difTotal > tolerancia || difSaldo > tolerancia || difPorcentaje > tolerancia) {
+      await trx.rollback();
+      return res.status(500).json({
+        success: false,
+        error: 'No se pudo persistir de forma consistente la corrida del vehiculo'
+      });
+    }
+
+    const totalPagadoPost = Number(
+      toMoney(
+        vehiculoPost?.total_pagado_corrida ??
+        totalPagadoPorDelta
+      ).toFixed(2)
+    );
+
+    await trx.commit();
+
+    res.json({
+      success: true,
+      message: 'Pago confirmado ajustado correctamente',
+      pago: pagoActualizado,
+      impacto: {
+        delta_renta: Number(deltaRenta.toFixed(2)),
+        delta_total: Number(deltaTotal.toFixed(2)),
+        vehiculo: {
+          id: vehiculoPost?.id || vehiculo.id,
+          total_pagado_corrida: totalPagadoPost,
+          saldo_pendiente_corrida: Number(vehiculoPost?.saldo_pendiente_corrida ?? nuevoSaldoPendiente.toFixed(2)),
+          porcentaje_pagado: Number(vehiculoPost?.porcentaje_pagado ?? nuevoPorcentaje.toFixed(2))
+        }
+      }
+    });
+  } catch (error) {
+    await trx.rollback();
+
+    await auditService.logError({
+      usuario_id: req.user?.id,
+      nivel: 'error',
+      mensaje: `Error ajustando pago confirmado: ${error.message}`,
+      stack_trace: error.stack,
+      ip_address: auditService.getClientIp(req),
+      url: req.originalUrl,
+      metodo_http: req.method
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Error al ajustar pago confirmado'
+    });
+  }
+};
+
 // ========== ELIMINAR PAGO DE RENTA ==========
 exports.eliminarPago = async (req, res) => {
   const { id } = req.params;
@@ -1628,14 +2340,26 @@ exports.eliminarPago = async (req, res) => {
         });
       }
 
-      const pagoActual = await db('pagos_diarios').where('id', id).select('observaciones').first();
-      const fechaHoy = new Date().toLocaleDateString('es-MX');
-      const textoSolicitud = `[Solicitud Baja: ${motivoBaja}] - Solicitado el ${fechaHoy}`;
+    const pagoActual = await db('pagos_diarios').where('id', id).select('observaciones').first();
       
-      const observacionesViejas = pagoActual?.observaciones || '';
+      // 2. Fecha legible y blindada a la hora de México
+      const opcionesFecha = { 
+          timeZone: 'America/Mexico_City', 
+          day: 'numeric', 
+          month: 'long', 
+          year: 'numeric' 
+      };
+      const fechaHoy = new Date().toLocaleDateString('es-MX', opcionesFecha);
+      
+      // 3. Armamos el texto con el salto de línea (\n) al principio
+      const textoSolicitud = `\n[Solicitud Baja: ${motivoBaja} - Solicitado el ${fechaHoy}]`;
+
+      // 4. Concatenamos inteligentemente
+      const observacionesViejas = pagoActual?.observaciones ? pagoActual.observaciones.trim() : '';
+      
       const nuevasObservaciones = observacionesViejas 
-        ? `${observacionesViejas} | ${textoSolicitud}`
-        : textoSolicitud;
+          ? `${observacionesViejas}${textoSolicitud}` 
+          : textoSolicitud.trim();
 
       await db('pagos_diarios')
         .where('id', id)
@@ -1665,11 +2389,13 @@ exports.eliminarPago = async (req, res) => {
           .leftJoin('vehiculos as v', 'a.vehiculo_id', 'v.id')
           .where('p.id', id)
           .select(
-            'p.*', 
-            'v.id as vehiculo_id', 
-            'v.total_pagado_corrida', 
+            'p.*',
+            'a.vehiculo_id as asignacion_vehiculo_id',
+            'v.id as vehiculo_id_db',
+            'v.total_pagado_corrida',
             'v.total_corrida',
-            'v.saldo_pendiente_corrida'
+            'v.saldo_pendiente_corrida',
+            'v.poliza_mecanica'
           )
           .first();
 
@@ -1678,6 +2404,18 @@ exports.eliminarPago = async (req, res) => {
         const statusConDinero = ['Confirmado', 'Pagada', 'Solicitud_borrado'];
         const esOrigenRechazado = pago.status === 'Solicitud_borrado' && 
                                   (pago.observaciones || '').includes('RECHAZADO:');
+
+          console.log('🧾 Snapshot eliminarPago:', {
+          pago_id: pago.id,
+          status: pago.status,
+          asignacion_id: pago.asignacion_id,
+          vehiculo_id_pago: pago.vehiculo_id,
+          vehiculo_id_asignacion: pago.asignacion_vehiculo_id,
+          vehiculo_id_db: pago.vehiculo_id_db,
+          monto_total: pago.monto_total,
+          total_pagado_corrida: pago.total_pagado_corrida,
+          total_corrida: pago.total_corrida
+        });
 
         if (statusConDinero.includes(pago.status) && !esOrigenRechazado) {
           
@@ -1709,8 +2447,19 @@ exports.eliminarPago = async (req, res) => {
           }
 
           // --- B. REVERSIÓN DE SALDOS (BLINDAJE EXTREMO) 🛡️ ---
-          if (!pago.vehiculo_id) {
-             console.warn(`⚠️ ALERTA: Pago ${id} sin vehículo vinculado.`);
+
+          const vehiculoIdLimpio =
+            toPositiveIntOrNull(pago.vehiculo_id_db) ??
+            toPositiveIntOrNull(pago.asignacion_vehiculo_id) ??
+            toPositiveIntOrNull(pago.vehiculo_id);
+
+          if (!vehiculoIdLimpio) {
+             console.warn('⚠️ ALERTA: vehiculo_id inválido para reversión en eliminarPago', {
+               pago_id: id,
+               vehiculo_id_pago: pago.vehiculo_id,
+               vehiculo_id_asignacion: pago.asignacion_vehiculo_id,
+               vehiculo_id_db: pago.vehiculo_id_db
+             });
           } else {
              // 🛠️ HELPER NUCLEAR: Limpia basura, símbolos ($) y fuerza Número
              const cleanNumber = (val) => {
@@ -1721,13 +2470,17 @@ exports.eliminarPago = async (req, res) => {
                 return isFinite(num) ? num : 0;
              };
 
-             // 1. Obtenemos valores ultra limpios
-             const montoAEliminar = cleanNumber(pago.monto_total); 
+             // 1. Obtenemos valores ultra limpios (SEPARADOS)
+             const rentaAEliminar = cleanNumber(pago.monto_renta_pagado); 
+             const polizaAEliminar = cleanNumber(pago.monto_poliza_pagado);
+             
              const pagadoActual = cleanNumber(pago.total_pagado_corrida);
              const totalCorrida = cleanNumber(pago.total_corrida);
+             const fondoPolizaActual = cleanNumber(pago.poliza_mecanica); // 👈 El fondo actual del carro
 
-             // 2. Operaciones Matemáticas
-             let nuevoTotalPagado = pagadoActual - montoAEliminar;
+             // 2. Operaciones Matemáticas (Reversa Separada)
+             // A. Reversa de la Deuda
+             let nuevoTotalPagado = pagadoActual - rentaAEliminar;
              if (nuevoTotalPagado < 0) nuevoTotalPagado = 0;
 
              let nuevoSaldoPendiente = totalCorrida - nuevoTotalPagado;
@@ -1738,33 +2491,68 @@ exports.eliminarPago = async (req, res) => {
                 nuevoPorcentaje = (nuevoTotalPagado / totalCorrida) * 100;
              }
 
+             // B. Reversa del Fondo de Póliza
+             let nuevoFondoPoliza = fondoPolizaActual - polizaAEliminar;
+             if (nuevoFondoPoliza < 0) nuevoFondoPoliza = 0;
+
              // 3. Objeto Final (Garantizando Numbers puros)
              const datosUpdate = {
                  total_pagado_corrida: Number(nuevoTotalPagado.toFixed(2)),
                  saldo_pendiente_corrida: Number(nuevoSaldoPendiente.toFixed(2)),
                  porcentaje_pagado: Number(nuevoPorcentaje.toFixed(2)),
+                 poliza_mecanica: Number(nuevoFondoPoliza.toFixed(2)), // 👈 ¡Actualizamos el fondo!
                  updated_at: new Date()
              };
 
              console.log('📉 Datos BLINDADOS para Update:', datosUpdate);
 
-             // 4. Update
-             await trx('vehiculos')
-               .where('id', pago.vehiculo_id)
+             // 4. Update con trazabilidad SQL detallada
+             const updateVehiculoQuery = trx('vehiculos')
+               .where('id', vehiculoIdLimpio)
                .update(datosUpdate);
+
+                            const debugSql = updateVehiculoQuery.clone().toSQL();
+             console.log('🧠 SQL Update Vehículo (eliminarPago):', {
+               sql: debugSql.sql,
+               bindings: debugSql.bindings,
+               bindingTypes: (debugSql.bindings || []).map((value) => typeof value)
+             });
+
+             try {
+               await updateVehiculoQuery;
+             } catch (sqlError) {
+               console.error('❌ Error SQL al actualizar vehículo en eliminarPago', {
+                 vehiculoIdLimpio,
+                 datosUpdate,
+                 code: sqlError.code,
+                 detail: sqlError.detail,
+                 where: sqlError.where,
+                 routine: sqlError.routine
+               });
+               throw sqlError;
+             }
           }
         }
 
         // 3. BORRADO LÓGICO
-        let notaEliminacion = '';
-        const fechaBorrado = new Date().toLocaleDateString('es-MX');
+      let notaEliminacion = '';
+        
+        // 1. Configuramos el formato elegante y blindamos la zona horaria del servidor
+        const opcionesFecha = { 
+            timeZone: 'America/Mexico_City', // 🛡️ Asegura que siempre sea la hora de México, sin importar dónde esté el servidor
+            day: 'numeric', 
+            month: 'long', 
+            year: 'numeric' 
+        };
+        const fechaBorrado = new Date().toLocaleDateString('es-MX', opcionesFecha);
 
+        // 2. Armamos la nota
         if (motivoBaja) {
-            notaEliminacion = ` | [Eliminado por: ${motivoBaja}] - ${fechaBorrado}`;
+            notaEliminacion = `\n[Eliminado por: ${motivoBaja} el ${fechaBorrado}]`;
         } else if (pago.status === 'Solicitud_borrado') {
-            notaEliminacion = ` | [✅ Solicitud de Baja Aprobada] - ${fechaBorrado}`;
+            notaEliminacion = `\n[✅ Solicitud de Baja Aprobada el ${fechaBorrado}]`;
         } else {
-            notaEliminacion = ` | [Eliminado sin motivo] - ${fechaBorrado}`;
+            notaEliminacion = `\n[Eliminado sin motivo el ${fechaBorrado}]`;
         }
 
         const nuevasObservaciones = (pago.observaciones || '') + notaEliminacion;
@@ -1791,6 +2579,9 @@ exports.eliminarPago = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error en eliminarPago:', error.message);
+        if (error.detail) {
+      console.error('📌 Detalle SQL:', error.detail);
+    }
     const statusCode = error.message.includes('No puedes eliminar') || error.message.includes('BLOQUEO') ? 400 : 500;
     res.status(statusCode).json({ success: false, message: error.message });
   }
@@ -1882,4 +2673,68 @@ exports.cambiarStatus = async (req, res) => {
   }
 };
 
+// ========== OBTENER REPORTE DE REZAGO (MISMA LOGICA DEL INDICADOR) ==========
+exports.obtenerReporteRezago = async (req, res) => {
+  try {
+    const query = `
+      WITH pagos_confirmados AS (
+        SELECT
+          asignacion_id,
+          MAX(COALESCE(fecha_pago_fin, fecha_pago))::date as ultimo_pago
+        FROM pagos_diarios
+        WHERE status IN ('Confirmado', 'Pagada')
+        GROUP BY asignacion_id
+      )
+      SELECT
+        a.id AS id_asignacion,
+        c.id AS conductor_id,
+        c.nombre_conductor AS conductor_nombre,
+        v.numero_vehiculo AS vehiculo_placa,
+        (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) AS monto_renta,
+        COALESCE(p.ultimo_pago::date, NULL) AS ultimo_fecha_pago_fin,
+        COALESCE(dias.dias_adeudados, 0) AS dias_rezago,
+        COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) AS monto_adeudado
+      FROM asignaciones a
+      INNER JOIN conductores c ON c.id = a.conductor_id
+      INNER JOIN vehiculos v ON v.id = a.vehiculo_id
+      LEFT JOIN pagos_confirmados p ON p.asignacion_id = a.id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int as dias_adeudados
+        FROM generate_series(
+          GREATEST(
+            COALESCE(p.ultimo_pago::date, a.fecha_inicio::date - 1) + 1,
+            DATE '2026-01-01'
+          ),
+          (NOW() AT TIME ZONE 'America/Mazatlan')::date,
+          interval '1 day'
+        ) as d(fecha)
+        WHERE EXTRACT(DOW FROM d.fecha) <> 0
+      ) dias ON true
+      WHERE a.activa = true
+        AND COALESCE(dias.dias_adeudados, 0)
+          * (a.renta_diaria + COALESCE(a.abono_poliza_mantenimiento, 0)) > 0
+      ORDER BY monto_adeudado DESC, dias_rezago DESC, c.nombre_conductor ASC
+    `;
+
+    const result = await db.raw(query);
+    const reporte = result.rows.map((row) => ({
+      id_asignacion: parseInt(row.id_asignacion, 10),
+      conductor_id: parseInt(row.conductor_id, 10),
+      conductor_nombre: row.conductor_nombre,
+      vehiculo_placa: row.vehiculo_placa,
+      monto_renta: parseFloat(row.monto_renta || 0),
+      ultimo_fecha_pago_fin: row.ultimo_fecha_pago_fin,
+      dias_rezago: parseInt(row.dias_rezago || 0, 10),
+      monto_adeudado: parseFloat(row.monto_adeudado || 0)
+    }));
+
+    res.status(200).json(reporte);
+  } catch (error) {
+    console.error('Error al obtener reporte de rezago:', error);
+    res.status(500).json({ message: 'Error al obtener los datos de rezago' });
+  }
+};
+
 module.exports = exports;
+

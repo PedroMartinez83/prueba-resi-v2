@@ -116,7 +116,7 @@ const PortalInversion = () => {
 
   if (submitted) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center p-4">
         <div className="max-w-2xl w-full bg-black/30 backdrop-blur-md rounded-2xl border border-white/10 p-12 text-center">
           <div className="w-20 h-20 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full mx-auto mb-6 flex items-center justify-center">
             <CheckCircle className="w-10 h-10 text-white" />
@@ -155,7 +155,7 @@ const PortalInversion = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900">
+    <div className="min-h-screen bg-[#07425E]">
       {/* Patrón de fondo */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl"></div>
@@ -225,7 +225,7 @@ const PortalInversion = () => {
                 <span className="text-green-400 font-bold text-sm">LARGO PLAZO</span>
               </div>
               <h3 className="text-3xl font-bold text-white mb-2">PLAN PLUS 60</h3>
-              <p className="text-gray-300 mb-6">Maximiza tu ganancia total</p>
+              <p className="text-gray-300 mb-6">Maximiza tu rendimiento total</p>
               
               <div className="space-y-4 mb-8">
                 <div className="flex justify-between items-center">

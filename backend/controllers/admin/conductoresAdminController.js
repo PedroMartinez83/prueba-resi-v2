@@ -1,4 +1,4 @@
-// backend/controllers/admin/conductoresAdminController.js
+﻿// backend/controllers/admin/conductoresAdminController.js
 const postgresService = require('../../services/postgresService');
 const auditService = require('../../services/auditService');
 const { validateConductor } = require('../../validators/conductorValidator');
@@ -9,7 +9,43 @@ const bcrypt = require('bcryptjs'); // <--- CAMBIO 1: Importamos BCRYPT
 // Obtener db y TABLES
 const { db, TABLES } = postgresService;
 
-// <--- CAMBIO 2: Añadimos la función para generar passwords
+let conductoresColumnsCache = null;
+
+const getConductoresColumns = async (trxOrDb = db) => {
+  if (conductoresColumnsCache) {
+    return conductoresColumnsCache;
+  }
+
+  let rows = await trxOrDb('information_schema.columns')
+    .select('column_name')
+    .where({
+      table_schema: 'public',
+      table_name: TABLES.CONDUCTORES || 'conductores'
+    });
+
+  if (!rows.length) {
+    rows = await trxOrDb('information_schema.columns')
+      .select('column_name')
+      .where({
+        table_name: TABLES.CONDUCTORES || 'conductores'
+      });
+  }
+
+  conductoresColumnsCache = new Set(rows.map((r) => r.column_name));
+  return conductoresColumnsCache;
+};
+
+const filtrarCamposExistentes = (data, columnsSet) => {
+  const filtrado = {};
+  for (const [key, value] of Object.entries(data || {})) {
+    if (columnsSet.has(key)) {
+      filtrado[key] = value;
+    }
+  }
+  return filtrado;
+};
+
+// <--- CAMBIO 2: AÃ±adimos la funciÃ³n para generar passwords
 /**
  * Genera un password temporal memorable
  * @returns {string} Password (ej: Conduc_a1b2c)
@@ -21,7 +57,7 @@ const generateTempPassword = () => {
 
 /**
  * Genera o normaliza el correo del conductor. Si no existe, crea uno temporal
- * usando el número de teléfono (o un timestamp) para permitir el acceso al portal.
+ * usando el nÃºmero de telÃ©fono (o un timestamp) para permitir el acceso al portal.
  */
 const ensureConductorEmail = (data = {}, fallback = {}) => {
   const providedEmail = data.email?.toString().trim();
@@ -42,7 +78,7 @@ const ensureConductorEmail = (data = {}, fallback = {}) => {
 // ========== MAPEO DE CAMPOS ==========
 const mapearCamposConductor = (data, options = {}) => {
   const { allowNull = false } = options;
-  // ... (Tu código de mapeo sin cambios)
+  // ... (Tu cÃ³digo de mapeo sin cambios)
   const mapeo = {
     'NombreConductor': 'nombre_conductor',
     'NumeroTelefono': 'numero_telefono',
@@ -120,6 +156,9 @@ const mapearCamposRespuestaConductor = (record) => {
     status: record.status || 'Pendiente',
     ubicacion_actual: record.ubicacion_actual,
     calificacion_promedio: parseFloat(record.calificacion_promedio || 0),
+    total_viajes: parseInt(record.total_viajes || 0),
+    horas_trabajadas: parseFloat(record.horas_trabajadas || 0),
+    ingreso_promedio_diario: parseFloat(record.ingreso_promedio_diario || 0),
     ultima_conexion: record.ultima_conexion,
     licencia_vencimiento: record.licencia_vencimiento,
     seguro_vehiculo_vencimiento: record.seguro_vehiculo_vencimiento,
@@ -144,16 +183,16 @@ const mapearCamposRespuestaConductor = (record) => {
     foto_reverso_licencia_url: record.foto_reverso_licencia_url,
     fecha_foto_frente: record.fecha_foto_frente,
     fecha_foto_reverso: record.fecha_foto_reverso,
-    // 📄 URLs DE DOCUMENTOS (CLOUDINARY)
+    // ðŸ“„ URLs DE DOCUMENTOS (CLOUDINARY)
     url_ine_frente: record.url_ine_frente,
     url_ine_reverso: record.url_ine_reverso,
     url_licencia_frente: record.url_licencia_frente,
     url_licencia_reverso: record.url_licencia_reverso,
     url_comprobante_domicilio: record.url_comprobante_domicilio,
-    // 🔥 CAMPOS DE CONFIGURACIÓN (ESTOS FALTABAN)
+    // ðŸ”¥ CAMPOS DE CONFIGURACIÃ“N (ESTOS FALTABAN)
     tipo_socio: record.tipo_socio || '',
-    zona_trabajo: record.zona_trabajo || '', // ← CRÍTICO
-    horario_preferido: record.horario_preferido || '', // ← CRÍTICO
+    zona_trabajo: record.zona_trabajo || '', // â† CRÃTICO
+    horario_preferido: record.horario_preferido || '', // â† CRÃTICO
     
     rfc: record.rfc,
     direccion_completa: record.direccion_completa,
@@ -172,12 +211,12 @@ const mapearCamposRespuestaConductor = (record) => {
     fecha_ultimo_ascenso: record.fecha_ultimo_ascenso,
     usa_uniforme: record.usa_uniforme || false,
     
-    // 🔥 CAMPOS ADICIONALES QUE FALTABAN
+    // ðŸ”¥ CAMPOS ADICIONALES QUE FALTABAN
     estado_civil: record.estado_civil || '',
     telefono_emergencia: record.telefono_emergencia || '',
     
-    // Pólizas y ahorro
-    saldo_poliza_mecanica: parseFloat(record.saldo_poliza_mecanica || 50000),
+    // PÃ³lizas y ahorro
+    saldo_poliza_mecanica: parseFloat(record.saldo_poliza_mecanica || 0),
     total_aportado_poliza: parseFloat(record.total_aportado_poliza || 0),
     saldo_ahorro_mantenimiento: parseFloat(record.saldo_ahorro_mantenimiento || 0),
     tipo_poliza: record.tipo_poliza || 'POLIZA_100',
@@ -197,7 +236,7 @@ const mapearCamposRespuestaConductor = (record) => {
 };
 // ========== OBTENER TODOS LOS CONDUCTORES ==========
 exports.getConductores = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   try {
     const conductores = await db('conductores as c')
       .leftJoin('asignaciones as a', function() {
@@ -213,6 +252,7 @@ exports.getConductores = async (req, res) => {
         'v.modelo',
         'v.placa',
         'v.estado as estado_vehiculo',
+        'v.poliza_mecanica as saldo_poliza_mecanica',
         'a.renta_diaria',
         'a.abono_poliza_mantenimiento',
         'a.fecha_inicio as fecha_asignacion'
@@ -230,7 +270,7 @@ exports.getConductores = async (req, res) => {
       });
     }
     
-    // Agrupar conductores con sus vehículos
+    // Agrupar conductores con sus vehÃ­culos
     const conductoresMap = new Map();
     
     conductores.forEach(conductor => {
@@ -257,7 +297,7 @@ exports.getConductores = async (req, res) => {
       if (conductor.vehiculo_id) {
           conductoresMap.get(conductorId).vehiculos.push({
   id: conductor.vehiculo_id,
-  numero_vehiculo: conductor.numero_vehiculo,  // ← CONSISTENTE
+  numero_vehiculo: conductor.numero_vehiculo,  // â† CONSISTENTE
   marca: conductor.marca,
   modelo: conductor.modelo,
   placa: conductor.placa,
@@ -297,7 +337,7 @@ exports.getConductores = async (req, res) => {
 
 // ========== OBTENER UN CONDUCTOR POR ID ==========
 exports.getConductorById = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   try {
     const { id } = req.params;
     const conductorId = parseInt(id);
@@ -305,11 +345,11 @@ exports.getConductorById = async (req, res) => {
     if (isNaN(conductorId)) {
       return res.status(400).json({
         success: false,
-        error: 'ID de conductor inválido'
+        error: 'ID de conductor invÃ¡lido'
       });
     }
     
-    // Obtener conductor con información completa
+    // Obtener conductor con informaciÃ³n completa
     const conductor = await db('conductores as c')
       .leftJoin('asignaciones as a', function() {
         this.on('c.id', '=', 'a.conductor_id')
@@ -345,7 +385,7 @@ exports.getConductorById = async (req, res) => {
       });
     }
     
-    // Obtener estadísticas del conductor
+    // Obtener estadÃ­sticas del conductor
     const [rentas, siniestros, calificaciones] = await Promise.all([
       db('rentas')
         .where('conductor_id', conductorId)
@@ -376,7 +416,7 @@ exports.getConductorById = async (req, res) => {
     // Mapear respuesta
     const conductorMapeado = mapearCamposRespuestaConductor(conductor);
     
-   // Agregar información del vehículo asignado
+   // Agregar informaciÃ³n del vehÃ­culo asignado
 if (conductor.vehiculo_id) {
   conductorMapeado.vehiculo_asignado = {
     id: conductor.vehiculo_id,
@@ -394,7 +434,7 @@ if (conductor.vehiculo_id) {
     url_contrato: conductor.url_contrato_digital
   };
   
-  // 🆕 AGREGAR TAMBIÉN EN FORMATO DE ARRAY (para el frontend)
+  // ðŸ†• AGREGAR TAMBIÃ‰N EN FORMATO DE ARRAY (para el frontend)
   conductorMapeado.asignaciones = [
     {
       id: conductor.asignacion_id,
@@ -407,11 +447,11 @@ if (conductor.vehiculo_id) {
     }
   ];
 } else {
-  // Si no tiene vehículo, devolver array vacío
+  // Si no tiene vehÃ­culo, devolver array vacÃ­o
   conductorMapeado.asignaciones = [];
 }
     
-    // Agregar estadísticas
+    // Agregar estadÃ­sticas
     conductorMapeado.estadisticas = {
       rentas: {
         total: parseInt(rentas?.total || 0),
@@ -429,7 +469,7 @@ if (conductor.vehiculo_id) {
       }
     };
     
-    // Información del usuario asociado
+    // InformaciÃ³n del usuario asociado
     if (conductor.usuario_id) {
       conductorMapeado.usuario_info = {
         id: conductor.usuario_id,
@@ -462,9 +502,9 @@ if (conductor.vehiculo_id) {
   }
 };
 
-// ========== CREAR CONDUCTOR CON AUDITORÍA ==========
+// ========== CREAR CONDUCTOR CON AUDITORÃA ==========
 exports.createConductor = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   const trx = await db.transaction();
   
   try {
@@ -479,7 +519,7 @@ exports.createConductor = async (req, res) => {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'Datos inválidos',
+        error: 'Datos invÃ¡lidos',
         details: error.details
       });
     }
@@ -513,7 +553,7 @@ exports.createConductor = async (req, res) => {
     if (existente) {
       await trx.rollback();
       let campo = 'email';
-      if (existente.numero_telefono === datosPostgres.numero_telefono) campo = 'teléfono';
+      if (existente.numero_telefono === datosPostgres.numero_telefono) campo = 'telÃ©fono';
       if (existente.numero_de_ine_ife === datosPostgres.numero_de_ine_ife) campo = 'INE/IFE';
       if (existente.curp === datosPostgres.curp) campo = 'CURP';
       if (existente.rfc === datosPostgres.rfc) campo = 'RFC';
@@ -523,10 +563,10 @@ exports.createConductor = async (req, res) => {
         error: `Ya existe un conductor con ese ${campo}`
       });
     }
-    // ✅ PROCESAR ARCHIVOS SI EXISTEN
+    // âœ… PROCESAR ARCHIVOS SI EXISTEN
 if (req.files) {
-  console.log('📤 Subiendo archivos a Cloudinary...');
-  console.log('📎 Archivos detectados:', Object.keys(req.files));
+  console.log('ðŸ“¤ Subiendo archivos a Cloudinary...');
+  console.log('ðŸ“Ž Archivos detectados:', Object.keys(req.files));
   
   const archivosASubir = {
     ine_frente: 'url_ine_frente',
@@ -540,7 +580,7 @@ if (req.files) {
     if (req.files[fieldName]) {
       try {
         const file = req.files[fieldName];
-        console.log(`📤 Subiendo ${fieldName}:`, file.name, `(${file.size} bytes)`);
+        console.log(`ðŸ“¤ Subiendo ${fieldName}:`, file.name, `(${file.size} bytes)`);
         
         // Subir a Cloudinary
         const result = await cloudinary.uploader.upload(file.tempFilePath, {
@@ -550,22 +590,22 @@ if (req.files) {
         });
         
         datosPostgres[dbColumn] = result.secure_url;
-        console.log(`✅ ${fieldName} subido exitosamente:`, result.secure_url);
+        console.log(`âœ… ${fieldName} subido exitosamente:`, result.secure_url);
       } catch (uploadError) {
-        console.error(`❌ Error subiendo ${fieldName}:`, uploadError.message);
+        console.error(`âŒ Error subiendo ${fieldName}:`, uploadError.message);
         // Continuar con otros archivos incluso si uno falla
       }
     }
   }
   
-  console.log('📋 URLs generadas:', {
+  console.log('ðŸ“‹ URLs generadas:', {
     url_ine_frente: datosPostgres.url_ine_frente || 'no subido',
     url_ine_reverso: datosPostgres.url_ine_reverso || 'no subido',
     url_licencia_frente: datosPostgres.url_licencia_frente || 'no subido',
     url_licencia_reverso: datosPostgres.url_licencia_reverso || 'no subido'
   });
 } else {
-  console.log('⚠️ No se detectaron archivos en req.files');
+  console.log('âš ï¸ No se detectaron archivos en req.files');
 }
     
     // Establecer valores por defecto
@@ -578,17 +618,20 @@ if (req.files) {
     datosPostgres.created_at = new Date();
     datosPostgres.updated_at = new Date();
     
+    const conductoresColumns = await getConductoresColumns(trx);
+    const datosInsert = filtrarCamposExistentes(datosPostgres, conductoresColumns);
+
     // Crear conductor
     const [nuevoConductor] = await trx(TABLES.CONDUCTORES)
-      .insert(datosPostgres)
+      .insert(datosInsert)
       .returning('*');
     
-    // Si se especifica un usuario, crear el usuario también
+    // Si se especifica un usuario, crear el usuario tambiÃ©n
     if (value.CrearUsuario && datosPostgres.email) {
       const [usuario] = await trx('usuarios')
         .insert({
           email: datosPostgres.email,
-          password: value.Password || 'temporal123', // Debería ser hasheado
+          password: value.Password || 'temporal123', // DeberÃ­a ser hasheado
           nombre: datosPostgres.nombre_conductor,
           rol: 'conductor',
           estado_cuenta: 'Activo',
@@ -635,9 +678,9 @@ if (req.files) {
   }
 };
 
-// ========== ACTUALIZAR CONDUCTOR CON AUDITORÍA ==========
+// ========== ACTUALIZAR CONDUCTOR CON AUDITORÃA ==========
 exports.updateConductor = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   const trx = await db.transaction();
   
   try {
@@ -646,7 +689,7 @@ exports.updateConductor = async (req, res) => {
     // Establecer contexto de usuario para triggers
     await auditService.setUserContext(trx, req.user);
     
-    // Obtener datos anteriores para auditoría
+    // Obtener datos anteriores para auditorÃ­a
     const conductorAnterior = await trx(TABLES.CONDUCTORES)
       .where('id', id)
       .first();
@@ -667,18 +710,45 @@ exports.updateConductor = async (req, res) => {
       datosEntrada.email = ensureConductorEmail(req.body, conductorAnterior);
     }
     
-    // Validar datos con Joi (parcial para actualización)
+    // Validar datos con Joi (parcial para actualizaciÃ³n)
     const { error, value } = validateConductor(datosEntrada, true);
     if (error) {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'Datos inválidos',
+        error: 'Datos invÃ¡lidos',
         details: error.details
       });
     }
     
     const datosPostgres = mapearCamposConductor(value, { allowNull: true });
+
+    // Procesar archivos en ediciÃ³n (si vienen en multipart/form-data)
+    if (req.files) {
+      const archivosASubir = {
+        ine_frente: 'url_ine_frente',
+        ine_reverso: 'url_ine_reverso',
+        licencia_frente: 'url_licencia_frente',
+        licencia_reverso: 'url_licencia_reverso',
+        comprobante_domicilio: 'url_comprobante_domicilio'
+      };
+
+      for (const [fieldName, dbColumn] of Object.entries(archivosASubir)) {
+        if (!req.files[fieldName]) continue;
+
+        try {
+          const file = req.files[fieldName];
+          const result = await cloudinary.uploader.upload(file.tempFilePath, {
+            folder: `conductores/${datosPostgres.nombre_conductor || conductorAnterior.nombre_conductor || 'sin_nombre'}`,
+            resource_type: 'auto',
+            public_id: `${fieldName}_${Date.now()}`
+          });
+          datosPostgres[dbColumn] = result.secure_url;
+        } catch (uploadError) {
+          console.error(`Error subiendo ${fieldName} en actualizaciÃ³n:`, uploadError.message);
+        }
+      }
+    }
 
     // Normalizar chat_id_telegram: permitir limpiar a null y evitar duplicados
     if (Object.prototype.hasOwnProperty.call(datosPostgres, 'chat_id_telegram')) {
@@ -735,29 +805,31 @@ exports.updateConductor = async (req, res) => {
         await trx.rollback();
         return res.status(400).json({
           success: false,
-          error: 'Ya existe otro conductor con esos datos únicos'
+          error: 'Ya existe otro conductor con esos datos Ãºnicos'
         });
       }
     }
     
     datosPostgres.updated_at = new Date();
-    
+    const conductoresColumns = await getConductoresColumns(trx);
+    const datosUpdate = filtrarCamposExistentes(datosPostgres, conductoresColumns);
+
     const [conductorActualizado] = await trx(TABLES.CONDUCTORES)
       .where('id', id)
-      .update(datosPostgres)
+      .update(datosUpdate)
       .returning('*');
     
-    // Registrar cambios críticos.
+    // Registrar cambios crÃ­ticos.
     const cambiosCriticos = [];
     
     if (conductorAnterior.status !== conductorActualizado.status) {
-      cambiosCriticos.push(`Estado: ${conductorAnterior.status} → ${conductorActualizado.status}`);
+      cambiosCriticos.push(`Estado: ${conductorAnterior.status} â†’ ${conductorActualizado.status}`);
     }
     if (conductorAnterior.categoria !== conductorActualizado.categoria) {
-      cambiosCriticos.push(`Categoría: ${conductorAnterior.categoria} → ${conductorActualizado.categoria}`);
+      cambiosCriticos.push(`CategorÃ­a: ${conductorAnterior.categoria} â†’ ${conductorActualizado.categoria}`);
     }
     if (conductorAnterior.verificacion_antecedentes !== conductorActualizado.verificacion_antecedentes) {
-      cambiosCriticos.push(`Verificación: ${conductorAnterior.verificacion_antecedentes} → ${conductorActualizado.verificacion_antecedentes}`);
+      cambiosCriticos.push(`VerificaciÃ³n: ${conductorAnterior.verificacion_antecedentes} â†’ ${conductorActualizado.verificacion_antecedentes}`);
     }
     
     if (cambiosCriticos.length > 0) {
@@ -804,7 +876,7 @@ exports.updateConductor = async (req, res) => {
   }
 };
 
-// ========== ELIMINAR CONDUCTOR CON AUDITORÍA ==========
+// ========== ELIMINAR CONDUCTOR CON AUDITORÃA ==========
 // 1. MODIFICAMOS EL DELETE ACTUAL (Para pedir la baja o borrar directo)
 exports.deleteConductor = async (req, res) => {
   const trx = await db.transaction();
@@ -814,12 +886,12 @@ exports.deleteConductor = async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
         await trx.rollback();
-        return res.status(400).json({ error: 'ID de conductor inválido' });
+        return res.status(400).json({ error: 'ID de conductor invÃ¡lido' });
     }
 
     if (!req.user || !req.user.id) {
         await trx.rollback();
-        return res.status(401).json({ error: 'Usuario no autenticado o sin ID válido' });
+        return res.status(401).json({ error: 'Usuario no autenticado o sin ID vÃ¡lido' });
     }
 
     // Establecer contexto para que los Triggers de la BD no fallen (Error "invalid input syntax for type integer")
@@ -836,7 +908,7 @@ exports.deleteConductor = async (req, res) => {
     }
 
     // ==========================================
-    // 🚦 LÓGICA 1: JEFE DE TALLER (SOLICITUD)
+    // ðŸš¦ LÃ“GICA 1: JEFE DE TALLER (SOLICITUD)
     // ==========================================
     if (rol === 'jefe_taller') {
           // Guardamos el estado actual para poder restaurarlo si se rechaza
@@ -850,7 +922,7 @@ exports.deleteConductor = async (req, res) => {
                   updated_at: new Date()
               });
 
-          // GUARDAMOS LA MEMORIA EN EL LOG DE AUDITORÍA
+          // GUARDAMOS LA MEMORIA EN EL LOG DE AUDITORÃA
           await auditService.logCriticalChange({
               usuario_id: req.user.id,
               tipo_cambio: 'solicitud_baja_conductor', 
@@ -858,22 +930,22 @@ exports.deleteConductor = async (req, res) => {
               datos_sensibles: { 
                   conductor_id: id,
                   nombre: conductor.nombre_conductor,
-                  status_previo: estadoActual // <--- Aquí guardamos la memoria ("Activo", "Inactivo", etc.)
+                  status_previo: estadoActual // <--- AquÃ­ guardamos la memoria ("Activo", "Inactivo", etc.)
               },
               ip_address: auditService.getClientIp(req)
           });
 
           await trx.commit();
-          return res.json({ success: true, message: 'Solicitud de baja enviada a Dirección' });
+          return res.json({ success: true, message: 'Solicitud de baja enviada a DirecciÃ³n' });
     }
 
     // ==========================================
-    // 🗑️ LÓGICA 2: ADMINS (BORRADO REAL/APROBACIÓN)
+    // ðŸ—‘ï¸ LÃ“GICA 2: ADMINS (BORRADO REAL/APROBACIÃ“N)
     // ==========================================
     
     const statusNormalizado = (conductor.status || '').toString().trim().toLowerCase();
     
-    // Permitimos borrar si está Inactivo, Rechazado, Suspendido O EN SOLICITUD
+    // Permitimos borrar si estÃ¡ Inactivo, Rechazado, Suspendido O EN SOLICITUD
     const estadosPermitidos = new Set(['inactivo', 'rechazado', 'suspendido', 'solicitud_baja']);
     
     if (!estadosPermitidos.has(statusNormalizado)) {
@@ -884,7 +956,7 @@ exports.deleteConductor = async (req, res) => {
       });
     }
     
-    // --- VALIDACIÓN DE RELACIONES ACTIVAS (Copiado de tu lógica original) ---
+    // --- VALIDACIÃ“N DE RELACIONES ACTIVAS (Copiado de tu lÃ³gica original) ---
     const [asignaciones, rentas, siniestros] = await Promise.all([
         trx('asignaciones').where('conductor_id', id).where('activa', true).count('id as count').first(),
         trx('rentas').where('conductor_id', id).whereIn('estado', ['Pendiente', 'Vencida']).count('id as count').first(),
@@ -907,10 +979,10 @@ exports.deleteConductor = async (req, res) => {
         });
     }
     
-    // --- EJECUCIÓN DEL BORRADO ---
+    // --- EJECUCIÃ“N DEL BORRADO ---
 
-    // 1. Desactivar asignaciones históricas (Ahora sí es seguro hacerlo)
-    // Nota: El 'setUserContext' del principio evitará que esto falle por el trigger
+    // 1. Desactivar asignaciones histÃ³ricas (Ahora sÃ­ es seguro hacerlo)
+    // Nota: El 'setUserContext' del principio evitarÃ¡ que esto falle por el trigger
     await trx('asignaciones')
       .where('conductor_id', id)
       .update({ 
@@ -919,7 +991,7 @@ exports.deleteConductor = async (req, res) => {
           updated_at: new Date()
       });
     
-    // 2. Borrado lógico del conductor
+    // 2. Borrado lÃ³gico del conductor
     await trx(TABLES.CONDUCTORES)
       .where('id', id)
       .update({
@@ -938,11 +1010,11 @@ exports.deleteConductor = async (req, res) => {
            });
     }
 
-    // 4. Registro final en auditoría
+    // 4. Registro final en auditorÃ­a
     await auditService.logCriticalChange({
        usuario_id: req.user.id,
        tipo_cambio: 'eliminacion_conductor',
-       descripcion: `Conductor ${conductor.nombre_conductor} eliminado lógicamente`,
+       descripcion: `Conductor ${conductor.nombre_conductor} eliminado lÃ³gicamente`,
        datos_sensibles: { id, nombre: conductor.nombre_conductor },
        ip_address: auditService.getClientIp(req)
     });
@@ -954,7 +1026,7 @@ exports.deleteConductor = async (req, res) => {
     await trx.rollback();
     console.error("Error en deleteConductor:", error); // Log detallado para debug
     
-    // Auditoría de error
+    // AuditorÃ­a de error
     try {
         await auditService.logError({
             usuario_id: req.user?.id,
@@ -974,27 +1046,27 @@ exports.deleteConductor = async (req, res) => {
     });
   }
 };
-// 2. NUEVA FUNCIÓN: GESTIONAR BAJA (Aprobar/Rechazar)
+// 2. NUEVA FUNCIÃ“N: GESTIONAR BAJA (Aprobar/Rechazar)
 exports.gestionarBajaConductor = async (req, res) => {
     const { id } = req.params;
     const { accion } = req.body;
 
-    // 1. SI ES APROBAR: Delegamos directo a deleteConductor (que ya está arreglado)
-    // Lo ponemos al principio para no abrir transacciones innecesarias aquí
+    // 1. SI ES APROBAR: Delegamos directo a deleteConductor (que ya estÃ¡ arreglado)
+    // Lo ponemos al principio para no abrir transacciones innecesarias aquÃ­
     if (accion === 'aprobar') {
         return exports.deleteConductor(req, res);
     }
 
-    // 2. SI ES RECHAZAR: Necesitamos Transacción + Contexto para que no falle el Trigger
+    // 2. SI ES RECHAZAR: Necesitamos TransacciÃ³n + Contexto para que no falle el Trigger
     const trx = await db.transaction();
 
     try {
-        // --- 🛡️ BLINDAJE (LA SOLUCIÓN AL ERROR) ---
+        // --- ðŸ›¡ï¸ BLINDAJE (LA SOLUCIÃ“N AL ERROR) ---
         if (!req.user || !req.user.id) {
             await trx.rollback();
             return res.status(401).json({ error: 'Usuario no autenticado' });
         }
-        // Esto evita el error: "invalid input syntax for type integer: «»"
+        // Esto evita el error: "invalid input syntax for type integer: Â«Â»"
         await auditService.setUserContext(trx, req.user);
         // ------------------------------------------
 
@@ -1009,7 +1081,7 @@ exports.gestionarBajaConductor = async (req, res) => {
             let estadoRestaurado = 'Suspendido'; // Valor por defecto (seguridad)
 
             try {
-                // 🔍 CONSULTA A critical_changes_log (Usamos trx para consistencia)
+                // ðŸ” CONSULTA A critical_changes_log (Usamos trx para consistencia)
                 const ultimoLog = await trx('critical_changes_log')
                     .where('tipo_cambio', 'solicitud_baja_conductor')
                     .whereRaw("datos_sensibles->>'conductor_id' = ?", [id])
@@ -1027,10 +1099,10 @@ exports.gestionarBajaConductor = async (req, res) => {
                     }
                 }
             } catch (error) {
-                console.error('⚠️ No se pudo leer historial, usando default:', error);
+                console.error('âš ï¸ No se pudo leer historial, usando default:', error);
             }
 
-            // 📝 RESTAURAMOS EL ESTADO (Aquí era donde fallaba antes)
+            // ðŸ“ RESTAURAMOS EL ESTADO (AquÃ­ era donde fallaba antes)
             await trx(TABLES.CONDUCTORES)
                 .where('id', id)
                 .update({ 
@@ -1038,7 +1110,7 @@ exports.gestionarBajaConductor = async (req, res) => {
                     updated_at: new Date()
                 });
             
-            // Registramos el rechazo en auditoría también
+            // Registramos el rechazo en auditorÃ­a tambiÃ©n
             await auditService.logCriticalChange({
                 usuario_id: req.user.id,
                 tipo_cambio: 'rechazo_baja_conductor',
@@ -1051,13 +1123,13 @@ exports.gestionarBajaConductor = async (req, res) => {
             
             return res.json({ 
                 success: true, 
-                message: `Solicitud rechazada. El conductor regresó al estado: ${estadoRestaurado}` 
+                message: `Solicitud rechazada. El conductor regresÃ³ al estado: ${estadoRestaurado}` 
             });
         }
         
-        // Si la acción no es ni aprobar ni rechazar
+        // Si la acciÃ³n no es ni aprobar ni rechazar
         await trx.rollback();
-        return res.status(400).json({ error: 'Acción no válida' });
+        return res.status(400).json({ error: 'AcciÃ³n no vÃ¡lida' });
 
     } catch (error) {
         await trx.rollback();
@@ -1081,6 +1153,7 @@ exports.asignarVehiculo = async (req, res) => {
 
     const conductor = await trx('conductores')
       .where('id', id)
+      .select('id', 'nombre_conductor')
       .first();
 
     if (!conductor) {
@@ -1170,11 +1243,24 @@ exports.asignarVehiculo = async (req, res) => {
         });
     }
 
+    // =========================================================
+    // ðŸ›¡ï¸ FIX ZONA HORARIA Y TIPO DE DATO INDESTRUCTIBLE
+    // =========================================================
+    let fechaSegura;
+    
+    if (!fechaInicio) {
+      fechaSegura = new Date();
+      fechaSegura.setHours(12, 0, 0, 0);
+    } else {
+      const fechaString = new Date(fechaInicio).toISOString().split('T')[0];
+      fechaSegura = new Date(fechaString + 'T12:00:00');
+    }
+
     const [nuevaAsignacion] = await trx('asignaciones')
       .insert({
         conductor_id: id,
         vehiculo_id: vehiculoId,
-        fecha_inicio: fechaInicio || new Date(),
+        fecha_inicio: fechaSegura, // ðŸ‘ˆ Usamos la fecha segura
         renta_diaria: rentaDiaria || 400,
         abono_poliza_mantenimiento: abonoPoliza || 100,
         url_contrato_digital: urlContrato || null,
@@ -1189,6 +1275,7 @@ exports.asignarVehiculo = async (req, res) => {
       .update({
         estado: 'Asignado',
         conductor_asignado_id: id,
+        fecha_inicio_corrida: fechaSegura, // ðŸ‘ˆ Y tambiÃ©n inyectamos la fecha segura acÃ¡
         updated_at: new Date()
       });
 
@@ -1319,7 +1406,10 @@ exports.desasignarVehiculo = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Vehiculo desasignado exitosamente'
+      message: 'Vehiculo desasignado exitosamente',
+      vehiculo_id: asignacion.vehiculo_id,
+      conductor_id: parseInt(id, 10),
+      sugerencia_snapshot_tipo: 'devolucion_conductor'
     });
 
   } catch (error) {
@@ -1345,7 +1435,7 @@ exports.desasignarVehiculo = async (req, res) => {
 
 // ========== CAMBIAR STATUS DEL CONDUCTOR ==========
 exports.cambiarStatus = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   const trx = await db.transaction();
   
   try {
@@ -1359,7 +1449,7 @@ exports.cambiarStatus = async (req, res) => {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'Status inválido',
+        error: 'Status invÃ¡lido',
         statusValidos
       });
     }
@@ -1386,7 +1476,7 @@ exports.cambiarStatus = async (req, res) => {
         updated_at: new Date()
       });
     
-    // Si es suspensión o rechazo, desactivar asignaciones
+    // Si es suspensiÃ³n o rechazo, desactivar asignaciones
     if (status === 'Suspendido' || status === 'Rechazado') {
       await trx('asignaciones')
         .where('conductor_id', id)
@@ -1397,7 +1487,7 @@ exports.cambiarStatus = async (req, res) => {
           updated_at: new Date()
         });
       
-      // Liberar vehículo si lo tenía
+      // Liberar vehÃ­culo si lo tenÃ­a
       await trx('vehiculos')
         .where('conductor_asignado_id', id)
         .update({
@@ -1417,7 +1507,7 @@ exports.cambiarStatus = async (req, res) => {
       }
     }
     
-    // Si es aprobación, activar usuario
+    // Si es aprobaciÃ³n, activar usuario
     if (status === 'Aprobado' && conductor.usuario_id) {
       await trx('usuarios')
         .where('id', conductor.usuario_id)
@@ -1427,7 +1517,7 @@ exports.cambiarStatus = async (req, res) => {
         });
     }
     
-    // Registrar cambio crítico
+    // Registrar cambio crÃ­tico
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'cambio_status_conductor',
@@ -1479,12 +1569,12 @@ exports.getOpcionesConductores = async (req, res) => {
       statusTrabajo: ['activo', 'inactivo', 'ocupado'],
       verificacionAntecedentes: ['Pendiente', 'Aprobada', 'Rechazada', 'En Proceso'],
       
-      // ✅ CORRECCIÓN: Categorías del Plan de Carrera Real
+      // âœ… CORRECCIÃ“N: CategorÃ­as del Plan de Carrera Real
       categoria: [
         'Oro',          // Nivel inicial (Periodo de prueba)
         'Platino',      // Nivel intermedio
         'Diamante',     // Nivel avanzado
-        'Socio Dueño'   // Nivel máximo (Con vehículo propio)
+        'Socio DueÃ±o'   // Nivel mÃ¡ximo (Con vehÃ­culo propio)
       ],
       
       tipoSocio: ['Empleado', 'Socio', 'Externo'],
@@ -1516,12 +1606,12 @@ exports.getOpcionesConductores = async (req, res) => {
   }
 };
 
-// ========== OBTENER ESTADÍSTICAS DE CONDUCTORES ==========
+// ========== OBTENER ESTADÃSTICAS DE CONDUCTORES ==========
 exports.getEstadisticasConductores = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   try {
     const [estadisticas, top5Calificados, conMasRentas] = await Promise.all([
-      // Estadísticas generales
+      // EstadÃ­sticas generales
       db('conductores')
         .select(
           db.raw('COUNT(*) as total'),
@@ -1544,7 +1634,7 @@ exports.getEstadisticasConductores = async (req, res) => {
         .limit(5)
         .select('id', 'nombre_conductor', 'calificacion_promedio'),
       
-      // Top 5 con más rentas pagadas
+      // Top 5 con mÃ¡s rentas pagadas
       db('conductores as c')
         .leftJoin('rentas as r', function() {
           this.on('c.id', '=', 'r.conductor_id')
@@ -1561,7 +1651,7 @@ exports.getEstadisticasConductores = async (req, res) => {
         )
     ]);
     
-    // Conductores con vehículos asignados
+    // Conductores con vehÃ­culos asignados
     const conVehiculoAsignado = await db('asignaciones')
       .where('activa', true)
       .count('id as count')
@@ -1590,7 +1680,7 @@ exports.getEstadisticasConductores = async (req, res) => {
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error obteniendo estadísticas de conductores: ${error.message}`,
+      mensaje: `Error obteniendo estadÃ­sticas de conductores: ${error.message}`,
       stack_trace: error.stack,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
@@ -1599,15 +1689,15 @@ exports.getEstadisticasConductores = async (req, res) => {
     
     res.status(500).json({
       success: false,
-      error: 'Error al obtener estadísticas',
+      error: 'Error al obtener estadÃ­sticas',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
-// ========== 🆕 OBTENER AMONESTACIONES DE UN CONDUCTOR ==========
+// ========== ðŸ†• OBTENER AMONESTACIONES DE UN CONDUCTOR ==========
 exports.getAmonestaciones = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   try {
     const { id } = req.params;
     const conductorId = parseInt(id);
@@ -1615,7 +1705,7 @@ exports.getAmonestaciones = async (req, res) => {
     if (isNaN(conductorId)) {
       return res.status(400).json({
         success: false,
-        error: 'ID de conductor inválido'
+        error: 'ID de conductor invÃ¡lido'
       });
     }
     
@@ -1637,7 +1727,7 @@ exports.getAmonestaciones = async (req, res) => {
       .where('ac.conductor_id', conductorId)
       .select(
         'ac.*',
-        'u.nombre_completo as registrado_por_nombre_usuario',  // ✅ CORREGIDO
+        'u.nombre_completo as registrado_por_nombre_usuario',  // âœ… CORREGIDO
         'u.email as registrado_por_email'
       )
       .orderBy('ac.fecha', 'desc');
@@ -1686,9 +1776,9 @@ exports.getAmonestaciones = async (req, res) => {
   }
 };
 
-// ========== 🆕 AGREGAR AMONESTACIÓN A CONDUCTOR ==========
+// ========== ðŸ†• AGREGAR AMONESTACIÃ“N A CONDUCTOR ==========
 exports.amonestar = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   const trx = await db.transaction();
   
   try {
@@ -1699,7 +1789,7 @@ exports.amonestar = async (req, res) => {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'El motivo de la amonestación es obligatorio'
+        error: 'El motivo de la amonestaciÃ³n es obligatorio'
       });
     }
     
@@ -1729,7 +1819,7 @@ exports.amonestar = async (req, res) => {
     
     const total = parseInt(totalAmonestaciones?.count || 0);
     
-    // Crear la amonestación
+    // Crear la amonestaciÃ³n
     const [nuevaAmonestacion] = await trx('amonestaciones_conductores')
       .insert({
         conductor_id: id,
@@ -1763,7 +1853,7 @@ exports.amonestar = async (req, res) => {
           updated_at: new Date()
         });
       
-      // Liberar vehículo
+      // Liberar vehÃ­culo
       await trx('vehiculos')
         .where('conductor_asignado_id', id)
         .update({
@@ -1773,11 +1863,11 @@ exports.amonestar = async (req, res) => {
         });
     }
     
-    // Registrar cambio crítico
+    // Registrar cambio crÃ­tico
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'amonestacion_conductor',
-      descripcion: `Amonestación ${gravedadFinal} registrada para ${conductor.nombre_conductor}: ${motivo}`,
+      descripcion: `AmonestaciÃ³n ${gravedadFinal} registrada para  (): ${motivo}`,
       datos_sensibles: {
         conductor_id: id,
         amonestacion_id: nuevaAmonestacion.id,
@@ -1794,8 +1884,8 @@ exports.amonestar = async (req, res) => {
     res.status(201).json({
       success: true,
       message: total + 1 >= 3 
-        ? 'Amonestación registrada. El conductor ha sido suspendido por alcanzar 3 amonestaciones.'
-        : 'Amonestación registrada exitosamente',
+        ? 'AmonestaciÃ³n registrada. El conductor ha sido suspendido por alcanzar 3 amonestaciones.'
+        : 'AmonestaciÃ³n registrada exitosamente',
       amonestacion: {
         id: nuevaAmonestacion.id,
         motivo: nuevaAmonestacion.motivo,
@@ -1822,15 +1912,15 @@ exports.amonestar = async (req, res) => {
     
     res.status(500).json({
       success: false,
-      error: 'Error al registrar amonestación',
+      error: 'Error al registrar amonestaciÃ³n',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
-// ========== 🆕 PROMOVER A SOCIO DUEÑO ==========
+// ========== ðŸ†• PROMOVER A SOCIO DUEÃ‘O ==========
 exports.promoverASocioDueno = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   const trx = await db.transaction();
   
   try {
@@ -1851,16 +1941,16 @@ exports.promoverASocioDueno = async (req, res) => {
       });
     }
     
-    // Verificar que esté aprobado
+    // Verificar que estÃ© aprobado
     if (conductor.status !== 'Aprobado') {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'El conductor debe estar aprobado para ser promovido a Socio Dueño'
+        error: 'El conductor debe estar aprobado para ser promovido a Socio DueÃ±o'
       });
     }
     
-    // Verificar amonestaciones (no debe tener 3 o más)
+    // Verificar amonestaciones (no debe tener 3 o mÃ¡s)
     const totalAmonestaciones = await trx('amonestaciones_conductores')
       .where('conductor_id', id)
       .count('id as count')
@@ -1872,18 +1962,18 @@ exports.promoverASocioDueno = async (req, res) => {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'El conductor tiene 3 o más amonestaciones y no puede ser promovido'
+        error: 'El conductor tiene 3 o mÃ¡s amonestaciones y no puede ser promovido'
       });
     }
     
-    // Determinar siguiente categoría
+    // Determinar siguiente categorÃ­a
 const categoriaActual = conductor.categoria || 'Oro';
 const mapaCategorias = {
   'B': 'Oro',
   'Oro': 'Platino',
   'Platino': 'Diamante',
-  'Diamante': 'Socio Dueño',
-  'Socio Dueño': 'Socio Dueño'
+  'Diamante': 'Socio DueÃ±o',
+  'Socio DueÃ±o': 'Socio DueÃ±o'
 };
 
 const nuevaCategoria = mapaCategorias[categoriaActual];
@@ -1892,11 +1982,11 @@ if (nuevaCategoria === categoriaActual) {
   await trx.rollback();
   return res.status(400).json({
     success: false,
-    error: 'El conductor ya alcanzó la categoría máxima'
+    error: 'El conductor ya alcanzÃ³ la categorÃ­a mÃ¡xima'
   });
 }
 
-// Actualizar categoría
+// Actualizar categorÃ­a
 const [conductorActualizado] = await trx('conductores')
   .where('id', id)
   .update({
@@ -1906,7 +1996,7 @@ const [conductorActualizado] = await trx('conductores')
   })
   .returning('*');
     
-    // OPCIONAL: Si tenía vehículo SA asignado, desasignarlo
+    // OPCIONAL: Si tenÃ­a vehÃ­culo SA asignado, desasignarlo
     const asignacionActiva = await trx('asignaciones as a')
       .join('vehiculos as v', 'a.vehiculo_id', 'v.id')
       .where('a.conductor_id', id)
@@ -1932,15 +2022,15 @@ const [conductorActualizado] = await trx('conductores')
         });
     }
     
-    // Registrar cambio crítico
+    // Registrar cambio crÃ­tico
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'promocion_socio_dueno',
-      descripcion: `${conductor.nombre_conductor} promovido a Socio Dueño`,
+      descripcion: `${conductor.nombre_conductor} promovido a Socio DueÃ±o`,
       datos_sensibles: {
         conductor_id: id,
         categoria_anterior: conductor.categoria,
-        categoria_nueva: 'Socio Dueño',
+        categoria_nueva: 'Socio DueÃ±o',
         vehiculo_sa_desasignado: !!asignacionActiva
       },
       ip_address: auditService.getClientIp(req),
@@ -1951,7 +2041,7 @@ const [conductorActualizado] = await trx('conductores')
     
     res.json({
       success: true,
-      message: '¡Conductor promovido a Socio Dueño exitosamente!',
+      message: 'Â¡Conductor promovido a Socio DueÃ±o exitosamente!',
       conductor: {
         id: conductorActualizado.id,
         nombre: conductorActualizado.nombre_conductor,
@@ -1967,7 +2057,7 @@ const [conductorActualizado] = await trx('conductores')
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error promoviendo conductor ${req.params.id} a Socio Dueño: ${error.message}`,
+      mensaje: `Error promoviendo conductor ${req.params.id} a Socio DueÃ±o: ${error.message}`,
       stack_trace: error.stack,
       ip_address: auditService.getClientIp(req),
       url: req.originalUrl,
@@ -1982,9 +2072,9 @@ const [conductorActualizado] = await trx('conductores')
   }
 };
 
-// ========== 🆕 AJUSTAR SALDO DE PÓLIZA MECÁNICA ==========
+// ========== ðŸ†• AJUSTAR SALDO DE PÃ“LIZA MECÃNICA ==========
 exports.ajustarPolizaMecanica = async (req, res) => {
-  // ... (Tu código sin cambios)
+  // ... (Tu cÃ³digo sin cambios)
   const trx = await db.transaction();
   
   try {
@@ -1995,7 +2085,7 @@ exports.ajustarPolizaMecanica = async (req, res) => {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'El monto del ajuste es obligatorio y debe ser numérico'
+        error: 'El monto del ajuste es obligatorio y debe ser numÃ©rico'
       });
     }
     
@@ -2014,7 +2104,7 @@ exports.ajustarPolizaMecanica = async (req, res) => {
       await trx.rollback();
       return res.status(400).json({
         success: false,
-        error: 'Tipo de ajuste inválido. Debe ser "descuento" o "recarga"'
+        error: 'Tipo de ajuste invÃ¡lido. Debe ser "descuento" o "recarga"'
       });
     }
     
@@ -2033,7 +2123,32 @@ exports.ajustarPolizaMecanica = async (req, res) => {
       });
     }
     
-    const saldoActual = parseFloat(conductor.saldo_poliza_mecanica || 50000);
+    const asignacion = await trx('asignaciones')
+      .where({ conductor_id: id, activa: true })
+      .first();
+
+    if (!asignacion) {
+      await trx.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'El conductor no tiene vehÃƒÂ­culo asignado'
+      });
+    }
+
+    const vehiculo = await trx('vehiculos')
+      .where('id', asignacion.vehiculo_id)
+      .select('id', 'numero_vehiculo', 'poliza_mecanica')
+      .first();
+
+    if (!vehiculo) {
+      await trx.rollback();
+      return res.status(404).json({
+        success: false,
+        error: 'VehÃƒÂ­culo asignado no encontrado'
+      });
+    }
+
+    const saldoActual = parseFloat(vehiculo.poliza_mecanica || 0);
     let nuevoSaldo;
     
     if (tipo_ajuste === 'descuento') {
@@ -2042,7 +2157,7 @@ exports.ajustarPolizaMecanica = async (req, res) => {
         await trx.rollback();
         return res.status(400).json({
           success: false,
-          error: 'Saldo insuficiente en la póliza mecánica',
+          error: 'Saldo insuficiente en la pÃ³liza mecÃ¡nica',
           saldo_actual: saldoActual,
           monto_solicitado: montoFinal
         });
@@ -2052,20 +2167,21 @@ exports.ajustarPolizaMecanica = async (req, res) => {
     }
     
     // Actualizar saldo
-    await trx('conductores')
-      .where('id', id)
+    await trx('vehiculos')
+      .where('id', vehiculo.id)
       .update({
-        saldo_poliza_mecanica: nuevoSaldo,
+        poliza_mecanica: nuevoSaldo,
         updated_at: new Date()
       });
     
-    // Registrar cambio crítico
+    // Registrar cambio crÃ­tico
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'ajuste_poliza_mecanica',
-      descripcion: `Póliza mecánica ${tipo_ajuste === 'descuento' ? 'descontada' : 'recargada'} para ${conductor.nombre_conductor}: $${montoFinal.toFixed(2)}`,
+      descripcion: `Poliza mecanica ${tipo_ajuste === 'descuento' ? 'descontada' : 'recargada'} para ${conductor.nombre_conductor} (${vehiculo.numero_vehiculo}): $${montoFinal.toFixed(2)}`,
       datos_sensibles: {
         conductor_id: id,
+        vehiculo_id: vehiculo.id,
         tipo_ajuste,
         monto: montoFinal,
         saldo_anterior: saldoActual,
@@ -2080,12 +2196,13 @@ exports.ajustarPolizaMecanica = async (req, res) => {
     
     res.json({
       success: true,
-      message: `Póliza mecánica ${tipo_ajuste === 'descuento' ? 'descontada' : 'recargada'} exitosamente`,
+      message: `PÃ³liza mecÃ¡nica ${tipo_ajuste === 'descuento' ? 'descontada' : 'recargada'} exitosamente`,
       poliza: {
         saldo_anterior: saldoActual,
         monto_ajuste: montoFinal,
         tipo_ajuste,
-        saldo_nuevo: nuevoSaldo
+        saldo_nuevo: nuevoSaldo,
+        vehiculo: vehiculo.numero_vehiculo
       }
     });
     
@@ -2095,7 +2212,7 @@ exports.ajustarPolizaMecanica = async (req, res) => {
     await auditService.logError({
       usuario_id: req.user?.id,
       nivel: 'error',
-      mensaje: `Error ajustando póliza mecánica del conductor ${req.params.id}: ${error.message}`,
+      mensaje: `Error ajustando pÃ³liza mecÃ¡nica del conductor ${req.params.id}: ${error.message}`,
       stack_trace: error.stack,
       contexto: req.body,
       ip_address: auditService.getClientIp(req),
@@ -2105,14 +2222,14 @@ exports.ajustarPolizaMecanica = async (req, res) => {
     
     res.status(500).json({
       success: false,
-      error: 'Error al ajustar póliza mecánica',
+      error: 'Error al ajustar pÃ³liza mecÃ¡nica',
       message: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
 
-// --- 👇 CAMBIO 3: AÑADIMOS LA NUEVA FUNCIÓN COMPLETA AQUÍ 👇 ---
+// ---  CAMBIO 3: AÃ‘ADIMOS LA NUEVA FUNCIÃ“N COMPLETA AQUÃ  ---
 
 /**
  * Crea una cuenta de acceso (usuario) para un conductor existente
@@ -2123,7 +2240,7 @@ exports.crearAccesoConductor = async (req, res) => {
   const { id } = req.params; // ID del Conductor
 
   try {
-    // 1. Establecer contexto de auditoría
+    // 1. Establecer contexto de auditorÃ­a
     await auditService.setUserContext(trx, req.user);
 
     // 2. Obtener el conductor
@@ -2140,22 +2257,22 @@ exports.crearAccesoConductor = async (req, res) => {
     }
 
     // 4. Preparar y validar datos del nuevo usuario
-    // Usar email del conductor o, si no existe, crear uno con el teléfono
+    // Usar email del conductor o, si no existe, crear uno con el telÃ©fono
     const email = (conductor.email || `${conductor.numero_telefono}@driver.automanager.com`).toLowerCase().trim();
     
     if (!email || email === '@driver.automanager.com') {
       await trx.rollback();
-      return res.status(400).json({ success: false, error: 'El conductor no tiene un email o número de teléfono registrado para crear una cuenta.' });
+      return res.status(400).json({ success: false, error: 'El conductor no tiene un email o nÃºmero de telÃ©fono registrado para crear una cuenta.' });
     }
 
-    // 5. Verificar que el email no esté en uso en la tabla USUARIOS
+    // 5. Verificar que el email no estÃ© en uso en la tabla USUARIOS
     const emailExistente = await trx(TABLES.USUARIOS).where('email', email).first();
     if (emailExistente) {
       await trx.rollback();
-      return res.status(400).json({ success: false, error: `El email '${email}' ya está en uso por otro usuario (ID: ${emailExistente.id}).` });
+      return res.status(400).json({ success: false, error: `El email '${email}' ya estÃ¡ en uso por otro usuario (ID: ${emailExistente.id}).` });
     }
     
-    // 6. Generar contraseña temporal
+    // 6. Generar contraseÃ±a temporal
     const passwordTemporal = generateTempPassword();
     const hashedPassword = await bcrypt.hash(passwordTemporal, 10);
     
@@ -2179,11 +2296,11 @@ exports.crearAccesoConductor = async (req, res) => {
       .where('id', id)
       .update({
         usuario_id: nuevoUsuario.id,
-        email: email, // Actualizamos el email del conductor por si no lo tenía
+        email: email, // Actualizamos el email del conductor por si no lo tenÃ­a
         updated_at: new Date()
       });
 
-    // 9. Registrar en auditoría
+    // 9. Registrar en auditorÃ­a
     await auditService.logCriticalChange({
       usuario_id: req.user.id,
       tipo_cambio: 'creacion_acceso_conductor',
@@ -2194,10 +2311,10 @@ exports.crearAccesoConductor = async (req, res) => {
         email_creado: email 
       },
       ip_address: auditService.getClientIp(req),
-      requiere_revision: false // Es una acción administrativa normal
+      requiere_revision: false // Es una acciÃ³n administrativa normal
     });
     
-    // 10. Confirmar transacción
+    // 10. Confirmar transacciÃ³n
     await trx.commit();
 
     // 11. Enviar respuesta exitosa al frontend
@@ -2231,3 +2348,4 @@ exports.crearAccesoConductor = async (req, res) => {
 
 
 module.exports = exports;
+

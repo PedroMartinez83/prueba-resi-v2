@@ -97,7 +97,7 @@ async function motorDeBusquedaInteligente(termino) {
     .orWhere('c.email', 'ilike', term)
     .select(
       'c.id', 'c.nombre_conductor', 'c.numero_telefono', 'c.status', 'c.categoria',
-      'c.saldo_poliza_mecanica', 'v.numero_vehiculo', 'v.marca', 'v.modelo'
+      'v.poliza_mecanica as saldo_poliza_mecanica', 'v.numero_vehiculo', 'v.marca', 'v.modelo'
     )
     .first();
 

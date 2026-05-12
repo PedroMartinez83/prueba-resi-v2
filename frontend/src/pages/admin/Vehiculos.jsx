@@ -1,6 +1,6 @@
 // frontend/src/pages/admin/Vehiculos.jsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Search, AlertCircle, Check, X, AlertTriangle, Calculator, LayoutGrid, List } from 'lucide-react';
+import { Plus, Search, AlertCircle, Check, X, AlertTriangle, Calculator, LayoutGrid, List, Shield, Car } from 'lucide-react';
 import adminService from '../../services/adminService';
 import CalculadoraInversion from '../../components/inversiones/CalculadoraInversion';
 import ModalInversionistas from '../../components/inversiones/ModalInversionistas';
@@ -10,8 +10,11 @@ import VehiculosSkeleton from '../../components/vehiculos/VehiculosSkeleton';
 import VehiculosTable from '../../components/vehiculos/VehiculosTable';
 import VehiculosGrid from '../../components/vehiculos/VehiculosGrid';
 import VehiculoDrawer from '../../components/vehiculos/VehiculoDrawer';
+import InventarioModal from '../../components/vehiculos/InventarioModal';
 import { VehiculoFormProvider } from '../../contexts/VehiculoFormContext.jsx';
 import { useAuth } from '../../contexts/AuthContext';
+import PolizasModal from '../../components/vehiculos/PolizasModal.jsx';
+import ModelosModal from '../../components/vehiculos/ModelosModal.jsx';
 
 // Componente Toast
 const Toast = ({ message, type = 'success', onClose }) => {
@@ -60,12 +63,16 @@ const Vehiculos = () => {
     inversion: false
   });
   const [pendienteAbrirDrawer, setPendienteAbrirDrawer] = useState(false);
+  const [showPolizasModal, setShowPolizasModal] = useState(false);
+  const [showModelosModal, setShowModelosModal] = useState(false);
+  const [showInventarioModal, setShowInventarioModal] = useState(false);
+  const [vehiculoInventario, setVehiculoInventario] = useState(null);
+  const [inventarioSnapshotTipo, setInventarioSnapshotTipo] = useState('alta_inicial');
   
   
   // Estados para inversiones
   const [showCalculadora, setShowCalculadora] = useState(false);
   const [showModalInversionista, setShowModalInversionista] = useState(false);
-  const [showModalDecision, setShowModalDecision] = useState(false);
   const [requiereInversion, setRequiereInversion] = useState(false);
   const [inversionistaSeleccionado, setInversionistaSeleccionado] = useState(null);
   const [calculosInversion, setCalculosInversion] = useState(null);
@@ -127,15 +134,16 @@ const Vehiculos = () => {
     cargarDatos();
   }, []);
 
-  useEffect(() => {
-  // NO recalcular si calculosInversion ya tiene el campo modelo
-  if (requiereInversion && 
-      datosInversion.valor_factura && 
-      datosInversion.renta_diaria && 
-      !calculosInversion?.modelo) {
-    calcularInversionAuto();
-  }
-}, [datosInversion, requiereInversion, calculosInversion]);
+useEffect(() => {
+    // 🚀 FIX: Verificamos si NO existen cálculos en general, 
+    // porque ya no usamos la palabra 'modelo' para evitar que cambie tu combobox.
+    if (requiereInversion && 
+        datosInversion.valor_factura && 
+        datosInversion.renta_diaria && 
+        !calculosInversion) {
+      calcularInversionAuto();
+    }
+  }, [datosInversion, requiereInversion, calculosInversion]);
 
   // Validación en tiempo real con detección de errores por pestaña
   useEffect(() => {
@@ -218,15 +226,18 @@ const Vehiculos = () => {
       setCargandoOpciones(true);
       const response = await adminService.getOpcionesVehiculos();
       
+      // Verificamos que la respuesta exista antes de tratar de leerla
       if (response && response.opciones) {
+        
+        //  AQUÍ ESTÁ EL ARREGLO: Usamos "response" en lugar de "data"
         setOpcionesDinamicas({
           tipoSocio: response.opciones.tipoSocio || ['SD', 'SI', 'SA'],
           tipoVehiculo: response.opciones.tipoVehiculo || ['Sedan', 'SUV', 'Pickup'],
           tipoCombustible: response.opciones.tipoCombustible || ['Gasolina', 'Eléctrico'],
           color: response.opciones.color || ['Blanco', 'Negro', 'Gris'],
           estado: response.opciones.estado || ['Disponible', 'Rentado', 'Mantenimiento'],
-          marcas: response.opciones.marcas || ['Nissan', 'BYD'],
-          modelos: response.opciones.modelos || ['Versa', 'March', 'V-Drive']
+          marcas: response.opciones.marcas || [],
+          modelos: response.opciones.modelos || []
         });
       }
     } catch (error) {
@@ -281,6 +292,10 @@ const Vehiculos = () => {
     if (!formData.Placa) errors.push('Placa es requerida');
     if (!formData.NumeroSerie) errors.push('Número de serie es requerido');
     
+    if (!vehiculoEdit && formData.NumeroSerie && !/^[A-Z0-9]{17}$/.test(String(formData.NumeroSerie).toUpperCase())) {
+      errors.push('El VIN debe tener exactamente 17 caracteres alfanumericos');
+    }
+
     const currentYear = new Date().getFullYear();
     if (formData.Año < 1990 || formData.Año > currentYear + 1) {
       errors.push(`El año debe estar entre 1990 y ${currentYear + 1}`);
@@ -297,11 +312,33 @@ const Vehiculos = () => {
 
   // ========== 🔧 FUNCIÓN handleSubmit MODIFICADA ==========
   const handleSubmit = async () => {
+    // 1. Validación normal de la pestaña GENERAL y MANTENIMIENTO
     const errores = validarFormulario();
     if (errores.length > 0) {
       mostrarToast(errores[0], 'error');
       return;
     }
+    const esEdicion = Boolean(vehiculoEdit);
+    
+    // ==============================================================
+    // 🚨 NUEVO CADENERO: Validar la pestaña de INVERSIÓN (Obligatoria)
+    // ==============================================================
+    // Solo forzamos inversión en altas nuevas. En edición se permite actualizar
+    // sin bloquear por campos financieros para evitar fricción operativa.
+    if (!esEdicion) {
+      // Verificamos que haya llenado los campos clave de la pestaña financiera
+      if (!datosInversion.valor_factura || !datosInversion.renta_diaria) {
+        mostrarToast('⚠️ Faltan datos financieros. Completa el Precio del Vehículo y la Renta Diaria en la pestaña de Inversión.', 'warning');
+        return; // ¡Cortamos la ejecución!
+      }
+
+      // Verificamos que la calculadora sí exista en memoria (que no esté en blanco)
+      if (!calculosInversion) {
+        mostrarToast('⚠️ Faltan los cálculos financieros. Revisa la pestaña de Inversión.', 'warning');
+        return; // ¡Cortamos la ejecución!
+      }
+    }
+    // ==============================================================
     
     setGuardando(true);
     
@@ -309,9 +346,18 @@ const Vehiculos = () => {
       const datosVehiculo = {};
       Object.keys(formData).forEach(key => {
         const valor = formData[key];
-        
-        // NO enviar PolizaSeguroId ni ConductorAsignadoId si son null
-        if ((key === 'PolizaSeguroId' || key === 'ConductorAsignadoId') && (!valor || valor === null)) {
+
+        // ConductorAsignadoId se administra solo en flujos dedicados (asignar/cambiar).
+        if (key === 'ConductorAsignadoId') {
+          return;
+        }
+
+        // NumeroVehiculo es derivado/estable y no se edita por update manual.
+        if (key === 'NumeroVehiculo' && vehiculoEdit) {
+          return;
+        }
+
+        if (key === 'PolizaSeguroId' && (!valor || valor === null)) {
           return;
         }
         
@@ -326,9 +372,6 @@ const Vehiculos = () => {
         }
       });
 
-      if (!datosVehiculo.NumeroVehiculo) {
-        datosVehiculo.NumeroVehiculo = `${datosVehiculo.TipoSocio}-${String(datosVehiculo.NumeroUnidad).padStart(4, '0')}`;
-      }
 
       // ========== 🔍 DEBUG COMPLETO - DIAGNÓSTICO ==========
       console.group('🔍 DIAGNÓSTICO COMPLETO - DATOS DE INVERSIÓN');
@@ -352,41 +395,52 @@ const Vehiculos = () => {
       console.groupEnd();
       // ========== FIN DEBUG ==========
 
-      // 🎯 NUEVA LÓGICA: Agregar campos según el modelo de negocio
+      // ==============================================================
+      // 🎯 NUEVA LÓGICA: Agregar campos financieros para TODOS (SD, SA, SI)
+      // ==============================================================
       if (requiereInversion && calculosInversion) {
-        console.log('✅ ENTRÓ EN LA CONDICIÓN - Procesando modelo:', calculosInversion.modelo);
-        
-        console.log('📊 Datos de inversión disponibles:', {
-          modelo: calculosInversion.modelo,
-          calculos: calculosInversion
-        });
+        const tipoSocioActual = datosVehiculo.TipoSocio || formData.TipoSocio || 'SD';
+        console.log(`✅ Procesando campos financieros generales para tipo: ${tipoSocioActual}`);
 
-        // 🚗 SI ES SOCIO DUEÑO (SD)
-        if (calculosInversion.modelo === 'SD') {
-          console.log('🚗 Guardando como Socio Dueño (SD)');
-          
-          datosVehiculo.TipoSocio = 'SD';
-          datosVehiculo.total_corrida = parseFloat(calculosInversion.corridaTotal || calculosInversion.datosVehiculo?.corrida_total || 0);
-          datosVehiculo.multiplicador_corrida = parseFloat(calculosInversion.multiplicadorUsado || calculosInversion.datosVehiculo?.tasa_rendimiento || 0);
-          datosVehiculo.plazo_corrida = parseInt(calculosInversion.plazoDefinido || calculosInversion.datosVehiculo?.plazo_meses || 0);
-          
-          console.log('✅ Campos SD agregados:', {
-            total_corrida: datosVehiculo.total_corrida,
-            multiplicador_corrida: datosVehiculo.multiplicador_corrida,
-            plazo_corrida: datosVehiculo.plazo_corrida
-          });
-        }
+        // SIN IMPORTAR el tipo de socio, inyectamos los datos financieros al vehículo
+        const corrida = calculosInversion.corridaTotal || calculosInversion.datosVehiculo?.corrida_total;
+        datosVehiculo.total_corrida = parseFloat(corrida) || 0;
+
+        const multiplicador = calculosInversion.multiplicadorUsado || calculosInversion.datosVehiculo?.tasa_rendimiento || calculosInversion.datosVehiculo?.multiplicador_usado;
+        datosVehiculo.multiplicador_corrida = parseFloat(multiplicador) || 0;
+
+        const plazo = calculosInversion.plazoDefinido || calculosInversion.datosVehiculo?.plazo_meses;
+        datosVehiculo.plazo_corrida = parseInt(plazo, 10) || 0;
+
+        const inversionTotal = calculosInversion.inversionTotal || calculosInversion.datosVehiculo?.inversion_total;
+        datosVehiculo.precio_compra = parseFloat(inversionTotal) || 0;
         
-        // 🏢 SI ES SI_LEGADO
-        if (calculosInversion.modelo === 'SI_LEGADO') {
-          console.log('🏢 Guardando como SI Legado');
-          datosVehiculo.TipoSocio = 'SI';
-        }
-      } else {
-        console.log('❌ NO ENTRÓ EN LA CONDICIÓN porque:');
-        console.log('   - requiereInversion es:', requiereInversion, '(debe ser true)');
-        console.log('   - calculosInversion es:', calculosInversion, '(debe existir)');
+        const rentaSugerida = calculosInversion.rentaDiaria || calculosInversion.datosVehiculo?.renta_diaria || datosInversion?.renta_diaria;
+        datosVehiculo.renta_sugerida = parseFloat(rentaSugerida) || 0;
+        
+        
+        console.log('✅ Campos Financieros agregados a datosVehiculo para TODOS:', {
+          total_corrida: datosVehiculo.total_corrida,
+          multiplicador_corrida: datosVehiculo.multiplicador_corrida,
+          plazo_corrida: datosVehiculo.plazo_corrida,
+          precio_compra: datosVehiculo.precio_compra, 
+          renta_sugerida: datosVehiculo.renta_sugerida
+        });
       }
+      // ==============================================================
+
+      // ==============================================================
+      // 🛠️ FIX DEFINITIVO DEL NÚMERO DE VEHÍCULO
+      // Lo construimos hasta el final para garantizar que ya tenemos el TipoSocio correcto
+      // ==============================================================
+      const tipoSocioFinal = datosVehiculo.TipoSocio || formData.TipoSocio || 'SD';
+      const numeroUnidadLimpio = String(datosVehiculo.NumeroUnidad || formData.NumeroUnidad || '0').padStart(4, '0');
+      
+      datosVehiculo.TipoSocio = tipoSocioFinal;
+      datosVehiculo.NumeroVehiculo = `${tipoSocioFinal}-${numeroUnidadLimpio}`;
+      
+      console.log('7️⃣ DATOS FINALES A ENVIAR AL BACKEND:', JSON.stringify(datosVehiculo, null, 2));
+      // ==============================================================
 
       console.log('7️⃣ datosVehiculo DESPUÉS de agregar campos SD:', JSON.stringify(datosVehiculo, null, 2));
 
@@ -416,7 +470,7 @@ const Vehiculos = () => {
             otros_gastos: datosInversion.otros_gastos,
             renta_diaria: 10400, // ✅ Fijo para SI_LEGADO
             plazo_meses: 62,     // ✅ Fijo para SI_LEGADO
-            tasa_rendimiento: 1.56, // ✅ Fijo para SI_LEGADO
+            tasa_rendimiento: 2.82, // ✅ Fijo para SI_LEGADO
             fecha_inicio: datosInversion.fecha_inicio
           };
           
@@ -446,14 +500,24 @@ const Vehiculos = () => {
           mostrarToast('Vehículo creado exitosamente', 'success');
         }
       }
-      
-      await cargarVehiculos();
-      cerrarDrawer();
 
-      // Resetear estados de inversión DESPUÉS de cerrar
+      if (!vehiculoEdit) {
+        const vehiculoCreado = vehiculoResponse?.vehiculo || null;
+        if (vehiculoCreado?.id) {
+          setVehiculoInventario(vehiculoCreado);
+          setShowInventarioModal(true);
+          mostrarToast('Vehiculo creado. Completa su inventario inicial para dejarlo listo.', 'warning');
+        }
+      }
+
+      await cargarVehiculos();
+      
+      // 2. 🧹 LIMPIEZA ABSOLUTA ANTES DE CERRAR
       setRequiereInversion(false);
       setInversionistaSeleccionado(null);
-      setCalculosInversion(null);
+      setCalculosInversion(null); // Matamos el cuadro azul
+      
+      // Limpiamos los datos de inversión
       setDatosInversion({
         valor_factura: '',
         polizas: '',
@@ -465,7 +529,13 @@ const Vehiculos = () => {
         tasa_rendimiento: 1.56,
         fecha_inicio: new Date().toISOString().split('T')[0]
       });
-      
+
+      // Si tienes un estado "formData", asegúrate de limpiarlo aquí también. 
+      // Algo como: setFormData(valoresIniciales);
+
+      // 3. 🚪 CERRAR EL DRAWER AL FINAL
+      cerrarDrawer();
+
     } catch (error) {
       console.error('❌ Error:', error);
       mostrarToast(error.message || 'Error al guardar el vehículo', 'error');
@@ -508,7 +578,7 @@ const Vehiculos = () => {
     }
   };
 
-  const abrirDrawer = (vehiculo = null) => {
+const abrirDrawer = (vehiculo = null) => {
     if (vehiculo) {
       setVehiculoEdit(vehiculo);
       setFormData({
@@ -565,23 +635,24 @@ const Vehiculos = () => {
         ConductorAsignadoId: null
       });
       
-      if (!calculosInversion && !requiereInversion) {
-        setDatosInversion({
-          valor_factura: '',
-          polizas: '',
-          placas: '',
-          gps: '',
-          otros_gastos: '',
-          renta_diaria: '',
-          plazo_meses: 62,
-          tasa_rendimiento: 1.56,
-          fecha_inicio: new Date().toISOString().split('T')[0]
-        });
-        setRequiereInversion(false);
-        setInversionistaSeleccionado(null);
-        setCalculosInversion(null);
-      }
+      // 🚀 ¡BRAM! LE QUITAMOS EL IF. 
+      // Limpieza OBLIGATORIA SIEMPRE que abres un nuevo formulario
+      setDatosInversion({
+        valor_factura: '',
+        polizas: '',
+        placas: '',
+        gps: '',
+        otros_gastos: '',
+        renta_diaria: '',
+        plazo_meses: 62,
+        tasa_rendimiento: 2.82,
+        fecha_inicio: new Date().toISOString().split('T')[0]
+      });
+      setRequiereInversion(false);
+      setInversionistaSeleccionado(null);
+      setCalculosInversion(null); // 💀 RIP Fantasma del cuadro azul
     }
+    
     setShowDrawer(true);
   };
 
@@ -589,7 +660,29 @@ const Vehiculos = () => {
     setShowDrawer(false);
     setVehiculoEdit(null);
     setGuardando(false);
+    // 💡 También es buena práctica matarlo al cerrar, por si acaso le dieron a "Cancelar"
+    setCalculosInversion(null);
+    setRequiereInversion(false);
   };
+
+  const abrirInventarioModal = (vehiculo, tipo = 'alta_inicial') => {
+    if (!vehiculo?.id) {
+      mostrarToast('No se pudo identificar el vehiculo', 'error');
+      return;
+    }
+    const tiposPermitidos = new Set(['alta_inicial', 'entrega_conductor', 'devolucion_conductor']);
+    const tipoNormalizado = tiposPermitidos.has(tipo) ? tipo : 'alta_inicial';
+    setVehiculoInventario(vehiculo);
+    setInventarioSnapshotTipo(tipoNormalizado);
+    setShowInventarioModal(true);
+  };
+
+  const cerrarInventarioModal = () => {
+    setShowInventarioModal(false);
+    setVehiculoInventario(null);
+    setInventarioSnapshotTipo('alta_inicial');
+  };
+
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-MX', {
@@ -619,8 +712,11 @@ const vehiculosFiltrados = useMemo(() => {
       
       // Coincidencia Dropdown
       // Nota: Aquí permitimos que pasen las 'Solicitud_baja' si el filtro es 'todos'
+      const pendienteInventario = !vehiculo.tiene_inventario_inicial;
+
       const matchFilter = 
         filterEstado === 'todos' ||
+        (filterEstado === 'inventario_pendiente' && pendienteInventario) ||
         (filterEstado === 'problemas' && (vehiculo.Estado === 'Siniestro' || vehiculo.Estado === 'Baja')) ||
         vehiculo.Estado === filterEstado || 
         (filterEstado === 'todos' && vehiculo.Estado === 'Solicitud_baja'); // Aseguramos que se vean en "todos"
@@ -654,6 +750,7 @@ const vehiculosFiltrados = useMemo(() => {
     rentados: vehiculos.filter(v => v.Estado === 'Rentado' || v.Estado === 'Asignado').length,
     mantenimiento: vehiculos.filter(v => v.Estado === 'Mantenimiento').length,
     problemas: vehiculos.filter(v => v.Estado === 'Siniestro' || v.Estado === 'Solicitud_baja').length,
+    inventarioPendiente: vehiculos.filter((v) => !v.tiene_inventario_inicial).length,
   }), [vehiculos]);
 
   const totalPages = useMemo(() => {
@@ -719,13 +816,37 @@ const vehiculosFiltrados = useMemo(() => {
           <h1 className="text-2xl sm:text-3xl font-bold text-white">Gestión de Vehículos</h1>
           <p className="text-sm sm:text-base text-gray-400">Administra tu flota vehicular</p>
         </div>
-        <button
-          onClick={() => setShowModalDecision(true)}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-primary to-primary-light text-white font-semibold rounded-lg hover:from-primary-light hover:to-primary transition-all duration-200 transform hover:scale-105 shadow-lg"
-        >
-          <Plus className="w-5 h-5" />
-          Agregar Vehículo
-        </button>
+        
+        {/*  Contenedor de botones  */}
+        <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-3">
+
+          {/* NUEVO BOTÓN: Gestión de Modelos */}
+          <button
+            onClick={() => setShowModelosModal(true)}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-700 border border-gray-600 transition-all duration-200 shadow-lg"
+          >
+            <Car className="w-5 h-5 text-green-400" />
+            Catálogo de Modelos
+          </button>
+          
+          {/* NUEVO BOTÓN: Pólizas */}
+          <button
+            onClick={() => setShowPolizasModal(true)}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-700 border border-gray-600 transition-all duration-200 shadow-lg"
+          >
+            <Shield className="w-5 h-5 text-blue-400" /> {/* Asegúrate de importar Shield de lucide-react */}
+            Gestión de Pólizas
+          </button>
+
+          {/* BOTÓN ORIGINAL: Agregar Vehículo */}
+          <button
+            onClick={() => abrirDrawer()} 
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-primary to-primary-light text-white font-semibold rounded-lg hover:from-primary-light hover:to-primary transition-all duration-200 transform hover:scale-105 shadow-lg"
+          >
+            <Plus className="w-5 h-5" />
+            Agregar Vehículo
+          </button>
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -736,7 +857,7 @@ const vehiculosFiltrados = useMemo(() => {
       />
 
       {/* Search Bar */}
-<div className="glass rounded-lg p-3 sm:p-4 border border-primary/20">
+      <div className="glass rounded-lg p-3 sm:p-4 border border-primary/20">
         <div className="flex flex-col md:flex-row gap-3 sm:gap-4">
           
           {/* 🟢 BARRA DE BÚSQUEDA MANUAL */}
@@ -825,6 +946,7 @@ const vehiculosFiltrados = useMemo(() => {
           onEdit={abrirDrawer}
           onDelete={handleDelete}
           onProcesarBaja={handleProcesarBaja}
+          onOpenInventario={abrirInventarioModal}
           puedeProcesarSolicitudesBaja={puedeProcesarSolicitudesBaja}
         />
       ) : (
@@ -832,6 +954,7 @@ const vehiculosFiltrados = useMemo(() => {
           vehiculos={paginatedVehiculos}
           onEdit={abrirDrawer}
           onDelete={handleDelete}
+          onOpenInventario={abrirInventarioModal}
         />
       )}
 
@@ -869,17 +992,11 @@ const vehiculosFiltrados = useMemo(() => {
         />
       </VehiculoFormProvider>
 
-      {/* Modal de Decisión */}
-      <ModalDecisionVehiculo
-        isOpen={showModalDecision}
-        onClose={() => setShowModalDecision(false)}
-        onCalcularInversion={() => setShowCalculadora(true)}
-        onAgregarManual={() => abrirDrawer()}
-      />
+
 
       {/* Modales */}
       {showCalculadora && (
-  <CalculadoraInversion
+    <CalculadoraInversion
     isOpen={showCalculadora}
     onClose={(resultado) => {
       if (resultado?.usarDatos) {
@@ -906,11 +1023,13 @@ const vehiculosFiltrados = useMemo(() => {
           modelo: resultado.modelo, // ✅ ESTO ES LO QUE FALTABA
           corridaTotal: resultado.calculos.corridaTotal || resultado.calculos.total_corrida,
           multiplicadorUsado: resultado.datosVehiculo.tasa_rendimiento,
-          plazoDefinido: resultado.datosVehiculo.plazo_meses
+          plazoDefinido: resultado.datosVehiculo.plazo_meses,
+          inversionTotal: resultado.calculos.inversionTotal || resultado.calculos.inversion_total || 0
+
         });
         
         setRequiereInversion(true);
-        setPendienteAbrirDrawer(true);
+
         
         console.log('✅ Estados actualizados correctamente:', {
           requiereInversion: true,
@@ -926,8 +1045,9 @@ const vehiculosFiltrados = useMemo(() => {
       setShowCalculadora(false);
     }}
     datosIniciales={datosInversion}
+    tipoSocio={formData?.TipoSocio}
   />
-)}
+      )}
 
       {showModalInversionista && (
         <ModalInversionistas
@@ -943,9 +1063,44 @@ const vehiculosFiltrados = useMemo(() => {
           }}
         />
       )}
+
+      {showPolizasModal && (
+        <PolizasModal 
+          isOpen={showPolizasModal} 
+          onClose={() => setShowPolizasModal(false)} 
+        />
+      )}
+
+      {showModelosModal && (
+        <ModelosModal 
+          isOpen={showModelosModal} 
+          onClose={() => {
+            setShowModelosModal(false); // Cierra el modal
+            
+            //  LA MAGIA: Le decimos a la página que vuelva a descargar las opciones
+            if (typeof cargarOpciones === 'function') {
+              cargarOpciones(); 
+            } else if (typeof cargarDatos === 'function') {
+              cargarDatos(); // Usa esta si tu función principal se llama cargarDatos
+            }
+          }} 
+        />
+      )}
+
+      {showInventarioModal && (
+        <InventarioModal
+          isOpen={showInventarioModal}
+          onClose={cerrarInventarioModal}
+          vehiculo={vehiculoInventario}
+          notify={mostrarToast}
+          onSaved={cargarVehiculos}
+          initialSnapshotTipo={inventarioSnapshotTipo}
+        />
+      )}
       
     </div>
   );
 };
 
 export default Vehiculos;
+

@@ -173,7 +173,6 @@ class AdminService {
       throw error;
     }
   }
-
   /**
    * Elimina un vehículo
    * @param {string|number} id - ID del vehículo
@@ -193,10 +192,55 @@ class AdminService {
     }
   }
 
-  /**
-   * Obtiene opciones para los selects de vehículos
-   * @returns {Promise<Object>} Opciones disponibles
-   */
+  async getInventariosVehiculo(vehiculoId) {
+    if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+    return this.fetchWithAuth(`/admin/vehiculos/${vehiculoId}/inventarios`);
+  }
+
+  async getInventarioVehiculoById(vehiculoId, snapshotId) {
+    if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+    if (!snapshotId) throw new Error('ID de inventario requerido');
+    return this.fetchWithAuth(`/admin/vehiculos/${vehiculoId}/inventarios/${snapshotId}`);
+  }
+
+  async createInventarioVehiculo(vehiculoId, data) {
+    if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+    if (!data) throw new Error('Datos de inventario requeridos');
+
+    const options = { method: 'POST' };
+    options.body = data instanceof FormData ? data : JSON.stringify(data);
+    return this.fetchWithAuth(`/admin/vehiculos/${vehiculoId}/inventarios`, options);
+  }
+
+  async updateInventarioVehiculo(vehiculoId, snapshotId, data) {
+    if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+    if (!snapshotId) throw new Error('ID de inventario requerido');
+    if (!data) throw new Error('Datos de inventario requeridos');
+
+    const options = { method: 'PUT' };
+    options.body = data instanceof FormData ? data : JSON.stringify(data);
+    return this.fetchWithAuth(`/admin/vehiculos/${vehiculoId}/inventarios/${snapshotId}`, options);
+  }
+
+  async completarInventarioVehiculo(vehiculoId, snapshotId) {
+    if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+    if (!snapshotId) throw new Error('ID de inventario requerido');
+    return this.fetchWithAuth(`/admin/vehiculos/${vehiculoId}/inventarios/${snapshotId}/completar`, {
+      method: 'POST'
+    });
+  }
+
+  async compararInventariosVehiculo(vehiculoId, snapshotAId, snapshotBId) {
+    if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+    if (!snapshotAId || !snapshotBId) {
+      throw new Error('Se requieren dos registros de inventario para comparar');
+    }
+
+    return this.fetchWithAuth(
+      `/admin/vehiculos/${vehiculoId}/inventarios/comparar?snapshot_a_id=${snapshotAId}&snapshot_b_id=${snapshotBId}`
+    );
+  }
+
   async getOpcionesVehiculos() {
     try {
       const data = await this.fetchWithAuth('/admin/vehiculos/opciones');
@@ -216,6 +260,15 @@ class AdminService {
         modelos: []
       };
     }
+  }
+
+
+  async createCatalogoVehiculo(datosCatalogo) {
+    // 🚨 Asegúrate de que esta URL coincida con la ruta que pusiste en el paso 2
+    return this.fetchWithAuth('/admin/vehiculos/catalogo-modelos', {
+      method: 'POST',
+      body: JSON.stringify(datosCatalogo)
+    });
   }
 
   // ============= INVERSIONISTAS =============
@@ -290,6 +343,7 @@ async crearInversionCompleta(datosInversion) {
     }
   }
 
+
   /**
    * Obtiene dashboard de un inversionista
    * @param {string|number} id - ID del inversionista
@@ -306,6 +360,8 @@ async crearInversionCompleta(datosInversion) {
       throw error;
     }
   }
+
+
 
   // ============= INVERSIONES =============
 
@@ -421,6 +477,43 @@ async crearInversionCompleta(datosInversion) {
   }
 
   /**
+   * Actualiza los datos de un inversionista existente
+   * @param {string|number} id - ID del inversionista
+   * @param {Object} datosInversionista - Objeto con los datos a actualizar
+   */
+  async editarInversionista(id, datosInversionista) {
+    try {
+      const response = await this.fetchWithAuth(`/admin/inversionistas/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(datosInversionista),
+      });
+      return response;
+    } catch (error) {
+      console.error(`Error editando inversionista ${id}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Realiza un borrado lógico de un inversionista
+   * @param {string|number} id - ID del inversionista
+   */
+  async eliminarInversionista(id) {
+    try {
+      const response = await this.fetchWithAuth(`/admin/inversionistas/${id}`, {
+        method: 'DELETE',
+      });
+      return response;
+    } catch (error) {
+      console.error(`Error eliminando inversionista ${id}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Actualiza el multiplicador del sistema (solo super admin)
    * @param {number} nuevoValor - Nuevo valor del multiplicador
    * @returns {Promise<Object>} Confirmación de actualización
@@ -439,6 +532,175 @@ async crearInversionCompleta(datosInversion) {
       throw error;
     }
   }
+
+  /**
+   * Registra un nuevo pago para un contrato de inversión
+   * @param {string|number} inversionId - ID del contrato de inversión
+   * @param {Object} datosPago - Objeto con los datos del pago (monto_total, numero_cuota, etc.)
+   * @returns {Promise<Object>} Respuesta del servidor confirmando el registro
+   */
+  async registrarPagoInversion(inversionId, datosPago) {
+    if (!inversionId) throw new Error('El ID de la inversión es requerido');
+    if (!datosPago) throw new Error('Los datos del pago son requeridos');
+    
+    try {
+      // Como es un POST, le pasamos las opciones de método y el body a tu helper fetchWithAuth
+      const options = {
+        method: 'POST',
+        body: JSON.stringify(datosPago)
+      };
+      
+      const data = await this.fetchWithAuth(`/admin/inversiones/${inversionId}/pagos`, options);
+      return data;
+    } catch (error) {
+      console.error('Error al registrar pago de inversión:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Elimina un pago registrado y revierte los saldos en el contrato de inversión
+   * @param {string|number} pagoId - ID exacto del pago a eliminar (de la tabla pagos_inversionistas)
+   * @returns {Promise<Object>} Respuesta del servidor confirmando la eliminación y reversión
+   */
+  async eliminarPagoInversion(pagoId) {
+    if (!pagoId) throw new Error('El ID del pago es requerido para eliminarlo');
+    
+    try {
+      // Como es un DELETE, solo especificamos el método, no lleva body
+      const options = {
+        method: 'DELETE'
+      };
+      
+      // Apuntamos a la ruta que configuramos en el backend
+      const data = await this.fetchWithAuth(`/admin/inversiones/pagos/${pagoId}`, options);
+      return data;
+    } catch (error) {
+      console.error(`Error al eliminar el pago de inversión (${pagoId}):`, error);
+      throw error;
+    }
+  }
+
+
+  /**
+   * Actualiza los datos de un pago existente
+   * @param {string|number} pagoId - ID del pago
+   * @param {Object} datosPago - Datos a actualizar
+   */
+  async actualizarPagoInversion(pagoId, datosPago) {
+    if (!pagoId) throw new Error('El ID del pago es requerido');
+    
+    try {
+      const options = {
+        method: 'PUT', // 👈 Usamos PUT para actualizar
+        body: JSON.stringify(datosPago)
+      };
+      
+      const data = await this.fetchWithAuth(`/admin/inversiones/pagos/${pagoId}`, options);
+      return data;
+    } catch (error) {
+      console.error('Error al actualizar pago:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Rescinde (cancela legalmente) un contrato de inversión
+   * @param {string|number} contratoId - ID del contrato
+   * @param {Object} datosRescision - { motivo, observaciones }
+   */
+  async rescindirContrato(contratoId, datosRescision) {
+    if (!contratoId) throw new Error('El ID del contrato es requerido');
+    
+    try {
+      const options = {
+        method: 'PUT', // Usamos PUT porque estamos actualizando el estado del contrato
+        body: JSON.stringify(datosRescision)
+      };
+      
+      // Ajusta la ruta a como la hayas puesto en tu backend (ej. /admin/inversiones/contratos...)
+      const data = await this.fetchWithAuth(`/admin/inversiones/contratos/${contratoId}/rescindir`, options);
+      return data;
+    } catch (error) {
+      console.error('Error al rescindir contrato:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Reanuda un contrato de inversión que estaba en estado 'Pausado'
+   * @param {string|number} contratoId - ID del contrato
+   */
+  async reanudarContrato(contratoId) {
+    if (!contratoId) throw new Error('El ID del contrato es requerido');
+    
+    try {
+      const options = {
+        method: 'PUT'
+        // No necesitamos body porque la lógica de fechas la hace el backend solito
+      };
+      
+      const data = await this.fetchWithAuth(`/admin/inversiones/contratos/${contratoId}/reanudar`, options);
+      return data;
+    } catch (error) {
+      console.error('Error al reanudar contrato:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Registra el pago final de liquidación (finiquito) para un contrato rescindido
+   * @param {string|number} contratoId - ID del contrato de inversión
+   * @param {Object} datosPago - Objeto con los datos (metodo_pago, referencia, comprobante, notas)
+   * @returns {Promise<Object>} Respuesta del servidor confirmando el registro y cierre del contrato
+   */
+  async registrarPagoRescision(contratoId, datosPago) {
+    if (!contratoId) throw new Error('El ID del contrato es requerido');
+    if (!datosPago) throw new Error('Los datos del pago de liquidación son requeridos');
+    
+    try {
+      const options = {
+        method: 'POST',
+        body: JSON.stringify(datosPago)
+      };
+      
+      // Apuntamos a la nueva ruta específica para finiquitos
+      const data = await this.fetchWithAuth(`/admin/contratos/${contratoId}/pago-rescision`, options);
+      return data;
+    } catch (error) {
+      console.error('Error al registrar pago de liquidación por rescisión:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Realiza un borrado lógico de un contrato de inversión (Cambia status a Eliminado)
+   * @param {string|number} contratoId - ID del contrato a eliminar
+   */
+  async eliminarInversion(contratoId) {
+    if (!contratoId) throw new Error('El ID del contrato es requerido');
+    
+    try {
+      const options = {
+        method: 'DELETE' // Coincide con nuestra ruta router.delete
+      };
+      
+      // Asegúrate de que la ruta coincida con el prefijo que usas en tu backend
+      const data = await this.fetchWithAuth(`/admin/inversiones/contratos/${contratoId}`, options);
+      return data;
+    } catch (error) {
+      console.error('Error al eliminar contrato:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtener la información bancaria actual de la empresa
+   */
+  async getDatosBancariosEmpresa() {
+    return this.fetchWithAuth('/admin/inversionistas/configuracion/banco');
+  }
+  
   // ============= CONDUCTORES =============
   
   /**
@@ -587,7 +849,7 @@ async cambiarStatusConductor(conductorId, status, motivo = null) {
     }
   }
 
-  // --- 👇 ¡AQUÍ ESTÁ LA NUEVA FUNCIÓN QUE DEBES AÑADIR! 👇 ---
+  // ---  ¡AQUÍ ESTÁ LA NUEVA FUNCIÓN QUE DEBES AÑADIR!  ---
   // --- (Pégala dentro de la clase 'AdminService', junto a las otras) ---
 
   /**
@@ -612,6 +874,26 @@ async cambiarStatusConductor(conductorId, status, motivo = null) {
   }
 
   // --- 👆 FIN DE LA FUNCIÓN NUEVA 👆 ---
+
+  /**
+   * Crea una cuenta de acceso (usuario) para un Inversionista existente.
+   * @param {string|number} inversionistaId - ID del inversionista
+   * @returns {Promise<Object>} Respuesta con { success, email, password_temporal }
+   */
+  async crearAccesoInversionista(inversionistaId) {
+    if (!inversionistaId) throw new Error('ID de inversionista requerido');
+    
+    try {
+      // Apuntamos al endpoint de inversionistas
+      const response = await this.fetchWithAuth(`/admin/inversionistas/${inversionistaId}/crear-acceso`, {
+        method: 'POST'
+      });
+      return response; 
+    } catch (error) {
+      console.error('Error al crear acceso para el inversionista:', error.message);
+      throw new Error(error.message || 'Error en el servidor al crear acceso');
+    }
+  }
 
 
   // ============= PAGOS DE RENTAS (NUEVA LÓGICA) =============
@@ -760,6 +1042,27 @@ async cambiarStatusConductor(conductorId, status, motivo = null) {
   }
 
   /**
+   * Ajusta un pago confirmado (solo monto de renta)
+   * @param {number} pagoId - ID del pago
+   * @param {Object} datos - { monto_renta_pagado, motivo_ajuste }
+   * @returns {Promise<Object>} Pago ajustado
+   */
+  async editarPagoRentaConfirmado(pagoId, datos) {
+    if (!pagoId) throw new Error('ID de pago requerido');
+
+    try {
+      const response = await this.fetchWithAuth(`/admin/pagos-rentas/${pagoId}/editar-confirmado`, {
+        method: 'PUT',
+        body: JSON.stringify(datos)
+      });
+      return response;
+    } catch (error) {
+      console.error('Error al ajustar pago confirmado:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Elimina un pago de renta
    * @param {number} pagoId - ID del pago
    * @returns {Promise<Object>} Confirmación
@@ -810,6 +1113,21 @@ async eliminarPagoRenta(id, motivo) {
       return data;
     } catch (error) {
       console.error('Error al obtener siguiente pago pendiente:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene el reporte de conductores en rezago
+   * @returns {Promise<Object>} Lista de conductores con pagos atrasados
+   */
+  async getReporteRezago() {
+    try {
+      // Hacemos la petición al backend que creamos
+      const data = await this.fetchWithAuth('/admin/pagos-rentas/reportes/rezago');
+      return data;
+    } catch (error) {
+      console.error('Error al obtener reporte de rezago:', error);
       throw error;
     }
   }
@@ -1064,6 +1382,23 @@ async getOpcionesMantenimientos() {
 }
 
 /**
+ * Obtiene la tabla de servicios preventivos por modelo
+ * @returns {Promise<Object>} Servicios preventivos
+ */
+async getServiciosPreventivosMantenimientos() {
+  try {
+    const data = await this.fetchWithAuth('/admin/mantenimientos/servicios-preventivos');
+    return data;
+  } catch (error) {
+    console.error('Error al obtener servicios preventivos de mantenimientos:', error);
+    return {
+      success: false,
+      modelos: {}
+    };
+  }
+}
+
+/**
  * Programa un nuevo mantenimiento
  * @param {Object} datos - Datos del mantenimiento
  * @returns {Promise<Object>} Mantenimiento programado
@@ -1079,6 +1414,146 @@ async programarMantenimiento(datos) {
     return data;
   } catch (error) {
     console.error('Error al programar mantenimiento:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene vista operativa de mantenimientos por estado
+ * @param {Object} filtros - estado, search, page, limit
+ * @returns {Promise<Object>} Resumen y listado operativo
+ */
+async getMantenimientosEstadoOperativo(filtros = {}) {
+  try {
+    const params = new URLSearchParams();
+    Object.entries(filtros).forEach(([key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) {
+        params.append(key, value);
+      }
+    });
+
+    const query = params.toString();
+    const endpoint = query
+      ? `/admin/mantenimientos/estado-operativo?${query}`
+      : '/admin/mantenimientos/estado-operativo';
+
+    return await this.fetchWithAuth(endpoint);
+  } catch (error) {
+    console.error('Error al obtener estado operativo de mantenimientos:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene vehiculos proximos a mantenimiento por kilometraje (ciclos de 10,000 km)
+ * @param {Object} filtros - search, page, limit, umbral_km
+ * @returns {Promise<Object>} Resumen y listado de vehiculos
+ */
+async getVehiculosProximosKilometraje(filtros = {}) {
+  try {
+    const params = new URLSearchParams();
+    Object.entries(filtros).forEach(([key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) {
+        params.append(key, value);
+      }
+    });
+
+    const query = params.toString();
+    const endpoint = query
+      ? `/admin/mantenimientos/proximos-kilometraje?${query}`
+      : '/admin/mantenimientos/proximos-kilometraje';
+
+    return await this.fetchWithAuth(endpoint);
+  } catch (error) {
+    console.error('Error al obtener vehiculos proximos a mantenimiento:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene disponibilidad de agenda por fecha para reprogramar mantenimientos
+ * @param {string} fecha - Fecha en formato YYYY-MM-DD
+ * @param {number|string|null} excludeId - ID de mantenimiento a excluir de la validacion
+ * @returns {Promise<Object>} Slots de horario con disponibilidad
+ */
+async getDisponibilidadAgendaMantenimientos(fecha, excludeId = null) {
+  if (!fecha) throw new Error('Fecha requerida');
+
+  try {
+    const params = new URLSearchParams({ fecha });
+    if (excludeId !== null && excludeId !== undefined && excludeId !== '') {
+      params.append('exclude_id', String(excludeId));
+    }
+    return await this.fetchWithAuth(`/admin/mantenimientos/disponibilidad?${params.toString()}`);
+  } catch (error) {
+    console.error('Error al obtener disponibilidad de agenda de mantenimientos:', error);
+    throw error;
+  }
+}
+
+/**
+ * Registra kilometraje y devuelve contexto preventivo del vehiculo
+ * @param {number|string} vehiculoId - ID del vehiculo
+ * @param {number} kilometrajeActual - Kilometraje actual
+ * @returns {Promise<Object>} Contexto de mantenimiento preventivo
+ */
+async registrarKilometrajeMantenimiento(vehiculoId, kilometrajeActual) {
+  if (!vehiculoId) throw new Error('ID de vehiculo requerido');
+
+  try {
+    return await this.fetchWithAuth(`/admin/mantenimientos/vehiculo/${vehiculoId}/kilometraje`, {
+      method: 'POST',
+      body: JSON.stringify({ kilometraje_actual: kilometrajeActual })
+    });
+  } catch (error) {
+    console.error('Error al registrar kilometraje de mantenimiento:', error);
+    throw error;
+  }
+}
+
+/**
+ * Obtiene flujo financiero de mantenimientos
+ * @param {Object} filtros - estado_financiero, search, page, limit
+ * @returns {Promise<Object>} Resumen y listado financiero
+ */
+async getFlujoFinancieroMantenimientos(filtros = {}) {
+  try {
+    const params = new URLSearchParams();
+    Object.entries(filtros).forEach(([key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) {
+        params.append(key, value);
+      }
+    });
+
+    const query = params.toString();
+    const endpoint = query
+      ? `/admin/mantenimientos/flujo-financiero?${query}`
+      : '/admin/mantenimientos/flujo-financiero';
+
+    return await this.fetchWithAuth(endpoint);
+  } catch (error) {
+    console.error('Error al obtener flujo financiero de mantenimientos:', error);
+    throw error;
+  }
+}
+
+/**
+ * Actualiza estado del flujo financiero de un mantenimiento
+ * @param {number|string} mantenimientoId - ID del mantenimiento
+ * @param {'capturado'|'validado_finanzas'|'pagado'} estadoFinanciero
+ * @returns {Promise<Object>} Resultado de actualizacion
+ */
+async actualizarEstadoFlujoFinanciero(mantenimientoId, estadoFinanciero) {
+  if (!mantenimientoId) throw new Error('ID de mantenimiento requerido');
+  if (!estadoFinanciero) throw new Error('Estado financiero requerido');
+
+  try {
+    return await this.fetchWithAuth(`/admin/mantenimientos/${mantenimientoId}/flujo-financiero`, {
+      method: 'PUT',
+      body: JSON.stringify({ estado_financiero: estadoFinanciero })
+    });
+  } catch (error) {
+    console.error('Error al actualizar flujo financiero de mantenimiento:', error);
     throw error;
   }
 }
@@ -1416,9 +1891,21 @@ async getHistorialVehiculoById(vehiculoId) {
       throw error;
     }
   }
+
 async getPolizasSeguro() {
-  return this.fetchWithAuth('/vehiculos/polizas-seguro');
+  // Ajusta esto para que sea igualito al inicio de tus otras rutas de vehículos
+  return this.fetchWithAuth('/admin/vehiculos/polizas-seguro'); 
 }
+
+async createPolizaSeguro(datosPoliza) {
+    return this.fetchWithAuth('/admin/vehiculos/polizas', {
+      method: 'POST',
+      body: JSON.stringify(datosPoliza)
+    });
+  }
+
+
+
   /**
    * Asigna un conductor a un vehículo
    * @param {number} vehiculoId - ID del vehículo
@@ -1723,6 +2210,81 @@ async getPolizasSeguro() {
         body: JSON.stringify({ accion })
     });
 }
+
+ async crearInversionista(datosInversionista) {
+    try {
+      const response = await this.fetchWithAuth('/admin/inversionistas', { // Ajusta la ruta '/admin/inversionistas' según tu archivo server/index.js
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(datosInversionista),
+      });
+      return response
+  } catch (error) {
+    console.error('Error creando inversionista:', error);
+    throw error;
+  }
+}
+
+/**
+   * Verifica si un campo de inversionista ya existe en la base de datos
+   * @param {string} campo - Nombre del campo (email, telefono, rfc, whatsapp)
+   * @param {string} valor - Valor a buscar
+   * @returns {Promise<Object>} { success: true, existe: boolean }
+   */
+  async verificarDuplicadoInversionista(campo, valor) {
+    if (!campo || !valor) return { existe: false };
+    
+    try {
+      // Usamos encodeURIComponent por si el correo tiene símbolos raros o el RFC tiene un ampersand (&)
+      const data = await this.fetchWithAuth(`/admin/inversionistas/verificar?campo=${campo}&valor=${encodeURIComponent(valor)}`);
+      return data;
+    } catch (error) {
+      console.error(`Error al verificar duplicado de ${campo}:`, error);
+      // Si se cae el internet o hay error, devolvemos false para no dejar al usuario atascado,
+      // total, el backend lo volverá a validar al darle "Finalizar Registro".
+      return { existe: false };
+    }
+  }
+
+  // ==========================================
+  // SOLICITUDES DE INVERSIONISTAS
+  // ==========================================
+  
+  // 1. Traer la lista (Con filtro opcional)
+  async getSolicitudesInversionistas(estado = '') {
+    try {
+      const url = estado ? `/admin/solicitudes-inversionistas?estado=${estado}` : `/admin/solicitudes-inversionistas`;
+      return await this.fetchWithAuth(url);
+    } catch (error) {
+      console.error('Error al obtener solicitudes:', error);
+      throw error;
+    }
+  }
+
+  // 2. Traer el detalle de una sola (para ver sus PDFs)
+  async getSolicitudInversionistaById(id) {
+    try {
+      return await this.fetchWithAuth(`/admin/solicitudes-inversionistas/${id}`);
+    } catch (error) {
+      console.error('Error al obtener detalle de solicitud:', error);
+      throw error;
+    }
+  }
+
+  // 3. Aprobar o Rechazar
+  async evaluarSolicitudInversionista(id, accion, motivoRechazo = null) {
+    try {
+      return await this.fetchWithAuth(`/admin/solicitudes-inversionistas/${id}/evaluar`, {
+        method: 'PUT',
+        body: JSON.stringify({ accion, motivo_rechazo: motivoRechazo })
+      });
+    } catch (error) {
+      console.error('Error al evaluar solicitud:', error);
+      throw error;
+    }
+  }
   
 } // ← Cierre de la clase
 

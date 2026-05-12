@@ -1,3 +1,4 @@
+//
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -20,6 +21,7 @@ const Estadisticas = () => {
   const [loading, setLoading] = useState(true);
   const [estadisticas, setEstadisticas] = useState(null);
   const [periodo, setPeriodo] = useState('30'); // días
+  const [mesesHistorico, setMesesHistorico] = useState('12');
 
   useEffect(() => {
     cargarEstadisticas();
@@ -70,6 +72,13 @@ const Estadisticas = () => {
     { valor: '365', label: 'Último año' }
   ];
 
+  const periodosHistoricos = [
+    { valor: '3', label: '3 meses' },
+    { valor: '6', label: '6 meses' },
+    { valor: '12', label: '12 meses' },
+    { valor: '18', label: '18 meses' }
+  ];
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -113,7 +122,20 @@ const Estadisticas = () => {
             <span className="text-white font-medium">Período de análisis</span>
           </div>
           
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-300">Historico:</label>
+            <select
+              value={mesesHistorico}
+              onChange={(e) => setMesesHistorico(e.target.value)}
+              className="px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:border-primary"
+            >
+              {periodosHistoricos.map((item) => (
+                <option key={item.valor} value={item.valor} className="text-black">
+                  Ultimos {item.label}
+                </option>
+              ))}
+            </select>
+
             {periodos.map((p) => (
               <button
                 key={p.valor}
@@ -152,7 +174,7 @@ const Estadisticas = () => {
           <h2 className="text-xl font-bold text-white mb-4">
             Tendencia Mensual
           </h2>
-          <GraficaTendencias meses={12} />
+          <GraficaTendencias meses={parseInt(mesesHistorico, 10)} />
         </div>
 
         {/* Distribución por Tipo Socio */}

@@ -358,17 +358,31 @@ const MiPerfil = () => {
           </div>
         </div>
 
-        {/* Ahorro */}
+        {/* Saldos y Ahorro */}
         <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
           <div className="flex items-center gap-2 mb-4">
             <CreditCard className="w-6 h-6 text-green-400" />
-            <h3 className="text-xl font-bold text-white">Mi Ahorro</h3>
+            <h3 className="text-xl font-bold text-white">Mis Fondos</h3>
           </div>
-          <div className="space-y-3">
+          
+          <div className="space-y-5">
+
+            {/* 2. Póliza Mecánica (Del Vehículo Actual) */}
             <div>
-              <p className="text-gray-400 text-sm">Ahorro para Mantenimiento</p>
-              <p className="text-2xl font-bold text-white">
-                {formatCurrency(perfil.saldo_ahorro_mantenimiento)}
+              <div className="flex justify-between items-center mb-1">
+                <p className="text-gray-400 text-sm">Fondo de Póliza Mecánica</p>
+                {/* Mostramos el número de unidad si el backend lo mandó */}
+                {perfil.vehiculo_actual && perfil.vehiculo_actual !== 'Sin vehículo asignado' && (
+                  <span className="text-[10px] bg-cyan-900/50 text-cyan-400 px-2 py-0.5 rounded border border-cyan-800/50 uppercase tracking-wider">
+                    Unidad {perfil.vehiculo_actual}
+                  </span>
+                )}
+              </div>
+              <p className="text-2xl font-bold text-cyan-400">
+                {formatCurrency(perfil.saldo_poliza || 0)}
+              </p>
+              <p className="text-[10px] text-gray-500 mt-1 leading-tight">
+                * Este fondo pertenece al vehículo asignado y se usa para reparaciones mayores autorizadas.
               </p>
             </div>
           </div>
@@ -562,12 +576,12 @@ const DocumentoItem = ({ titulo, url, editando, inputId, cargando, onUpload }) =
         <input
           id={inputId}
           type="file"
-          accept="image/*"
+          accept=".jpg,.jpeg,.png,.webp,.heic,.heif,.pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,application/pdf"
           className="hidden"
           disabled={cargando}
           onChange={(event) => onUpload(event.target.files?.[0], event.target)}
         />
-        <span className="text-xs text-gray-400">Formatos: JPG, PNG.</span>
+        <span className="text-xs text-gray-400">Formatos: JPG, JPEG, PNG, WEBP, HEIC/HEIF, PDF.</span>
       </div>
     )}
   </div>

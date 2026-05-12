@@ -91,19 +91,22 @@ if (user.rol === 'conductor') {
 // Generar token JWT con conductorId
 const token = signAuthToken(user, conductorId);
     // Responder con token y datos del usuario
-   res.json({
-  success: true,
-  message: 'Login exitoso',
-  token,
-  user: {
-    id: user.id,
-    email: user.email || user.name,
-    name: user.nombre_completo,
-    rol: user.rol || 'conductor',
-    numeroVehiculo: user.numero_vehiculo,
-    conductorId: conductorId  // ✅ DEBE ESTAR AQUÍ
-  }
-});
+  res.json({
+      success: true,
+      message: 'Login exitoso',
+      token,
+      user: {
+        id: user.id,
+        email: user.email || user.name,
+        name: user.nombre_completo,
+        rol: user.rol || 'conductor',
+        numeroVehiculo: user.numero_vehiculo,
+        conductorId: conductorId,   // ✅ Se queda igual para los choferes
+        
+        // 🔒 MAGIA AQUÍ: Le pasamos el ID del inversionista directo de la tabla
+        inversionistaId: user.inversionista_id 
+      }
+    });
 
   } catch (error) {
     console.error('Error en login:', error);

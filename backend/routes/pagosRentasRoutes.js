@@ -46,6 +46,10 @@ router.get('/conductores-morosos',
   pagosRentasController.getConductoresMorosos
 );
 
+router.get('/reportes/rezago', 
+  requirePermission('pagos_rentas.view'),
+  pagosRentasController.obtenerReporteRezago);
+
 // Historial por conductor
 router.get('/conductor/:conductorId/historial',
   requirePermission('pagos_rentas.view'),
@@ -64,6 +68,10 @@ router.put('/:id/validar',
   pagosRentasController.validarPago
 );
 
+router.post('/masivo/confirmar',
+  requirePermission('pagos_rentas.update'), 
+  pagosRentasController.validarPagosMasivos);
+
 router.put('/:id/rechazar',
   requirePermission('pagos_rentas.update'),
   pagosRentasController.rechazarPago
@@ -73,6 +81,12 @@ router.put('/:id/rechazar',
 router.put('/:id/editar',
   requirePermission('pagos_rentas.update'),
   pagosRentasController.editarPago
+);
+
+// Ajustar pago confirmado (solo monto renta; con recalculo de saldos)
+router.put('/:id/editar-confirmado',
+  requirePermission('pagos_rentas.update'),
+  pagosRentasController.editarPagoConfirmado
 );
 
 // Eliminar pago

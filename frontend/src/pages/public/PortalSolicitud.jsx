@@ -26,11 +26,13 @@ const PortalSolicitud = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [submitFeedback, setSubmitFeedback] = useState(null);
   const [imagesPreviews, setImagesPreviews] = useState({
     licencia_frente: null,
     licencia_reverso: null,
     ine_frente: null,
-    ine_reverso: null
+    ine_reverso: null,
+    comprobante_domicilio: null
   });
 
   const [formData, setFormData] = useState({
@@ -65,7 +67,12 @@ const PortalSolicitud = () => {
     licencia_frente: null,
     licencia_reverso: null,
     ine_frente: null,
-    ine_reverso: null
+    ine_reverso: null,
+    comprobante_domicilio: null,
+
+    // Paso 6: Cita y depósito
+    acepta_deposito_garantia: '',
+    fecha_cita: ''
   });
 
   const steps = [
@@ -73,7 +80,8 @@ const PortalSolicitud = () => {
     { number: 2, title: 'Personal', icon: User, description: 'Datos personales' },
     { number: 3, title: 'Experiencia', icon: Briefcase, description: 'Estabilidad laboral' },
     { number: 4, title: 'Referencias', icon: Users, description: 'Contactos familiares' },
-    { number: 5, title: 'Documentos', icon: FileText, description: 'Subir archivos' }
+    { number: 5, title: 'Documentos', icon: FileText, description: 'Subir archivos' },
+    { number: 6, title: 'Cita', icon: Calendar, description: 'Deposito y agenda' }
   ];
 
   const meses = [
@@ -125,11 +133,48 @@ const PortalSolicitud = () => {
     return null;
   }, [formData.anio_nacimiento, formData.mes_nacimiento, formData.dia_nacimiento]);
 
+  const todayDate = useMemo(() => new Date().toLocaleDateString('en-CA'), []);
+  const minCitaDate = useMemo(() => {
+    const date = new Date();
+    while (date.getDay() === 0 || date.getDay() === 6) {
+      date.setDate(date.getDate() + 1);
+    }
+    return date.toLocaleDateString('en-CA');
+  }, []);
+
+  const esDiaHabil = (dateString) => {
+    if (!dateString) return false;
+    const date = new Date(`${dateString}T12:00:00`);
+    const day = date.getDay();
+    return day >= 1 && day <= 5;
+  };
+
+  const phoneRegex = /^\d{10}$/;
+  const curpRegex = /^[A-Z0-9]{18}$/;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const formatFechaCitaLegible = (fechaISO) => {
+    if (!fechaISO || !/^\d{4}-\d{2}-\d{2}$/.test(fechaISO)) return '';
+    const [year, month, day] = fechaISO.split('-').map(Number);
+    const parsed = new Date(year, month - 1, day, 12, 0, 0, 0);
+    if (Number.isNaN(parsed.getTime())) return '';
+
+    return parsed.toLocaleDateString('es-MX', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
   const handleInputChange = (field, value) => {
     setFormData(prev => ({
       ...prev,
       [field]: value
     }));
+
+    if (submitFeedback && submitFeedback.type !== 'success') {
+      setSubmitFeedback(null);
+    }
     
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: undefined }));
@@ -184,8 +229,13 @@ const PortalSolicitud = () => {
       case 1:
         if (!formData.nombre_completo) newErrors.nombre_completo = 'El nombre es requerido';
         if (!formData.telefono) newErrors.telefono = 'El teléfono es requerido';
-        if (formData.telefono && formData.telefono.length !== 10) {
+        if (formData.telefono && !phoneRegex.test(formData.telefono)) {
           newErrors.telefono = 'El teléfono debe tener 10 dígitos';
+        }
+        if (!formData.email) {
+          newErrors.email = 'El email es requerido';
+        } else if (!emailRegex.test(formData.email.trim().toLowerCase())) {
+          newErrors.email = 'Ingresa un email valido';
         }
         break;
         
@@ -197,6 +247,9 @@ const PortalSolicitud = () => {
         }
         if (!formData.domicilio) newErrors.domicilio = 'El domicilio es requerido';
         if (!formData.estado_civil) newErrors.estado_civil = 'El estado civil es requerido';
+        if (formData.curp && !curpRegex.test(formData.curp)) {
+          newErrors.curp = 'La CURP debe tener 18 caracteres alfanumericos';
+        }
         break;
         
       case 3:
@@ -204,7 +257,6 @@ const PortalSolicitud = () => {
         if (formData.tipo_vivienda === 'Rentada' && !formData.tiempo_renta_actual) {
           newErrors.tiempo_renta_actual = 'Indica el tiempo en tu domicilio actual';
         }
-        if (!formData.ultimo_empleo) newErrors.ultimo_empleo = 'El último empleo es requerido';
         break;
         
       case 4:
@@ -213,12 +265,16 @@ const PortalSolicitud = () => {
         }
         if (!formData.referencia_familiar_1_telefono) {
           newErrors.referencia_familiar_1_telefono = 'El teléfono de la referencia 1 es requerido';
+        } else if (!phoneRegex.test(formData.referencia_familiar_1_telefono)) {
+          newErrors.referencia_familiar_1_telefono = 'La referencia 1 debe tener 10 digitos';
         }
         if (!formData.referencia_familiar_2_nombre) {
           newErrors.referencia_familiar_2_nombre = 'El nombre de la referencia 2 es requerido';
         }
         if (!formData.referencia_familiar_2_telefono) {
           newErrors.referencia_familiar_2_telefono = 'El teléfono de la referencia 2 es requerido';
+        } else if (!phoneRegex.test(formData.referencia_familiar_2_telefono)) {
+          newErrors.referencia_familiar_2_telefono = 'La referencia 2 debe tener 10 digitos';
         }
         break;
         
@@ -227,6 +283,19 @@ const PortalSolicitud = () => {
         if (!formData.licencia_reverso) newErrors.licencia_reverso = 'La foto del reverso de la licencia es requerida';
         if (!formData.ine_frente) newErrors.ine_frente = 'La foto del frente del INE es requerida';
         if (!formData.ine_reverso) newErrors.ine_reverso = 'La foto del reverso del INE es requerida';
+        break;
+
+      case 6:
+        if (!formData.acepta_deposito_garantia) {
+          newErrors.acepta_deposito_garantia = 'Selecciona una respuesta para continuar';
+        }
+        if (!formData.fecha_cita) {
+          newErrors.fecha_cita = 'La fecha de cita es obligatoria';
+        } else if (!esDiaHabil(formData.fecha_cita)) {
+          newErrors.fecha_cita = 'Solo puedes agendar de lunes a viernes';
+        } else if (formData.fecha_cita < todayDate) {
+          newErrors.fecha_cita = 'No puedes seleccionar una fecha pasada';
+        }
         break;
         
       default:
@@ -238,7 +307,7 @@ const PortalSolicitud = () => {
   };
 
   const nextStep = () => {
-    if (validateStep(currentStep) && currentStep < 5) {
+    if (validateStep(currentStep) && currentStep < steps.length) {
       setCurrentStep(currentStep + 1);
       window.scrollTo(0, 0);
     }
@@ -252,9 +321,10 @@ const PortalSolicitud = () => {
   };
 
   const handleSubmit = async () => {
-  if (!validateStep(5)) return;
+  if (!validateStep(steps.length)) return;
   
   setLoading(true);
+  setSubmitFeedback(null);
   
   try {
     // 🔥 CRÍTICO: Construir FormData correctamente
@@ -263,7 +333,7 @@ const PortalSolicitud = () => {
     // 1️⃣ PRIMERO: Agregar TODOS los campos de texto
     submitData.append('nombre_completo', formData.nombre_completo);
     submitData.append('telefono', formData.telefono);
-    submitData.append('email', formData.email || '');
+    submitData.append('email', formData.email.trim().toLowerCase());
     submitData.append('curp', formData.curp || '');
     submitData.append('domicilio', formData.domicilio);
     submitData.append('estado_civil', formData.estado_civil);
@@ -277,6 +347,10 @@ const PortalSolicitud = () => {
     submitData.append('referencia_familiar_1_cohabita', String(formData.referencia_familiar_1_cohabita));
     submitData.append('referencia_familiar_2_nombre', formData.referencia_familiar_2_nombre);
     submitData.append('referencia_familiar_2_telefono', formData.referencia_familiar_2_telefono);
+    submitData.append('acepta_deposito_garantia', formData.acepta_deposito_garantia);
+    submitData.append('deposito_garantia_pagado', String(formData.acepta_deposito_garantia === 'si'));
+    submitData.append('fecha_cita', formData.fecha_cita || '');
+    submitData.append('hora_cita', '13:00');
 
     // Fecha de nacimiento
     if (formData.dia_nacimiento && formData.mes_nacimiento && formData.anio_nacimiento) {
@@ -297,6 +371,9 @@ const PortalSolicitud = () => {
     }
     if (formData.ine_reverso) {
       submitData.append('ine_reverso', formData.ine_reverso);
+    }
+    if (formData.comprobante_domicilio) {
+      submitData.append('comprobante_domicilio', formData.comprobante_domicilio);
     }
 
     // 3️⃣ Debug: Ver qué estamos enviando
@@ -326,7 +403,11 @@ const PortalSolicitud = () => {
     if (!contentType || !contentType.includes('application/json')) {
       const textResponse = await response.text();
       console.error('❌ Respuesta NO es JSON:', textResponse);
-      alert(`Error del servidor: ${textResponse.substring(0, 200)}`);
+      setSubmitFeedback({
+        type: 'error',
+        title: 'No se pudo procesar tu solicitud',
+        message: 'El servidor respondió con un formato inesperado. Intenta nuevamente en unos minutos.'
+      });
       setLoading(false);
       return;
     }
@@ -336,7 +417,11 @@ const PortalSolicitud = () => {
     console.log('📦 Result:', result);
 
     if (result.success) {
-      alert(`¡Solicitud enviada exitosamente!\n\nTu número de referencia es: ${result.solicitud.id}\n\nTe contactaremos pronto.`);
+      setSubmitFeedback({
+        type: 'success',
+        title: 'Solicitud enviada correctamente',
+        message: `Tu folio es ${result.solicitud.id}. Te contactaremos pronto para continuar el proceso.`
+      });
       
       // Reset form
       setFormData({
@@ -362,25 +447,46 @@ const PortalSolicitud = () => {
         licencia_frente: null, 
         licencia_reverso: null, 
         ine_frente: null, 
-        ine_reverso: null
+        ine_reverso: null,
+        comprobante_domicilio: null,
+        acepta_deposito_garantia: '',
+        fecha_cita: ''
       });
       
       setImagesPreviews({
         licencia_frente: null,
         licencia_reverso: null,
         ine_frente: null,
-        ine_reverso: null
+        ine_reverso: null,
+        comprobante_domicilio: null
       });
       
       setCurrentStep(1);
       window.scrollTo(0, 0);
     } else {
-      alert(result.message || 'Error al enviar solicitud');
+      if (result?.conductor_id && ['Activo', 'Aprobado'].includes(result?.status)) {
+        setSubmitFeedback({
+          type: 'warning',
+          title: 'Ya tienes un registro activo',
+          message: 'Ya existe un conductor aprobado/activo con estos datos, por eso no es posible crear otra solicitud.',
+          detail: `ID de conductor: ${result.conductor_id}. Si crees que es un error, contacta a RH para revisión.`
+        });
+      } else {
+        setSubmitFeedback({
+          type: 'error',
+          title: 'No se pudo enviar la solicitud',
+          message: result.message || 'Error al enviar solicitud'
+        });
+      }
     }
   } catch (error) {
     console.error('❌ Error completo:', error);
     console.error('Stack:', error.stack);
-    alert(`Error de conexión: ${error.message}`);
+    setSubmitFeedback({
+      type: 'error',
+      title: 'Error de conexión',
+      message: `No fue posible enviar la solicitud: ${error.message}`
+    });
   } finally {
     setLoading(false);
   }
@@ -419,6 +525,9 @@ const PortalSolicitud = () => {
             type="tel"
             value={formData.telefono}
             onChange={(e) => handleInputChange('telefono', e.target.value.replace(/\D/g, '').slice(0, 10))}
+            inputMode="numeric"
+            pattern="\d{10}"
+            maxLength={10}
             className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent text-white placeholder-gray-500 backdrop-blur-sm"
             placeholder="3111234567"
           />
@@ -432,7 +541,7 @@ const PortalSolicitud = () => {
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
-            Email (opcional)
+            Email *
           </label>
           <input
             type="email"
@@ -441,6 +550,9 @@ const PortalSolicitud = () => {
             className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent text-white placeholder-gray-500 backdrop-blur-sm"
             placeholder="juan@email.com"
           />
+          {errors.email && (
+            <p className="text-red-400 text-xs mt-1">{errors.email}</p>
+          )}
         </div>
       </div>
     </div>
@@ -520,10 +632,15 @@ const PortalSolicitud = () => {
             <input
               type="text"
               value={formData.curp}
-              onChange={(e) => handleInputChange('curp', e.target.value.toUpperCase().slice(0, 18))}
+              onChange={(e) => handleInputChange('curp', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18))}
+              maxLength={18}
+              pattern="[A-Za-z0-9]{18}"
               className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500"
               placeholder="PEGJ900515HNTRRN09"
             />
+            {errors.curp && (
+              <p className="text-red-400 text-xs mt-1">{errors.curp}</p>
+            )}
           </div>
 
           <div>
@@ -684,7 +801,7 @@ const PortalSolicitud = () => {
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
-            Último Empleo o Actividad *
+            Último Empleo o Actividad (opcional)
           </label>
           <textarea
             value={formData.ultimo_empleo}
@@ -711,7 +828,7 @@ const PortalSolicitud = () => {
 
       <div className="space-y-6">
         <div className="bg-gradient-to-r from-cyan-500/10 to-purple-500/10 p-6 rounded-xl backdrop-blur-sm border border-white/10">
-          <h3 className="text-lg font-bold text-white mb-4">Referencia Familiar 1</h3>
+          <h3 className="text-lg font-bold text-white mb-4">Referencia Familiar 1 (contacto de emergencia)</h3>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -737,6 +854,9 @@ const PortalSolicitud = () => {
                 type="tel"
                 value={formData.referencia_familiar_1_telefono}
                 onChange={(e) => handleInputChange('referencia_familiar_1_telefono', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                inputMode="numeric"
+                pattern="\d{10}"
+                maxLength={10}
                 className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500"
                 placeholder="3119876543"
               />
@@ -763,7 +883,7 @@ const PortalSolicitud = () => {
         </div>
 
         <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 p-6 rounded-xl backdrop-blur-sm border border-white/10">
-          <h3 className="text-lg font-bold text-white mb-4">Referencia Familiar 2</h3>
+          <h3 className="text-lg font-bold text-white mb-4">Referencia Familiar 2 (contacto de emergencia)</h3>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -789,6 +909,9 @@ const PortalSolicitud = () => {
                 type="tel"
                 value={formData.referencia_familiar_2_telefono}
                 onChange={(e) => handleInputChange('referencia_familiar_2_telefono', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                inputMode="numeric"
+                pattern="\d{10}"
+                maxLength={10}
                 className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500"
                 placeholder="3117654321"
               />
@@ -993,8 +1116,172 @@ const PortalSolicitud = () => {
           </div>
         </div>
       </div>
+
+      <div className="space-y-4">
+        <h3 className="text-lg font-bold text-white">🏠 Comprobante de domicilio</h3>
+
+        <div className="bg-white/5 backdrop-blur-sm p-4 rounded-lg border border-white/10 max-w-xl">
+          <label className="block text-sm font-medium text-gray-300 mb-3">
+            Foto del comprobante de domicilio (opcional)
+          </label>
+
+          {imagesPreviews.comprobante_domicilio ? (
+            <div className="relative">
+              <img
+                src={imagesPreviews.comprobante_domicilio}
+                alt="Comprobante de domicilio"
+                className="w-full h-48 object-cover rounded-lg"
+              />
+              <button
+                type="button"
+                onClick={() => removeFile('comprobante_domicilio')}
+                className="absolute top-2 right-2 bg-red-500 text-white p-1 rounded-full hover:bg-red-600 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ) : (
+            <div className="border-2 border-dashed border-white/20 rounded-lg p-8 text-center hover:border-cyan-500/50 transition-colors">
+              <Upload className="mx-auto mb-3 text-gray-400" size={32} />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => handleFileChange('comprobante_domicilio', e)}
+                className="hidden"
+                id="comprobante_domicilio_input"
+              />
+              <label htmlFor="comprobante_domicilio_input" className="cursor-pointer">
+                <p className="text-sm text-gray-300">Click para subir imagen</p>
+                <p className="text-xs text-gray-500 mt-1">JPG, PNG o WebP</p>
+              </label>
+            </div>
+          )}
+          {errors.comprobante_domicilio && (
+            <p className="text-red-400 text-xs mt-2">{errors.comprobante_domicilio}</p>
+          )}
+        </div>
+      </div>
     </div>
   );
+
+  const renderStep6 = () => {
+    const direccionOficina = 'Lima 62, Cuatro Milpas, 63170 Tepic, Nay.';
+    const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(direccionOficina)}`;
+    const whatsappUrl = 'https://wa.me/5213112591884?text=Hola%2C%20quiero%20agendar%20mi%20cita%20para%20solicitud%20de%20conductor';
+
+    return (
+      <div className="space-y-6">
+        <div className="text-center mb-8">
+          <Calendar className="w-16 h-16 mx-auto mb-4 text-emerald-400" />
+          <h2 className="text-3xl font-bold text-white mb-2">Deposito y Cita</h2>
+          <p className="text-gray-400">Ultimo paso: confirma deposito y agenda tu visita</p>
+        </div>
+
+        <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-4">
+          <h4 className="font-medium text-cyan-300 mb-2">Deposito en garantia reintegrable</h4>
+          <p className="text-sm text-cyan-100">
+            Para continuar el proceso, considera un deposito en garantia reintegrable de <span className="font-semibold">$2,000 MXN</span>.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-3">
+            Estas de acuerdo con el deposito en garantia de $2,000 MXN? *
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => handleInputChange('acepta_deposito_garantia', 'si')}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                formData.acepta_deposito_garantia === 'si'
+                  ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400'
+                  : 'border-white/10 bg-white/5 text-gray-300 hover:border-white/20'
+              }`}
+            >
+              Si, estoy de acuerdo
+            </button>
+            <button
+              type="button"
+              onClick={() => handleInputChange('acepta_deposito_garantia', 'no')}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                formData.acepta_deposito_garantia === 'no'
+                  ? 'border-red-500 bg-red-500/10 text-red-400'
+                  : 'border-white/10 bg-white/5 text-gray-300 hover:border-white/20'
+              }`}
+            >
+              No estoy de acuerdo
+            </button>
+          </div>
+          {errors.acepta_deposito_garantia && (
+            <p className="text-red-400 text-xs mt-2">{errors.acepta_deposito_garantia}</p>
+          )}
+        </div>
+
+        <div className="bg-white/5 backdrop-blur-sm p-5 rounded-lg border border-white/10 space-y-4">
+          <h4 className="text-white font-semibold">Agenda tu cita obligatoria de lunes a viernes a la 1:00 pm</h4>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Fecha de cita *</label>
+            <input
+              type="date"
+              min={minCitaDate}
+              value={formData.fecha_cita}
+              onChange={(e) => {
+                const selectedDate = e.target.value;
+                if (selectedDate && !esDiaHabil(selectedDate)) {
+                  setErrors(prev => ({ ...prev, fecha_cita: 'Solo puedes seleccionar fechas de lunes a viernes' }));
+                  handleInputChange('fecha_cita', '');
+                  return;
+                }
+                handleInputChange('fecha_cita', selectedDate);
+              }}
+              className="w-full px-4 py-3 bg-black/30 border border-white/10 rounded-lg text-white"
+            />
+            {formData.fecha_cita && (
+              <p className="text-xs text-cyan-300 mt-2">
+                Fecha seleccionada: {formatFechaCitaLegible(formData.fecha_cita)}
+              </p>
+            )}
+            {errors.fecha_cita && (
+              <p className="text-red-400 text-xs mt-1">{errors.fecha_cita}</p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div className="bg-black/30 rounded-lg border border-white/10 p-4">
+              <p className="text-gray-400 mb-1">Oficina</p>
+              <p className="text-white">{direccionOficina}</p>
+              <a
+                href={mapUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 mt-2"
+              >
+                <MapPin size={14} />
+                Abrir en mapa
+              </a>
+            </div>
+
+            <div className="bg-black/30 rounded-lg border border-white/10 p-4">
+              <p className="text-gray-400 mb-1">Contacto</p>
+              <a href="tel:+523111705338" className="block text-white hover:text-cyan-300 transition-colors">
+                Telefono: 311 170 5338
+              </a>
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300 mt-2"
+              >
+                <Phone size={14} />
+                WhatsApp +52 1 311 259 1884
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // 🆕 MEJORA #2: Wrapper con animación para transiciones
   const renderStepContent = () => {
@@ -1005,6 +1292,7 @@ const PortalSolicitud = () => {
       case 3: content = renderStep3(); break;
       case 4: content = renderStep4(); break;
       case 5: content = renderStep5(); break;
+      case 6: content = renderStep6(); break;
       default: content = renderStep1();
     }
     
@@ -1016,7 +1304,7 @@ const PortalSolicitud = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900">
+    <div className="min-h-screen bg-[#07425E]">
       {/* Patrón de fondo */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl"></div>
@@ -1090,6 +1378,44 @@ const PortalSolicitud = () => {
 
         {/* Form Content */}
         <div className="bg-black/30 backdrop-blur-md rounded-2xl shadow-2xl border border-white/10 p-8">
+          {submitFeedback && (
+            <div className={`mb-6 rounded-xl border p-4 ${
+              submitFeedback.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-400/40'
+                : submitFeedback.type === 'warning'
+                  ? 'bg-amber-500/10 border-amber-400/40'
+                  : 'bg-red-500/10 border-red-400/40'
+            }`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  {submitFeedback.type === 'success' ? (
+                    <CheckCircle className="text-emerald-400 mt-0.5" size={20} />
+                  ) : (
+                    <AlertCircle
+                      className={submitFeedback.type === 'warning' ? 'text-amber-400 mt-0.5' : 'text-red-400 mt-0.5'}
+                      size={20}
+                    />
+                  )}
+                  <div>
+                    <p className="text-white font-semibold">{submitFeedback.title}</p>
+                    <p className="text-sm text-gray-200 mt-1">{submitFeedback.message}</p>
+                    {submitFeedback.detail && (
+                      <p className="text-xs text-gray-300 mt-2">{submitFeedback.detail}</p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSubmitFeedback(null)}
+                  className="text-gray-300 hover:text-white transition-colors"
+                  aria-label="Cerrar mensaje"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {renderStepContent()}
 
           {/* Navigation Buttons */}
@@ -1108,7 +1434,7 @@ const PortalSolicitud = () => {
               Anterior
             </button>
 
-            {currentStep < 5 ? (
+            {currentStep < steps.length ? (
               <button
                 type="button"
                 onClick={nextStep}

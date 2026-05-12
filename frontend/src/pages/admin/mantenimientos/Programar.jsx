@@ -10,33 +10,234 @@ import {
   User,
   DollarSign,
   Gauge,
-  Info
+  Info,
+  Paperclip
 } from 'lucide-react';
 import { API_BASE_URL } from '@/services/api';
+import adminService from '@/services/adminService';
+import {
+  TALLER_CATEGORIAS_OPCIONES
+} from '@/constants/mantenimiento';
+import { formatMaintenanceDate } from '@/utils/maintenanceDateFormat';
+
+const DEFAULT_INTERVAL_KM = 10000;
+const MAX_ADMIN_ADJUNTOS = 6;
+const MAX_ADMIN_ADJUNTO_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_ADMIN_ADJUNTO_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence'
+]);
+const HALF_HOUR_SLOTS = (() => {
+  const slots = [];
+  for (let h = 8; h <= 15; h += 1) {
+    const hh = String(h).padStart(2, '0');
+    slots.push(`${hh}:00`);
+    slots.push(`${hh}:30`);
+  }
+  return slots.filter((slot) => slot !== '15:30');
+})();
+
+const DEFAULT_TIPOS_SOLICITUD = [
+  { value: 'preventivo_programado', label: 'Preventivo por kilometraje' },
+  { value: 'fuera_programacion', label: 'Fuera de programacion (falla/negligencia)' }
+];
+
+const normalizeText = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/\s+/g, '_');
+
+const isBydDolphinMiniModel = (modelo) => {
+  const normalized = normalizeText(modelo);
+  const hasDolphinMini = normalized.includes('dolphin') && normalized.includes('mini');
+  const hasBydDolphinMini = normalized.includes('byd') && hasDolphinMini;
+  return hasBydDolphinMini || hasDolphinMini;
+};
+
+const buildModeloDescriptor = (vehiculo = {}) => {
+  const marca = String(vehiculo?.marca || vehiculo?.Marca || '').trim();
+  const modelo = String(vehiculo?.modelo || vehiculo?.Modelo || '').trim();
+  return `${marca} ${modelo}`.trim() || modelo || marca;
+};
+
+const getScheduleMeta = (modeloKey) => {
+  const normalizedKey = normalizeText(modeloKey);
+  if (normalizedKey.includes('byd_dolphin_mini')) {
+    return {
+      startKm: 5000,
+      intervalKm: 20000,
+      cycleLength: 9
+    };
+  }
+  return {
+    startKm: 10000,
+    intervalKm: DEFAULT_INTERVAL_KM,
+    cycleLength: 10
+  };
+};
+
+const resolveScheduleKey = (modelo, modelos = {}) => {
+  const keys = Object.keys(modelos || {});
+  if (!keys.length) return null;
+
+  const normalizedModelo = normalizeText(modelo);
+  const direct = keys.find((key) => normalizeText(key) === normalizedModelo);
+  if (direct) return direct;
+
+  if (isBydDolphinMiniModel(modelo)) {
+    const bydKey = keys.find((key) => normalizeText(key).includes('byd_dolphin_mini'));
+    if (bydKey) return bydKey;
+  }
+
+  const genericKey = keys.find((key) => {
+    const normalized = normalizeText(key);
+    return normalized === 'generic' || normalized === 'generico_10000km' || normalized === 'generico';
+  });
+  if (genericKey) return genericKey;
+
+  return keys[0];
+};
+
+const getServicioSugerido = ({ kilometraje, modelo, modelos, fallbackTipos = [] }) => {
+  const kmActual = Number(kilometraje);
+  const kmSeguro = Number.isFinite(kmActual) && kmActual >= 0 ? kmActual : 0;
+  const modeloKey = resolveScheduleKey(modelo, modelos);
+  const schedule = modeloKey ? modelos?.[modeloKey] || [] : [];
+  const meta = getScheduleMeta(modeloKey);
+
+  if (Array.isArray(schedule) && schedule.length > 0) {
+    const ordenados = [...schedule].sort((a, b) => Number(a.kilometraje || 0) - Number(b.kilometraje || 0));
+    let siguiente = ordenados.find((item) => Number(item.kilometraje || 0) >= kmSeguro) || null;
+    if (!siguiente) {
+      const startKm = Number(meta.startKm || DEFAULT_INTERVAL_KM);
+      const intervalKm = Math.max(Number(meta.intervalKm || DEFAULT_INTERVAL_KM), 1);
+      const cycleLength = Math.max(Number(meta.cycleLength || ordenados.length), 1);
+      const kmObjetivo = kmSeguro <= startKm
+        ? startKm
+        : startKm + (Math.ceil((kmSeguro - startKm) / intervalKm) * intervalKm);
+      const cycleStep = Math.max(Math.round((kmObjetivo - startKm) / intervalKm), 0);
+      const cycleIndex = cycleStep % cycleLength;
+      const kmBaseCiclo = startKm + (cycleIndex * intervalKm);
+      const baseCiclo = ordenados.find((item) => Number(item.kilometraje || 0) === kmBaseCiclo);
+      const fallback = baseCiclo || ordenados[ordenados.length - 1];
+      siguiente = {
+        ...fallback,
+        kilometraje: kmObjetivo
+      };
+    }
+    const objetivo = Number(siguiente?.kilometraje || 0) || kmSeguro + DEFAULT_INTERVAL_KM;
+    return {
+      tipoServicio: siguiente?.servicio || '',
+      kilometrajeObjetivo: objetivo > kmSeguro ? objetivo : kmSeguro + Math.max(Number(meta.intervalKm || DEFAULT_INTERVAL_KM), 1),
+      fuenteCalendario: true,
+      servicioCodigo: siguiente?.servicio_codigo || null,
+      servicioNivel: siguiente?.servicio_nivel || null,
+      incluyeRotacion: Boolean(siguiente?.incluye_rotacion)
+    };
+  }
+
+  return {
+    tipoServicio: fallbackTipos[0] || 'Revision general',
+    kilometrajeObjetivo: kmSeguro + DEFAULT_INTERVAL_KM,
+    fuenteCalendario: false,
+    servicioCodigo: null,
+    servicioNivel: null,
+    incluyeRotacion: false
+  };
+};
+
+const getServicioPreventivoTitulo = (sugerencia = {}) => {
+  const codigo = String(sugerencia?.servicioCodigo || '').trim();
+  const nivel = String(sugerencia?.servicioNivel || '').trim();
+  if (!codigo && !nivel) return null;
+  if (codigo && nivel) return `Servicio ${codigo} (${nivel})`;
+  if (codigo) return `Servicio ${codigo}`;
+  return nivel;
+};
 
 const ProgramarMantenimiento = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const vehiculoQueryId = new URLSearchParams(location.search).get('vehiculo_id');
   const [loading, setLoading] = useState(false);
   const [vehiculos, setVehiculos] = useState([]);
   const [tiposServicio, setTiposServicio] = useState([]);
-  const [talleres, setTalleres] = useState([]);
+  const [serviciosPreventivos, setServiciosPreventivos] = useState({});
+  const [servicioSugerido, setServicioSugerido] = useState({ fuenteCalendario: false, kilometrajeObjetivo: 0 });
+  const [categoriasTaller, setCategoriasTaller] = useState(TALLER_CATEGORIAS_OPCIONES);
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState(null);
   const [desdeSiniestro, setDesdeSiniestro] = useState(false);
   const [siniestroInfo, setSiniestroInfo] = useState(null);
+  const [slotsAgenda, setSlotsAgenda] = useState([]);
+  const [cargandoDisponibilidad, setCargandoDisponibilidad] = useState(false);
+  const [forzarHorarioOcupado, setForzarHorarioOcupado] = useState(false);
+  const [adjuntosAdmin, setAdjuntosAdmin] = useState([]);
+  const [tiposSolicitudOpciones, setTiposSolicitudOpciones] = useState(DEFAULT_TIPOS_SOLICITUD);
   
   const [formData, setFormData] = useState({
     vehiculo_id: '',
+    tipo_solicitud: 'preventivo_programado',
+    causa_fuera_programacion: '',
     tipo_servicio: '',
     fecha_programada: '',
-    hora_programada: '09:00',
+    hora_programada: '',
     kilometraje_servicio: '',
     proximo_servicio_km: '',
     taller: '',
+    taller_otro_detalle: '',
+    servicio_especial: '',
     observaciones: '',
     monto_estimado: ''
   });
   const [errors, setErrors] = useState({});
+
+  const mapTallerToCategoria = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) {
+      return { categoria: '', detalle: '' };
+    }
+
+    if (raw.toLowerCase().startsWith('otro:')) {
+      return {
+        categoria: 'Otro',
+        detalle: raw.slice(5).trim()
+      };
+    }
+
+    const categoriaExiste = categoriasTaller.some((item) => item.value === raw);
+    if (categoriaExiste) {
+      return { categoria: raw, detalle: '' };
+    }
+
+    return { categoria: 'Otro', detalle: raw };
+  };
+
+  const aplicarSugerenciaPorKm = ({ kilometraje, modelo, actualizarTipo = true }) => {
+    const sugerencia = getServicioSugerido({
+      kilometraje,
+      modelo,
+      modelos: serviciosPreventivos,
+      fallbackTipos: tiposServicio
+    });
+
+    setServicioSugerido(sugerencia);
+    setFormData((prev) => ({
+      ...prev,
+      ...(actualizarTipo && prev.tipo_solicitud !== 'fuera_programacion'
+        ? { tipo_servicio: sugerencia.tipoServicio || prev.tipo_servicio }
+        : {}),
+      proximo_servicio_km: sugerencia.kilometrajeObjetivo
+    }));
+  };
 
   // 🔥 Cargar opciones primero
   useEffect(() => {
@@ -58,20 +259,79 @@ useEffect(() => {
 }, [location.state, vehiculos]);
 
   useEffect(() => {
+    if (desdeSiniestro) return;
+    if (!vehiculoQueryId) return;
+    if (!vehiculos.length) return;
+    if (formData.vehiculo_id) return;
+
+    const exists = vehiculos.some((v) => String(v.id) === String(vehiculoQueryId));
+    if (!exists) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      vehiculo_id: String(vehiculoQueryId)
+    }));
+  }, [desdeSiniestro, vehiculoQueryId, vehiculos, formData.vehiculo_id]);
+
+  useEffect(() => {
     if (formData.vehiculo_id && !desdeSiniestro) {
       cargarInfoVehiculo(formData.vehiculo_id);
     }
-  }, [formData.vehiculo_id]);
+  }, [formData.vehiculo_id, formData.tipo_solicitud]);
 
   useEffect(() => {
-    if (formData.kilometraje_servicio) {
-      const proximoKm = parseInt(formData.kilometraje_servicio) + 5000;
-      setFormData(prev => ({
-        ...prev,
-        proximo_servicio_km: proximoKm
-      }));
+    if (desdeSiniestro) return;
+    if (formData.tipo_solicitud === 'fuera_programacion') return;
+    if (!formData.vehiculo_id) return;
+    const kmActual = Number(formData.kilometraje_servicio);
+    if (!Number.isFinite(kmActual)) return;
+
+    aplicarSugerenciaPorKm({
+      kilometraje: kmActual,
+      modelo: buildModeloDescriptor(vehiculoSeleccionado)
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.vehiculo_id, formData.kilometraje_servicio, formData.tipo_solicitud, desdeSiniestro, vehiculoSeleccionado?.id, serviciosPreventivos, tiposServicio.length]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const cargarDisponibilidad = async () => {
+      if (!formData.fecha_programada) {
+        if (isMounted) {
+          setSlotsAgenda([]);
+          setCargandoDisponibilidad(false);
+        }
+        return;
+      }
+
+      try {
+        if (isMounted) setCargandoDisponibilidad(true);
+        const response = await adminService.getDisponibilidadAgendaMantenimientos(formData.fecha_programada);
+        const slots = Array.isArray(response?.slots) ? response.slots : [];
+        if (!isMounted) return;
+        setSlotsAgenda(slots);
+      } catch (error) {
+        if (!isMounted) return;
+        console.error('Error al cargar disponibilidad:', error);
+        setSlotsAgenda([]);
+      } finally {
+        if (isMounted) setCargandoDisponibilidad(false);
+      }
+    };
+
+    cargarDisponibilidad();
+    return () => {
+      isMounted = false;
+    };
+  }, [formData.fecha_programada]);
+
+  useEffect(() => {
+    const slotSeleccionado = slotsAgenda.find((slot) => slot.hora === formData.hora_programada);
+    if (!slotSeleccionado || slotSeleccionado.disponible) {
+      setForzarHorarioOcupado(false);
     }
-  }, [formData.kilometraje_servicio]);
+  }, [slotsAgenda, formData.hora_programada]);
 
   // 🔥 NUEVA FUNCIÓN: Cargar datos desde siniestro
 const cargarDatosDesdeSiniestro = (state) => {
@@ -91,14 +351,20 @@ const cargarDatosDesdeSiniestro = (state) => {
   // Pre-llenar formulario con datos del siniestro
   const vehiculoId = state.vehiculo_id ? String(state.vehiculo_id) : '';
   
+  const tallerMap = mapTallerToCategoria(state.taller);
+
   setFormData({
     vehiculo_id: vehiculoId,
+    tipo_solicitud: 'fuera_programacion',
+    causa_fuera_programacion: 'siniestro',
     tipo_servicio: state.tipo_servicio || 'Reparación por Siniestro',
     fecha_programada: new Date().toISOString().split('T')[0],
-    hora_programada: '09:00',
+    hora_programada: '',
     kilometraje_servicio: kilometraje, // 🔥 COMO NÚMERO
-    proximo_servicio_km: kilometraje ? kilometraje + 5000 : '',
-    taller: state.taller || '',
+    proximo_servicio_km: kilometraje ? kilometraje + 10000 : '',
+    taller: tallerMap.categoria,
+    taller_otro_detalle: tallerMap.detalle,
+    servicio_especial: '',
     observaciones: state.observaciones || '',
     monto_estimado: state.costo_estimado || ''
   });
@@ -123,15 +389,32 @@ const cargarDatosDesdeSiniestro = (state) => {
   const cargarOpciones = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/admin/mantenimientos/opciones`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await response.json();
+      const [responseOpciones, responseServicios] = await Promise.all([
+        fetch(`${API_BASE_URL}/admin/mantenimientos/opciones`, {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        fetch(`${API_BASE_URL}/admin/mantenimientos/servicios-preventivos`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      ]);
+
+      const data = await responseOpciones.json();
+      const serviciosData = await responseServicios.json();
+
       if (data.success) {
-        setVehiculos(data.opciones.vehiculos);
-        setTiposServicio(data.opciones.tipos_servicio);
-        setTalleres(data.opciones.talleres);
-        console.log('✅ Opciones cargadas:', data.opciones.vehiculos.length, 'vehículos');
+        setVehiculos(data.opciones.vehiculos || []);
+        setTiposServicio(data.opciones.tipos_servicio || []);
+        setTiposSolicitudOpciones(data.opciones.tipos_solicitud || DEFAULT_TIPOS_SOLICITUD);
+        const categoriasBackend = Array.isArray(data.opciones.categorias_taller)
+          ? data.opciones.categorias_taller.map((value) => ({ value, label: value }))
+          : [];
+        if (categoriasBackend.length > 0) {
+          setCategoriasTaller(categoriasBackend);
+        }
+      }
+
+      if (serviciosData.success) {
+        setServiciosPreventivos(serviciosData.modelos || {});
       }
     } catch (error) {
       console.error('Error al cargar opciones:', error);
@@ -139,28 +422,108 @@ const cargarDatosDesdeSiniestro = (state) => {
   };
 
   const cargarInfoVehiculo = (vehiculoId) => {
-    const vehiculo = vehiculos.find(v => v.id === parseInt(vehiculoId));
+    const vehiculo = vehiculos.find((v) => v.id === parseInt(vehiculoId, 10));
     if (vehiculo) {
+      const kmActual = Number(vehiculo.kilometraje_actual || 0);
+      const sugerencia = getServicioSugerido({
+        kilometraje: kmActual,
+        modelo: buildModeloDescriptor(vehiculo),
+        modelos: serviciosPreventivos,
+        fallbackTipos: tiposServicio
+      });
+
+      setServicioSugerido(sugerencia);
       setVehiculoSeleccionado(vehiculo);
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
-        kilometraje_servicio: vehiculo.kilometraje_actual || ''
+        kilometraje_servicio: kmActual,
+        tipo_servicio:
+          prev.tipo_solicitud === 'fuera_programacion'
+            ? prev.tipo_servicio
+            : (sugerencia.tipoServicio || prev.tipo_servicio),
+        proximo_servicio_km: sugerencia.kilometrajeObjetivo
       }));
     }
   };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    setFormData((prev) => {
+      if (name === 'fecha_programada') {
+        return {
+          ...prev,
+          fecha_programada: value,
+          hora_programada: ''
+        };
+      }
+      return {
+        ...prev,
+        [name]: value,
+        ...(name === 'tipo_solicitud'
+          ? {
+              causa_fuera_programacion:
+                value !== 'fuera_programacion'
+                  ? ''
+                  : (prev.causa_fuera_programacion || 'otro'),
+              tipo_servicio:
+                value === 'fuera_programacion'
+                  ? (desdeSiniestro ? prev.tipo_servicio : '')
+                  : (prev.tipo_servicio || servicioSugerido.tipoServicio || prev.tipo_servicio),
+              servicio_especial: value === 'fuera_programacion' ? '' : prev.servicio_especial
+            }
+          : {}),
+        ...(name === 'taller' && value !== 'Otro' ? { taller_otro_detalle: '' } : {})
+      };
+    });
     if (errors[name]) {
-      setErrors(prev => ({
+      setErrors((prev) => ({
         ...prev,
         [name]: ''
       }));
     }
+  };
+
+  const handleAdjuntosChange = (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const merged = [...adjuntosAdmin, ...files];
+    if (merged.length > MAX_ADMIN_ADJUNTOS) {
+      setErrors((prev) => ({
+        ...prev,
+        adjuntos_admin: `Solo puedes adjuntar hasta ${MAX_ADMIN_ADJUNTOS} archivos`
+      }));
+      event.target.value = '';
+      return;
+    }
+
+    for (const file of files) {
+      const mime = String(file.type || '').toLowerCase();
+      if (!ALLOWED_ADMIN_ADJUNTO_MIME_TYPES.has(mime)) {
+        setErrors((prev) => ({
+          ...prev,
+          adjuntos_admin: 'Solo se permiten archivos JPG, PNG, WEBP, HEIC o PDF'
+        }));
+        event.target.value = '';
+        return;
+      }
+      if (file.size > MAX_ADMIN_ADJUNTO_SIZE_BYTES) {
+        setErrors((prev) => ({
+          ...prev,
+          adjuntos_admin: `El archivo "${file.name}" supera el limite de 10MB`
+        }));
+        event.target.value = '';
+        return;
+      }
+    }
+
+    setAdjuntosAdmin(merged);
+    setErrors((prev) => ({ ...prev, adjuntos_admin: '' }));
+    event.target.value = '';
+  };
+
+  const removeAdjunto = (index) => {
+    setAdjuntosAdmin((prev) => prev.filter((_, i) => i !== index));
   };
 
   const validarFormulario = () => {
@@ -169,8 +532,11 @@ const cargarDatosDesdeSiniestro = (state) => {
     if (!formData.vehiculo_id) {
       newErrors.vehiculo_id = 'Debes seleccionar un vehículo';
     }
-    if (!formData.tipo_servicio) {
-      newErrors.tipo_servicio = 'Debes seleccionar un tipo de servicio';
+    if (!String(formData.tipo_servicio || '').trim() && !String(formData.servicio_especial || '').trim()) {
+      newErrors.tipo_servicio = 'No se pudo determinar el servicio. Agrega un servicio especial.';
+    }
+    if (formData.tipo_solicitud === 'fuera_programacion' && !String(formData.tipo_servicio || '').trim()) {
+      newErrors.tipo_servicio = 'Debes redactar la falla reportada del vehiculo';
     }
     if (!formData.fecha_programada) {
       newErrors.fecha_programada = 'Debes seleccionar una fecha';
@@ -199,13 +565,22 @@ const cargarDatosDesdeSiniestro = (state) => {
       } else {
         const inicioEnMinutos = hora * 60 + minuto;
         const finEnMinutos = inicioEnMinutos + 30;
-        if (inicioEnMinutos < 540 || finEnMinutos > 1140) {
-          newErrors.hora_programada = 'Horarios disponibles de 09:00 a 19:00 en bloques de 30 minutos';
+        if (inicioEnMinutos < 480 || finEnMinutos > 930) {
+          newErrors.hora_programada = 'Horarios disponibles de 08:00 a 15:00 en bloques de 30 minutos';
         }
+      }
+    }
+    if (slotsAgenda.length > 0) {
+      const slotSeleccionado = slotsAgenda.find((slot) => slot.hora === formData.hora_programada);
+      if (slotSeleccionado && !slotSeleccionado.disponible && !forzarHorarioOcupado) {
+        newErrors.hora_programada = 'Ese bloque de 30 minutos ya esta ocupado. Activa la opcion de sobrecupo para continuar.';
       }
     }
     if (!formData.kilometraje_servicio || formData.kilometraje_servicio <= 0) {
       newErrors.kilometraje_servicio = 'Debes ingresar el kilometraje';
+    }
+    if (formData.taller === 'Otro' && !String(formData.taller_otro_detalle || '').trim()) {
+      newErrors.taller_otro_detalle = 'Debes describir el taller cuando seleccionas "Otro"';
     }
 
     setErrors(newErrors);
@@ -220,24 +595,48 @@ const cargarDatosDesdeSiniestro = (state) => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
+      const payload = new FormData();
+      payload.append('vehiculo_id', String(parseInt(formData.vehiculo_id, 10)));
+      payload.append('tipo_solicitud', formData.tipo_solicitud || '');
+      payload.append(
+        'causa_fuera_programacion',
+        formData.tipo_solicitud === 'fuera_programacion'
+          ? (formData.causa_fuera_programacion || 'otro')
+          : ''
+      );
+      payload.append(
+        'detalle_fuera_programacion',
+        formData.tipo_solicitud === 'fuera_programacion'
+          ? (formData.tipo_servicio || '')
+          : ''
+      );
+      payload.append('forzar_horario_ocupado', forzarHorarioOcupado ? 'true' : 'false');
+      payload.append('tipo_servicio', formData.tipo_servicio || '');
+      payload.append('fecha_programada', formData.fecha_programada || '');
+      payload.append('hora_programada', formData.hora_programada || '');
+      payload.append('kilometraje_servicio', String(parseInt(formData.kilometraje_servicio, 10)));
+      payload.append('proximo_servicio_km', String(parseInt(formData.proximo_servicio_km, 10)));
+      payload.append('taller', formData.taller || '');
+      payload.append('taller_otro_detalle', formData.taller_otro_detalle || '');
+      payload.append(
+        'servicio_especial',
+        formData.tipo_solicitud === 'fuera_programacion' ? '' : (formData.servicio_especial || '')
+      );
+      payload.append('observaciones', formData.observaciones || '');
+      payload.append(
+        'monto_estimado',
+        String(formData.monto_estimado ? parseFloat(formData.monto_estimado) : 0)
+      );
+      adjuntosAdmin.forEach((file) => {
+        payload.append('adjuntos_admin', file);
+      });
 
       const response = await fetch(`${API_BASE_URL}/admin/mantenimientos`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          vehiculo_id: parseInt(formData.vehiculo_id),
-          tipo_servicio: formData.tipo_servicio,
-          fecha_programada: formData.fecha_programada,
-          hora_programada: formData.hora_programada,
-          kilometraje_servicio: parseInt(formData.kilometraje_servicio),
-          proximo_servicio_km: parseInt(formData.proximo_servicio_km),
-          taller: formData.taller,
-          observaciones: formData.observaciones,
-          monto_estimado: formData.monto_estimado ? parseFloat(formData.monto_estimado) : 0
-        })
+        body: payload
       });
 
       const data = await response.json();
@@ -265,21 +664,17 @@ if (data.success) {
   };
 
   const formatDate = (dateString) => {
-    if (!dateString) return '-';
-    const [year, month, day] = dateString.split('-');
-    const fecha = new Date(year, month - 1, day);
-    return fecha.toLocaleDateString('es-MX', {
-      weekday: 'long', // Agregamos el día de la semana para que verifiques visualmente
-      day: 'numeric',
+    return formatMaintenanceDate(dateString, {
+      fallback: '-',
       month: 'long',
-      year: 'numeric'
+      withWeekday: true
     });
   };
 
   const today = new Date().toISOString().split('T')[0];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-4xl mx-auto">
         
         <div className="flex items-center gap-4 mb-8">
@@ -394,27 +789,121 @@ if (data.success) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2">
                 <label className="text-gray-400 text-sm mb-2 block">
-                  Tipo de Servicio *
+                  Tipo de solicitud
                 </label>
                 <select
-                  name="tipo_servicio"
-                  value={formData.tipo_servicio}
+                  name="tipo_solicitud"
+                  value={formData.tipo_solicitud}
                   onChange={handleChange}
-                  className={`w-full px-4 py-3 bg-white border ${
-                    errors.tipo_servicio ? 'border-red-500' :
-                    desdeSiniestro && formData.tipo_servicio ? 'border-green-500/50 bg-green-500/5' : 'border-white/20'
-                  } rounded-lg text-slate-900 focus:outline-none focus:border-blue-500`}
+                  className="w-full px-4 py-3 bg-white border border-white/20 rounded-lg text-slate-900 focus:outline-none focus:border-blue-500"
                 >
-                  <option value="">Selecciona el tipo de servicio</option>
-                  {tiposServicio.map(tipo => (
-                    <option key={tipo} value={tipo}>{tipo}</option>
+                  {tiposSolicitudOpciones.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="text-gray-400 text-sm mb-2 block">
+                  {formData.tipo_solicitud === 'fuera_programacion'
+                    ? 'Falla reportada del vehiculo *'
+                    : 'Tipo de Servicio *'}
+                </label>
+                <textarea
+                  name="tipo_servicio"
+                  value={formData.tipo_servicio}
+                  onChange={formData.tipo_solicitud === 'fuera_programacion' ? handleChange : undefined}
+                  readOnly={formData.tipo_solicitud !== 'fuera_programacion'}
+                  rows={Math.max(2, Math.ceil(String(formData.tipo_servicio || '').length / 75))}
+                  placeholder={
+                    formData.tipo_solicitud === 'fuera_programacion'
+                      ? 'Describe la falla detectada del vehiculo. Ej. Ruido en suspension delantera, falla de frenos, no entra reversa, etc.'
+                      : ''
+                  }
+                  className={`w-full px-4 py-3 border ${
+                    errors.tipo_servicio ? 'border-red-500' : 'border-white/20'
+                  } rounded-lg text-slate-900 leading-relaxed resize-none break-words ${
+                    formData.tipo_solicitud === 'fuera_programacion' ? 'bg-white' : 'bg-white/80 cursor-not-allowed'
+                  }`}
+                />
                 {errors.tipo_servicio && (
                   <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3 h-3" />
                     {errors.tipo_servicio}
                   </p>
+                )}
+                {formData.tipo_solicitud !== 'fuera_programacion' && (
+                  <p className="text-gray-500 text-xs mt-1">
+                    {servicioSugerido.fuenteCalendario
+                      ? `${getServicioPreventivoTitulo(servicioSugerido) ? `${getServicioPreventivoTitulo(servicioSugerido)}. ` : ''}Sugerido por kilometraje en ${Number(servicioSugerido.kilometrajeObjetivo || 0).toLocaleString('es-MX')} km.${servicioSugerido.incluyeRotacion ? ' Incluye rotacion de llantas.' : ''}`
+                      : 'No hay calendario preventivo disponible. Usa servicio especial si necesitas ajustar el detalle.'}
+                  </p>
+                )}
+              </div>
+
+              {formData.tipo_solicitud !== 'fuera_programacion' && (
+                <div className="md:col-span-2">
+                <label className="text-gray-400 text-sm mb-2 block">
+                  Servicio especial (opcional)
+                </label>
+                <input
+                  type="text"
+                  name="servicio_especial"
+                  value={formData.servicio_especial}
+                  onChange={handleChange}
+                  maxLength={300}
+                  placeholder="Ej. Balero delantero, ruido en suspension, banda auxiliar..."
+                  className="w-full px-4 py-3 bg-white border border-white/20 rounded-lg text-slate-900 focus:outline-none focus:border-blue-500"
+                />
+                <p className="text-gray-500 text-xs mt-1">
+                  Se agrega como detalle adicional del servicio, igual que en la solicitud del conductor.
+                </p>
+                </div>
+              )}
+
+              <div className="md:col-span-2">
+                <label className="text-gray-400 text-sm mb-2 flex items-center gap-2">
+                  <Paperclip className="w-4 h-4 text-cyan-300" />
+                  Adjuntar evidencia (fotos o PDF) - Opcional
+                </label>
+                <input
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.webp,.heic,.heif,.pdf,image/jpeg,image/jpg,image/png,image/webp,image/heic,image/heif,application/pdf"
+                  multiple
+                  onChange={handleAdjuntosChange}
+                  className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white file:mr-4 file:py-2 file:px-3 file:rounded file:border-0 file:bg-cyan-500/20 file:text-cyan-200 hover:file:bg-cyan-500/30"
+                />
+                <p className="text-gray-500 text-xs mt-1">
+                  Hasta {MAX_ADMIN_ADJUNTOS} archivos. Maximo 10MB por archivo.
+                </p>
+                {errors.adjuntos_admin && (
+                  <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {errors.adjuntos_admin}
+                  </p>
+                )}
+                {adjuntosAdmin.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {adjuntosAdmin.map((file, index) => (
+                      <div
+                        key={`${file.name}-${index}`}
+                        className="flex items-center justify-between rounded bg-white/5 border border-white/10 px-3 py-2 text-xs"
+                      >
+                        <span className="text-gray-200 truncate pr-3">
+                          {file.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeAdjunto(index)}
+                          className="text-red-300 hover:text-red-200"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
@@ -438,24 +927,39 @@ if (data.success) {
                     {errors.fecha_programada}
                   </p>
                 )}
+                {formData.fecha_programada && (
+                  <p className="text-gray-400 text-xs mt-1">
+                    Fecha seleccionada: {formatDate(formData.fecha_programada)}
+                  </p>
+                )}
               </div>
 
               <div>
                 <label className="text-gray-400 text-sm mb-2 block">
                   Hora Programada *
                 </label>
-                <input
-                  type="time"
+                <select
                   name="hora_programada"
                   value={formData.hora_programada}
                   onChange={handleChange}
-                  step="1800"
-                  min="09:00"
-                  max="19:00"
+                  disabled={!formData.fecha_programada || cargandoDisponibilidad}
                   className={`w-full px-4 py-3 bg-white/10 border ${
                     errors.hora_programada ? 'border-red-500' : 'border-white/20'
                   } rounded-lg text-white focus:outline-none focus:border-blue-500`}
-                />
+                >
+                    <option value="">
+                      {formData.fecha_programada ? 'Selecciona un horario' : 'Primero selecciona fecha'}
+                    </option>
+                  {(slotsAgenda.length > 0
+                    ? slotsAgenda
+                    : HALF_HOUR_SLOTS.map((hora) => ({ hora, disponible: true }))
+                  ).map((slot) => (
+                    <option key={slot.hora} value={slot.hora}>
+                      {slot.hora}
+                      {!slot.disponible ? ' - Ocupado' : ''}
+                    </option>
+                  ))}
+                </select>
                 {errors.hora_programada && (
                   <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
                     <AlertCircle className="w-3 h-3" />
@@ -463,23 +967,78 @@ if (data.success) {
                   </p>
                 )}
                 <p className="text-gray-500 text-xs mt-1">
-                  Intervalos de 30 minutos (09:00 - 19:00), solo de lunes a viernes.
+                  Bloques de 30 minutos. Los horarios ocupados se muestran como "Ocupado"; puedes forzar solo si tienes permiso administrativo.
                 </p>
+                {cargandoDisponibilidad && (
+                  <p className="text-cyan-300 text-xs mt-1">Cargando disponibilidad...</p>
+                )}
               </div>
 
-              <div>
+              {(() => {
+                const slotSeleccionado = slotsAgenda.find((slot) => slot.hora === formData.hora_programada);
+                if (!slotSeleccionado || slotSeleccionado.disponible) return null;
+                return (
+                  <div className="md:col-span-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+                    <p className="text-amber-200 text-sm font-semibold">
+                      El horario seleccionado ya esta ocupado.
+                    </p>
+                    <label className="mt-2 flex items-center gap-2 text-xs text-amber-100">
+                      <input
+                        type="checkbox"
+                        checked={forzarHorarioOcupado}
+                        onChange={(e) => setForzarHorarioOcupado(e.target.checked)}
+                      />
+                      Permitir sobrecupo y agendar de todos modos (con advertencia)
+                    </label>
+                  </div>
+                );
+              })()}
+
+              <div className="md:col-span-2">
                 <label className="text-gray-400 text-sm mb-2 block">
-                  Taller
+                  Categoria de taller
                 </label>
-                <input
-                  type="text"
+                <select
                   name="taller"
                   value={formData.taller}
                   onChange={handleChange}
-                  placeholder="Nombre del taller"
-                  className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
-                />
+                  className="w-full px-4 py-3 bg-white border border-white/20 rounded-lg text-slate-900 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">Seleccionar categoria (opcional)...</option>
+                  {categoriasTaller.map((categoria) => (
+                    <option key={categoria.value} value={categoria.value}>
+                      {categoria.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-gray-500 text-xs mt-1">
+                  Usa categorias estandar para trazabilidad operativa.
+                </p>
               </div>
+
+              {formData.taller === 'Otro' && (
+                <div className="md:col-span-2">
+                  <label className="text-gray-400 text-sm mb-2 block">
+                    Descripcion de taller
+                  </label>
+                  <input
+                    type="text"
+                    name="taller_otro_detalle"
+                    value={formData.taller_otro_detalle}
+                    onChange={handleChange}
+                    placeholder="Ej. Taller externo especializado en..."
+                    className={`w-full px-4 py-3 bg-white/10 border ${
+                      errors.taller_otro_detalle ? 'border-red-500' : 'border-white/20'
+                    } rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500`}
+                  />
+                  {errors.taller_otro_detalle && (
+                    <p className="text-red-400 text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {errors.taller_otro_detalle}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="text-gray-400 text-sm mb-2 block">
@@ -517,7 +1076,7 @@ if (data.success) {
                   className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
                 />
                 <p className="text-gray-500 text-xs mt-1">
-                  Se calcula automáticamente (+5,000 km)
+                  Se calcula automáticamente (+10,000 km)
                 </p>
               </div>
 
@@ -602,9 +1161,19 @@ if (data.success) {
                 <div>
                   <p className="text-gray-400 mb-1">Taller:</p>
                   <p className="text-white font-semibold">
-                    {formData.taller || 'Por definir'}
+                    {formData.taller === 'Otro'
+                      ? `Otro: ${formData.taller_otro_detalle || 'Sin descripcion'}`
+                      : (formData.taller || 'Por definir')}
                   </p>
                 </div>
+                {formData.servicio_especial && (
+                  <div>
+                    <p className="text-gray-400 mb-1">Servicio especial:</p>
+                    <p className="text-white font-semibold">
+                      {formData.servicio_especial}
+                    </p>
+                  </div>
+                )}
                 {desdeSiniestro && (
                   <div className="col-span-2 pt-2 border-t border-white/10">
                     <p className="text-orange-400 text-xs flex items-center gap-1">

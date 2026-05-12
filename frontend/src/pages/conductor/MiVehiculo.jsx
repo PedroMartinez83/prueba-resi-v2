@@ -16,6 +16,10 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import {
+  formatMaintenanceDate,
+  formatMaintenanceDateTime
+} from '@/utils/maintenanceDateFormat';
 
 const MiVehiculo = () => {
   const navigate = useNavigate();
@@ -27,22 +31,75 @@ const MiVehiculo = () => {
   const [videoFile, setVideoFile] = useState(null);
   const [fotosFiles, setFotosFiles] = useState([]);
   const [comentarios, setComentarios] = useState('');
-  const [kilometraje, setKilometraje] = useState('');
+  const [kilometrajeManual, setKilometrajeManual] = useState('');
+  const [guardandoKilometraje, setGuardandoKilometraje] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
 
   useEffect(() => {
     cargarVehiculo();
   }, []);
 
+  const formatearFechaSistema = (fecha) => {
+    return formatMaintenanceDateTime(fecha, { fallback: 'Sin fecha' });
+  };
+
+  const formatearSoloFecha = (fecha) => {
+    return formatMaintenanceDate(fecha, { fallback: 'Sin fecha' });
+  };
+
   const cargarVehiculo = async () => {
     try {
       setLoading(true);
       const data = await conductorService.getMiVehiculo();
       setVehiculo(data.vehiculo);
+      setKilometrajeManual(String(data?.vehiculo?.kilometraje_actual ?? ''));
     } catch (error) {
       toast.error(error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleActualizarKilometraje = async () => {
+    const km = Number(kilometrajeManual);
+
+    if (!Number.isFinite(km) || km < 0) {
+      toast.error('Ingresa un kilometraje valido (>= 0)');
+      return;
+    }
+
+    try {
+      setGuardandoKilometraje(true);
+      const response = await conductorService.actualizarKilometrajeVehiculo(km);
+      const kmActualizado = response?.vehiculo?.kilometraje_actual ?? km;
+      const siguienteServicioKm = response?.mantenimiento_preventivo?.siguiente_servicio_km;
+      const nuevoRegistro = response?.registro_kilometraje;
+
+      setVehiculo((prev) => ({
+        ...prev,
+        kilometraje_actual: kmActualizado,
+        proximo_mantenimiento: siguienteServicioKm ?? prev?.proximo_mantenimiento,
+        proximo_mantenimiento_km: siguienteServicioKm ?? prev?.proximo_mantenimiento_km,
+        bloqueo_registro_kilometraje:
+          response?.bloqueo_registro_kilometraje ?? prev?.bloqueo_registro_kilometraje,
+        historial_kilometraje: nuevoRegistro
+          ? [nuevoRegistro, ...(prev?.historial_kilometraje || [])]
+          : (prev?.historial_kilometraje || [])
+      }));
+      setKilometrajeManual(String(kmActualizado));
+
+      toast.success(response?.message || 'Kilometraje actualizado');
+    } catch (error) {
+      const bloqueo = error?.details?.bloqueo_registro_kilometraje;
+      if (bloqueo?.bloqueado) {
+        setVehiculo((prev) => ({
+          ...prev,
+          bloqueo_registro_kilometraje: bloqueo
+        }));
+      }
+      toast.error(error.message || 'No se pudo actualizar el kilometraje');
+    } finally {
+      setGuardandoKilometraje(false);
     }
   };
 
@@ -82,20 +139,21 @@ const MiVehiculo = () => {
       const formData = new FormData();
       formData.append('video', videoFile);
       formData.append('comentarios', comentarios);
-      formData.append('kilometraje', kilometraje);
       
       fotosFiles.forEach((foto, index) => {
         formData.append('fotos', foto);
       });
 
-      await conductorService.subirRevisionDiaria(formData);
+      const revisionResponse = await conductorService.subirRevisionDiaria(formData);
       
       toast.success('¡Revisión diaria subida correctamente!');
+      if (revisionResponse?.aviso_kilometraje) {
+        toast.error(revisionResponse.aviso_kilometraje);
+      }
       setMostrarFormRevision(false);
       setVideoFile(null);
       setFotosFiles([]);
       setComentarios('');
-      setKilometraje('');
       cargarVehiculo(); // Recargar datos
       
     } catch (error) {
@@ -128,6 +186,35 @@ const MiVehiculo = () => {
       </div>
     );
   }
+
+  const proximoMantenimientoKm = vehiculo.proximo_mantenimiento_km ?? vehiculo.proximo_mantenimiento ?? 0;
+  const alertaPreventivo = vehiculo.alertas_preventivo || vehiculo.mantenimiento_preventivo?.alertas || null;
+  const recordatorioRegistroKm = vehiculo.recordatorio_registro_km || null;
+  const bloqueoRegistroKm = vehiculo.bloqueo_registro_kilometraje || null;
+  const registroKmBloqueado = Boolean(bloqueoRegistroKm?.bloqueado);
+  const KM_CICLO_MANTENIMIENTO = 10000;
+  const kmActual = Number(vehiculo.kilometraje_actual) || 0;
+  const kmObjetivoPorBloqueo = Number(bloqueoRegistroKm?.hito_objetivo_km) || 0;
+  const kmObjetivoServicio =
+    Number(proximoMantenimientoKm) ||
+    kmObjetivoPorBloqueo ||
+    Math.ceil(Math.max(kmActual, 1) / KM_CICLO_MANTENIMIENTO) * KM_CICLO_MANTENIMIENTO;
+
+  let kmEnCiclo = kmActual % KM_CICLO_MANTENIMIENTO;
+  if (kmActual > 0 && kmEnCiclo === 0) {
+    kmEnCiclo = KM_CICLO_MANTENIMIENTO;
+  }
+
+  const servicioExcedido = kmObjetivoServicio > 0 && kmActual > kmObjetivoServicio;
+  const progresoCicloPorcentaje = Math.min((kmEnCiclo / KM_CICLO_MANTENIMIENTO) * 100, 100);
+  const porcentajeBarra = servicioExcedido ? 100 : progresoCicloPorcentaje;
+  const kmRestantes = Math.max(kmObjetivoServicio - kmActual, 0);
+  const kmExcedidos = Math.max(kmActual - kmObjetivoServicio, 0);
+  const textoProgreso = servicioExcedido
+    ? `${kmExcedidos.toLocaleString('es-MX')} km excedidos`
+    : kmRestantes === 0
+      ? 'Meta alcanzada, agenda servicio'
+      : `${kmRestantes.toLocaleString('es-MX')} km restantes`;
 
   return (
     <div className="space-y-6">
@@ -177,6 +264,34 @@ const MiVehiculo = () => {
         </div>
       )}
 
+      {registroKmBloqueado && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-6 h-6 text-red-400" />
+            <div>
+              <p className="text-red-300 font-semibold">Registro de kilometraje bloqueado</p>
+              <p className="text-sm text-gray-200">
+                {bloqueoRegistroKm?.mensaje || 'Debes solicitar mantenimiento para continuar registrando kilometraje.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              navigate('/conductor/mantenimientos', {
+                state: {
+                  openSolicitud: true,
+                  tipoSolicitud: 'preventivo_programado'
+                }
+              })
+            }
+            className="px-4 py-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-400/30 text-red-200 font-semibold whitespace-nowrap"
+          >
+            Solicitar mantenimiento
+          </button>
+        </div>
+      )}
+
       {/* Formulario de Revisión Diaria */}
       {mostrarFormRevision && (
         <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-6">
@@ -218,21 +333,6 @@ const MiVehiculo = () => {
               {fotosFiles.length > 0 && (
                 <p className="text-sm text-green-400 mt-2">✓ {fotosFiles.length} foto(s) seleccionada(s)</p>
               )}
-            </div>
-
-            {/* Kilometraje */}
-            <div>
-              <label className="block text-white font-semibold mb-2 flex items-center gap-2">
-                <Gauge className="w-5 h-5 text-cyan-400" />
-                Kilometraje Actual
-              </label>
-              <input
-                type="number"
-                value={kilometraje}
-                onChange={(e) => setKilometraje(e.target.value)}
-                placeholder="Ej: 45000"
-                className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-400"
-              />
             </div>
 
             {/* Comentarios */}
@@ -309,13 +409,70 @@ const MiVehiculo = () => {
             <div>
               <p className="text-gray-400 text-sm mb-1">Kilometraje Actual</p>
               <p className="text-3xl font-bold text-white">
-                {vehiculo.kilometraje_actual?.toLocaleString('es-MX') || 0} km
+                {kmActual.toLocaleString('es-MX')} km
               </p>
             </div>
             <div>
               <p className="text-gray-400 text-sm mb-1">Próximo Mantenimiento</p>
               <p className="text-xl font-semibold text-cyan-400">
-                {vehiculo.proximo_mantenimiento_km?.toLocaleString('es-MX') || 0} km
+                {proximoMantenimientoKm?.toLocaleString('es-MX') || 0} km
+              </p>
+            </div>
+
+            {alertaPreventivo?.mensaje && (
+              <div
+                className={`rounded-lg border px-3 py-2 text-sm ${
+                  alertaPreventivo.vencido
+                    ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                    : alertaPreventivo.alerta_capacidad_taller
+                      ? 'border-yellow-500/40 bg-yellow-500/10 text-yellow-200'
+                      : alertaPreventivo.alerta_preventiva
+                        ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                        : 'border-white/10 bg-white/5 text-gray-300'
+                }`}
+              >
+                {alertaPreventivo.mensaje}
+              </div>
+            )}
+
+            {recordatorioRegistroKm?.mostrar && (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                {recordatorioRegistroKm.mensaje}
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-white/10">
+              <p className="text-gray-300 text-sm font-medium mb-2">Registrar kilometraje</p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  value={kilometrajeManual}
+                  onChange={(e) => setKilometrajeManual(e.target.value)}
+                  placeholder="Ej: 128500"
+                  disabled={registroKmBloqueado}
+                  className="flex-1 px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:border-cyan-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleActualizarKilometraje}
+                  disabled={guardandoKilometraje || registroKmBloqueado}
+                  className="px-4 py-2 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/30 text-cyan-200 font-semibold disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {guardandoKilometraje ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Guardando...
+                    </>
+                  ) : (
+                    'Guardar km'
+                  )}
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                {registroKmBloqueado
+                  ? 'Debes solicitar mantenimiento para volver a registrar kilometraje.'
+                  : 'Actualiza el kilometraje cuando termines turno o recorrido.'}
               </p>
             </div>
             
@@ -323,18 +480,43 @@ const MiVehiculo = () => {
             <div>
               <div className="w-full bg-white/10 rounded-full h-3">
                 <div 
-                  className="bg-gradient-to-r from-cyan-500 to-blue-500 h-3 rounded-full transition-all"
+                  className={`h-3 rounded-full transition-all ${
+                    servicioExcedido
+                      ? 'bg-gradient-to-r from-red-500 to-rose-600'
+                      : 'bg-gradient-to-r from-cyan-500 to-blue-500'
+                  }`}
                   style={{ 
-                    width: `${Math.min(
-                      ((vehiculo.kilometraje_actual || 0) / (vehiculo.proximo_mantenimiento_km || 1)) * 100, 
-                      100
-                    )}%` 
+                    width: `${porcentajeBarra}%` 
                   }}
                 ></div>
               </div>
-              <p className="text-xs text-gray-400 mt-1">
-                {Math.abs((vehiculo.proximo_mantenimiento_km || 0) - (vehiculo.kilometraje_actual || 0)).toLocaleString('es-MX')} km restantes
+              <p className={`text-xs mt-1 ${servicioExcedido ? 'text-red-300' : 'text-gray-400'}`}>
+                {textoProgreso}
               </p>
+            </div>
+
+            <div className="pt-3 border-t border-white/10">
+              <p className="text-gray-300 text-sm font-medium mb-2">Historial de kilometraje</p>
+
+              {Array.isArray(vehiculo.historial_kilometraje) && vehiculo.historial_kilometraje.length > 0 ? (
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {vehiculo.historial_kilometraje.map((registro) => (
+                    <div
+                      key={registro.id}
+                      className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2"
+                    >
+                      <span className="text-xs text-gray-300">
+                        {formatearFechaSistema(registro.fecha_registro)}
+                      </span>
+                      <span className="text-sm font-semibold text-cyan-300">
+                        {Number(registro.kilometraje_actual || 0).toLocaleString('es-MX')} km
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">Aún no hay registros de kilometraje.</p>
+              )}
             </div>
           </div>
         </div>
@@ -349,7 +531,7 @@ const MiVehiculo = () => {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <InfoRow label="Tipo de Servicio" value={vehiculo.proximoMantenimiento.tipo_servicio} />
-            <InfoRow label="Fecha Programada" value={new Date(vehiculo.proximoMantenimiento.fecha_programada).toLocaleDateString('es-MX')} />
+            <InfoRow label="Fecha Programada" value={formatearSoloFecha(vehiculo.proximoMantenimiento.fecha_programada)} />
             <InfoRow label="Estado" value={vehiculo.proximoMantenimiento.estado} />
           </div>
         </div>
@@ -364,7 +546,14 @@ const MiVehiculo = () => {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <InfoRow label="Tipo de Servicio" value={vehiculo.ultimoMantenimiento.tipo_servicio} />
-            <InfoRow label="Fecha" value={new Date(vehiculo.ultimoMantenimiento.fecha_servicio).toLocaleDateString('es-MX')} />
+            <InfoRow
+              label="Fecha"
+              value={formatearSoloFecha(
+                vehiculo.ultimoMantenimiento.fecha_realizada
+                || vehiculo.ultimoMantenimiento.fecha_servicio
+                || vehiculo.ultimoMantenimiento.fecha_programada
+              )}
+            />
             <InfoRow label="Kilometraje" value={`${vehiculo.ultimoMantenimiento.kilometraje_servicio?.toLocaleString('es-MX') || 0} km`} />
           </div>
         </div>

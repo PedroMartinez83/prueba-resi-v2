@@ -30,13 +30,11 @@ const RentasDashboard = () => {
   const [alertas, setAlertas] = useState([]);
   const [mostrarTodosDeuda, setMostrarTodosDeuda] = useState(false);
 
-  useEffect(() => {
-    cargarDashboard();
-  }, []);
-
-  const cargarDashboard = async () => {
+  const cargarDashboard = async (showLoader = true) => {
     try {
-      setLoading(true);
+      if (showLoader) {
+        setLoading(true);
+      }
       
       // 🎯 OPTIMIZACIÓN: Todas las peticiones juntas (4 en total)
       const [statsResponse, morososResponse, graficaResponse, topResponse] = await Promise.all([
@@ -90,9 +88,35 @@ const RentasDashboard = () => {
     } catch (error) {
       console.error('❌ Error al cargar dashboard:', error);
     } finally {
-      setLoading(false);
+      if (showLoader) {
+        setLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    cargarDashboard(true);
+
+    const intervalId = setInterval(() => {
+      cargarDashboard(false);
+    }, 30000);
+
+    const handleFocus = () => {
+      cargarDashboard(false);
+    };
+
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
+  const deudaTotalConductores = estadisticas?.total_deuda_conductores ??
+    (Array.isArray(morosos)
+      ? morosos.reduce((total, conductor) => total + parseFloat(conductor.deuda_aproximada || 0), 0)
+      : 0);
 
   const metricasCards = [
     {
@@ -127,7 +151,7 @@ const RentasDashboard = () => {
     },
     {
       titulo: 'Fondo de Pólizas (Mes)',
-      valor: estadisticas?.proyeccion_poliza_mes || estadisticas?.total_ahorrado_poliza || 0,
+      valor: estadisticas?.poliza_mes_real || 0,
       formato: 'dinero',
       icono: Shield,
       color: 'from-indigo-500 to-purple-600',
@@ -155,6 +179,15 @@ const RentasDashboard = () => {
       formato: 'dinero',
       icono: TrendingUp,
       color: 'from-cyan-500 to-blue-500'
+    },
+    {
+      titulo: 'Deuda Total Conductores',
+      valor: deudaTotalConductores,
+      formato: 'dinero',
+      icono: AlertTriangle,
+      color: 'from-red-500 to-rose-600',
+      descripcion: 'Total pendiente por pagar',
+      onClick: () => navigate('/admin/rentas/pagos?status=Pendiente')
     }
   ];
 
@@ -184,7 +217,7 @@ const RentasDashboard = () => {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 bg-[#07425E] space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

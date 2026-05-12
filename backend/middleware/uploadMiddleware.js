@@ -29,11 +29,24 @@ const uploadImages = multer({
   fileFilter: (req, file, cb) => {
     console.log('🖼️ Validando archivo:', file.fieldname, file.mimetype);
     
-    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    // 🚀 LISTA VIP ACTUALIZADA: Agregamos iPhone y PDFs
+    const allowedMimes = [
+      'image/jpeg', 
+      'image/jpg', 
+      'image/png', 
+      'image/webp',
+      'image/heic',          // 🍏 Foto nativa de iPhone
+      'image/heif',          // 🍏 Variante de formato Apple
+      'image/heic-sequence', // 🍏 Live Photos de iPhone
+      'application/pdf'      // 📄 Recibos descargados del banco
+    ];
     
     if (allowedMimes.includes(file.mimetype)) {
       cb(null, true);
     } else {
+      // Dejamos el console.log del error para que si llega a fallar otro formato raro, 
+      // puedas ver exactamente qué mimetype era en tu terminal
+      console.error(`❌ Bloqueado por Multer: ${file.mimetype}`);
       cb(new Error(`Tipo de archivo no permitido: ${file.mimetype}`), false);
     }
   }

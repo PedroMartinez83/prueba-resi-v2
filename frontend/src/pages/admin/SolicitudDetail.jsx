@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import solicitudesService from '../../services/solicitudesService';
+import { useAuth } from '../../contexts/AuthContext';
 import { 
   ArrowLeft,
   User,
@@ -23,18 +24,25 @@ import {
   Zap,
   Target,
   Activity,
-  Trash2 // <--- CAMBIO 1: Ícono de eliminar añadido
+  Trash2,
+  Copy,
+  KeyRound
 } from 'lucide-react';
 
 const SolicitudDetalle = () => {
   const { id: solicitudId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   
   const [solicitud, setSolicitud] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [evaluando, setEvaluando] = useState(false);
   const [migrando, setMigrando] = useState(false);
+  const [credencialesAcceso, setCredencialesAcceso] = useState(null);
+  const [copiadoCampo, setCopiadoCampo] = useState('');
+  const canDeleteSolicitud = ['super_admin', 'direccion', 'director', 'gerente_ops']
+    .includes(String(user?.rol || user?.role || '').toLowerCase());
 
   useEffect(() => {
     cargarSolicitud();
@@ -61,15 +69,21 @@ const SolicitudDetalle = () => {
       const resultado = await solicitudesService.calcularDecision(solicitudId);
       
       if (resultado.success) {
+        const puntajeTotal = resultado.puntaje_total ?? resultado.evaluacion?.puntaje_total ?? 0;
+        const decisionMotor = resultado.resultado ?? resultado.evaluacion?.decision ?? null;
+        const factoresEvaluados = resultado.evaluacion_detallada ?? resultado.evaluacion?.factores ?? null;
+        const fechaEvaluacion = resultado.solicitud?.fecha_evaluacion ?? new Date().toISOString();
+
         setSolicitud(prev => ({
           ...prev,
-          puntaje_motor: resultado.evaluacion.puntaje_total,
-          decision_motor: resultado.evaluacion.decision,
-          factores_evaluados: resultado.evaluacion.factores,
-          fecha_evaluacion: new Date().toISOString()
+          puntaje_motor: puntajeTotal,
+          decision_motor: decisionMotor,
+          factores_evaluados: factoresEvaluados,
+          fecha_evaluacion: fechaEvaluacion,
+          estatus_solicitud: resultado.solicitud?.estatus_solicitud || prev.estatus_solicitud
         }));
         
-        alert(`✅ Motor ejecutado exitosamente!\n\nPuntaje: ${resultado.evaluacion.puntaje_total}/100\nDecisión: ${resultado.evaluacion.decision}`);
+        alert(`✅ Motor ejecutado exitosamente!\n\nPuntaje: ${puntajeTotal}/100\nDecisión: ${decisionMotor || 'No disponible'}`);
       }
     } catch (err) {
       console.error('❌ Error en motor de evaluación:', err);
@@ -79,16 +93,50 @@ const SolicitudDetalle = () => {
     }
   };
 
+  const copiarTexto = async (campo, valor) => {
+    if (!valor) {
+      alert('No hay informacion para copiar.');
+      return;
+    }
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(valor);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = valor;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+
+      setCopiadoCampo(campo);
+      setTimeout(() => setCopiadoCampo(''), 1600);
+    } catch (error) {
+      console.error('Error copiando al portapapeles:', error);
+      alert('No se pudo copiar automaticamente.');
+    }
+  };
+
   const migrarAConductor = async () => {
-    if (!window.confirm('¿Estás seguro de migrar esta solicitud a conductor?\n\nEsta acción creará un nuevo conductor con:\n• Categoría: Oro\n• Póliza: POLIZA_100\n• Saldo: $50,000 MXN\n\n⚠️ Esta acción no se puede deshacer.')) {
+    if (!window.confirm(`Estas seguro de migrar esta solicitud a conductor?\n\nEsta accion creara un nuevo conductor con:\n- Categoria: Oro\n- Poliza: POLIZA_100\n- Saldo: $50,000 MXN\n\nEsta accion no se puede deshacer.`)) {
       return;
     }
 
     try {
       setMigrando(true);
+      setCredencialesAcceso(null);
+
       const resultado = await solicitudesService.migrarAConductor(solicitudId);
-      
+
       if (resultado.success) {
+        const emailLogin = resultado?.conductor?.email || '';
+        const passwordTemp = resultado?.password_temporal || resultado?.passwordTemporal || '';
+
         setSolicitud(prev => ({
           ...prev,
           migrado_a_conductor: true,
@@ -96,29 +144,23 @@ const SolicitudDetalle = () => {
           fecha_migracion: new Date().toISOString(),
           estatus_solicitud: 'Migrado'
         }));
-        
-        // Ahora mostramos la contraseña temporal que viene del backend
 
-        const emailLogin = resultado.conductor.email;
-        const passwordTemp = resultado.passwordTemporal; // ✅ Corregido
+        setCredencialesAcceso({
+          email: emailLogin,
+          password: passwordTemp,
+          conductorId: resultado.conductor.id,
+          conductorNombre: resultado.conductor.nombre_conductor
+        });
 
-        alert(
-          `✅ ¡Migración Exitosa y Cuenta Creada!\n\n` +
-          `Nuevo Conductor:\n` +
-          `ID: ${resultado.conductor.id}\n` +
-          `Nombre: ${resultado.conductor.nombre_conductor}\n\n` +
-          `--- ⚠️ DATOS DE ACCESO (ENTREGAR AL CONDUCTOR) ---\n` +
-          `📧 Email: ${emailLogin}\n` +
-          `🔑 Contraseña Temporal: ${passwordTemp}`
-        );
-        
-        // Recargar datos
-navigate(`/admin/conductores/${resultado.conductor.id}`);      }
-
-      
+        if (!passwordTemp) {
+          alert('Migracion completada, pero no se recibio la contrasena temporal. Revisa el backend.');
+        } else {
+          alert('Migracion completada. Ya puedes copiar correo y contrasena en el panel de credenciales.');
+        }
+      }
     } catch (err) {
-      console.error('❌ Error al migrar:', err);
-      alert(`❌ Error: ${err.message}`);
+      console.error('Error al migrar:', err);
+      alert(`Error: ${err.message}`);
     } finally {
       setMigrando(false);
     }
@@ -202,6 +244,28 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
     }
   };
 
+  const repararMojibake = (texto) => {
+    if (typeof texto !== 'string' || !texto) return texto;
+
+    try {
+      const bytes = Uint8Array.from(
+        texto.split('').map((char) => char.charCodeAt(0) & 0xff)
+      );
+      const decodificado = new TextDecoder('utf-8').decode(bytes);
+
+      const ruidoOriginal = (texto.match(/[ÃÂâ�]/g) || []).length;
+      const ruidoDecodificado = (decodificado.match(/[ÃÂâ�]/g) || []).length;
+
+      if (decodificado && ruidoDecodificado < ruidoOriginal) {
+        return decodificado;
+      }
+    } catch (error) {
+      console.error('No se pudo reparar texto con codificacion invalida:', error);
+    }
+
+    return texto;
+  };
+
   const getPuntajeColor = (puntaje) => {
     if (puntaje >= 80) return 'text-green-400';
     if (puntaje >= 60) return 'text-yellow-400';
@@ -209,7 +273,7 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
     return 'text-red-400';
   };
 
-  const renderFactorEvaluacion = (factor, cumple, valor, peso) => {
+  const renderFactorEvaluacion = (factor, cumple, valor, peso, informativo = false) => {
     const puntos = Number(valor) || 0;
 
     return (
@@ -225,8 +289,14 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
           <span className="text-gray-300">{factor}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-white font-medium">{puntos}</span>
-          <span className="text-gray-400 text-sm">({peso}pts)</span>
+          {informativo ? (
+            <span className="text-gray-400 text-sm">Informativo</span>
+          ) : (
+            <>
+              <span className="text-white font-medium">{puntos}</span>
+              <span className="text-gray-400 text-sm">({peso}pts)</span>
+            </>
+          )}
         </div>
       </div>
     );
@@ -236,26 +306,129 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
     if (!solicitud?.factores_evaluados) return [];
 
     const evaluacion = solicitud.factores_evaluados;
-    const puntosEdad = evaluacion.cumple_edad ? 20 : evaluacion.edad >= 23 ? 10 : 0;
-    const puntosExperiencia = solicitud.experiencia_taxi ? 30 : 0;
-    const puntosVivienda = evaluacion.cumple_estabilidad_domicilio
-      ? 25
-      : evaluacion.detalles?.tipo_vivienda === 'Rentada'
-        ? 10
-        : 0;
-    const puntosReferencias = evaluacion.cumple_referencias ? 15 : 0;
-    const puntosDocumentos = evaluacion.cumple_documentacion ? 10 : 0;
+    const esVerdadero = (valor) =>
+      valor === true || valor === 'true' || valor === 1 || valor === '1';
+
+    if (Array.isArray(evaluacion.desglose_factores) && evaluacion.desglose_factores.length > 0) {
+      return evaluacion.desglose_factores.map((factor) => {
+        const valor = Number(factor?.valor ?? factor?.puntos ?? 0) || 0;
+        const peso = Number(factor?.peso ?? factor?.maximo ?? 0) || 0;
+        const cumple = typeof factor?.cumple === 'boolean' ? factor.cumple : valor > 0;
+
+        return {
+          nombre: factor?.nombre || factor?.factor || 'Factor',
+          cumple,
+          valor,
+          peso,
+          informativo: factor?.es_informativo === true
+        };
+      });
+    }
+
+    const usaModeloV3 =
+      'cumple_responsabilidad_familiar' in evaluacion ||
+      'cumple_estabilidad_domicilio' in evaluacion ||
+      'cumple_deposito' in evaluacion;
+
+    if (usaModeloV3) {
+      const puntosEdad = esVerdadero(evaluacion.cumple_edad) ? 20 : esVerdadero(evaluacion.edad_en_rango_prueba) ? 10 : 0;
+      const puntosResponsabilidad = esVerdadero(evaluacion.cumple_responsabilidad_familiar) ? 20 : 0;
+      const puntosVivienda = esVerdadero(evaluacion.cumple_estabilidad_domicilio) ? 20 : 0;
+      const puntosDocumentos = esVerdadero(evaluacion.cumple_documentacion) ? 15 : 0;
+      const puntosReferencias = esVerdadero(evaluacion.cumple_referencias) ? 15 : 0;
+      const puntosDeposito = esVerdadero(evaluacion.cumple_deposito) ? 10 : 0;
+      const tieneExperienciaTaxi = esVerdadero(solicitud?.experiencia_taxi);
+
+      return [
+        { nombre: 'Edad adecuada', cumple: puntosEdad > 0, valor: puntosEdad, peso: 20 },
+        { nombre: 'Responsabilidad familiar', cumple: puntosResponsabilidad > 0, valor: puntosResponsabilidad, peso: 20 },
+        { nombre: 'Vivienda estable', cumple: puntosVivienda > 0, valor: puntosVivienda, peso: 20 },
+        { nombre: 'Documentos validos', cumple: puntosDocumentos > 0, valor: puntosDocumentos, peso: 15 },
+        { nombre: 'Referencias completas', cumple: puntosReferencias > 0, valor: puntosReferencias, peso: 15 },
+        { nombre: 'Deposito en garantia', cumple: puntosDeposito > 0, valor: puntosDeposito, peso: 10 },
+        { nombre: 'Experiencia taxi', cumple: tieneExperienciaTaxi, valor: 0, peso: 0, informativo: true }
+      ];
+    }
+
+    // Fallback para evaluaciones legacy (modelo anterior de 5 factores).
+    const usaModeloLegacy =
+      'cumple_experiencia_taxi' in evaluacion ||
+      'cumple_vivienda_estable' in evaluacion ||
+      ('cumple_edad' in evaluacion && 'cumple_documentacion' in evaluacion);
+    if (!usaModeloLegacy) return [];
+
+    const puntosEdad = esVerdadero(evaluacion.cumple_edad) ? 20 : 0;
+    const puntosExperiencia = esVerdadero(evaluacion.cumple_experiencia_taxi) ? 30 : 0;
+    const puntosVivienda = esVerdadero(evaluacion.cumple_vivienda_estable) ? 25 : 0;
+    const puntosReferencias = esVerdadero(evaluacion.cumple_referencias) ? 15 : 0;
+    const puntosDocumentos = esVerdadero(evaluacion.cumple_documentacion) ? 10 : 0;
 
     return [
       { nombre: 'Edad adecuada', cumple: puntosEdad > 0, valor: puntosEdad, peso: 20 },
       { nombre: 'Experiencia taxi', cumple: puntosExperiencia > 0, valor: puntosExperiencia, peso: 30 },
       { nombre: 'Vivienda estable', cumple: puntosVivienda > 0, valor: puntosVivienda, peso: 25 },
       { nombre: 'Referencias completas', cumple: puntosReferencias > 0, valor: puntosReferencias, peso: 15 },
-      { nombre: 'Documentos válidos', cumple: puntosDocumentos > 0, valor: puntosDocumentos, peso: 10 }
+      { nombre: 'Documentos validos', cumple: puntosDocumentos > 0, valor: puntosDocumentos, peso: 10 }
     ];
   };
 
+  const obtenerResumenPuntajeMotor = (factores) => {
+    const evaluacion = solicitud?.factores_evaluados || {};
+    const puntajeDesglose = (Array.isArray(factores) ? factores : []).reduce(
+      (acumulado, factor) => acumulado + (factor?.informativo ? 0 : (Number(factor?.valor) || 0)),
+      0
+    );
+    const rechazoPorIndispensables = evaluacion?.rechazo_por_indispensables === true;
+    const alertaIndispensables = evaluacion?.alerta_indispensables === true;
+    const rechazoCritico = evaluacion?.rechazo_critico === true;
+    const motivosIndispensables = Array.isArray(evaluacion?.motivos_indispensables)
+      ? evaluacion.motivos_indispensables
+      : [];
+    const puntajeBasePersistido = Number(evaluacion?.puntaje_base);
+    const puntajeFinalPersistido = Number(evaluacion?.puntaje_final);
+    const puntajeMotorPersistido = Number(solicitud?.puntaje_motor);
+    const escalaBasePersistida = Number(evaluacion?.escala_puntaje_base);
+    const escalaFinalPersistida = Number(evaluacion?.escala_puntaje_final);
+    const puntajeBaseValido = Number.isFinite(puntajeBasePersistido) ? puntajeBasePersistido : null;
+    const puntajeFinalValido = Number.isFinite(puntajeFinalPersistido) ? puntajeFinalPersistido : null;
+    const puntajeMotorValido = Number.isFinite(puntajeMotorPersistido) ? puntajeMotorPersistido : null;
+    const escalaBaseValida = Number.isFinite(escalaBasePersistida) ? escalaBasePersistida : 100;
+    const escalaFinalValida = Number.isFinite(escalaFinalPersistida) ? escalaFinalPersistida : 100;
+
+    let puntajeBase = puntajeBaseValido;
+    let puntajeFinal = puntajeFinalValido ?? puntajeMotorValido;
+    let puntajeAjustadoPorDesglose = false;
+
+    if (!Number.isFinite(puntajeFinal) && puntajeDesglose > 0) {
+      puntajeFinal = puntajeDesglose;
+    }
+
+    if (!Number.isFinite(puntajeBase) && Number.isFinite(puntajeFinal)) {
+      puntajeBase = puntajeFinal;
+    }
+
+    if (puntajeDesglose > 0 && Number.isFinite(puntajeFinal) && puntajeFinal !== puntajeDesglose) {
+      if (!Number.isFinite(puntajeFinalValido)) {
+        puntajeAjustadoPorDesglose = true;
+      }
+    }
+
+    return {
+      puntajeBase: Number.isFinite(puntajeBase) ? puntajeBase : 0,
+      puntajeFinal: Number.isFinite(puntajeFinal) ? puntajeFinal : 0,
+      puntajeDesglose,
+      puntajeAjustadoPorDesglose,
+      rechazoPorIndispensables,
+      alertaIndispensables,
+      rechazoCritico,
+      motivosIndispensables,
+      escalaBase: escalaBaseValida,
+      escalaFinal: escalaFinalValida
+    };
+  };
+
   const factoresEvaluados = construirFactoresEvaluados();
+  const resumenPuntajeMotor = obtenerResumenPuntajeMotor(factoresEvaluados);
 
   if (loading) {
     return (
@@ -313,7 +486,7 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
           <span className={`inline-flex items-center px-3 py-1 rounded-lg text-sm font-medium border ${getStatusBadge(solicitud.estatus_solicitud)}`}>
             {solicitud.estatus_solicitud}
           </span>
-          
+
           {solicitud.migrado_a_conductor && (
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-lg text-sm font-medium border bg-purple-500/20 text-purple-400 border-purple-500/30">
               <UserCheck className="w-4 h-4" />
@@ -515,12 +688,13 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
           <h3 className="text-lg font-semibold text-white">Documentación</h3>
         </div>
         <div className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             {[
               { label: 'Licencia (Frente)', url: solicitud.url_licencia_frente },
               { label: 'Licencia (Reverso)', url: solicitud.url_licencia_reverso },
               { label: 'INE (Frente)', url: solicitud.url_ine_frente },
-              { label: 'INE (Reverso)', url: solicitud.url_ine_reverso }
+              { label: 'INE (Reverso)', url: solicitud.url_ine_reverso },
+              { label: 'Comprobante domicilio', url: solicitud.url_comprobante_domicilio }
             ].map((doc, index) => (
               <div key={index} className="bg-white/5 p-4 rounded-lg text-center border border-white/5">
                 <FileText className="w-8 h-8 text-gray-400 mx-auto mb-2" />
@@ -579,12 +753,12 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
           </button>
         </div>
         <div className="p-6">
-          {solicitud.puntaje_motor ? (
+          {solicitud.puntaje_motor !== null && solicitud.puntaje_motor !== undefined ? (
             <div className="space-y-6">
               {/* Resultado General */}
               <div className="text-center">
-                <div className={`text-6xl font-bold mb-2 ${getPuntajeColor(solicitud.puntaje_motor)}`}>
-                  {solicitud.puntaje_motor}/100
+                <div className={`text-6xl font-bold mb-2 ${getPuntajeColor(resumenPuntajeMotor.puntajeFinal)}`}>
+                  {resumenPuntajeMotor.puntajeFinal}/100
                 </div>
                 <div className="flex items-center justify-center gap-2 mb-4">
                   <Target className="w-5 h-5 text-gray-400" />
@@ -597,10 +771,40 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
                     {solicitud.decision_motor}
                   </span>
                 </div>
+                {resumenPuntajeMotor.puntajeBase !== resumenPuntajeMotor.puntajeFinal && (
+                  <p className="text-sm text-amber-300 mb-3">
+                    Puntaje base (sin indispensables): {resumenPuntajeMotor.puntajeBase}/{resumenPuntajeMotor.escalaBase}. Puntaje final: {resumenPuntajeMotor.puntajeFinal}/{resumenPuntajeMotor.escalaFinal}.
+                  </p>
+                )}
+                {resumenPuntajeMotor.puntajeAjustadoPorDesglose && resumenPuntajeMotor.puntajeBase === resumenPuntajeMotor.puntajeFinal && (
+                  <p className="text-sm text-cyan-300 mb-3">
+                    Puntaje sincronizado con el desglose de factores para evitar inconsistencias visuales.
+                  </p>
+                )}
                 <p className="text-gray-400 text-sm">
                   Evaluado el {formatFecha(solicitud.fecha_evaluacion)}
                 </p>
               </div>
+
+              {resumenPuntajeMotor.motivosIndispensables.length > 0 && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-left">
+                  <p className="text-red-300 font-semibold">
+                    Alerta: No reune requisitos indispensables
+                  </p>
+                  <p className="text-gray-300 text-sm mt-1">
+                    {solicitud.decision_motor === 'Rechazado'
+                      ? 'Este caso quedo rechazado por escenario critico. Adicionalmente tiene alertas de indispensables.'
+                      : 'El estado puede mantenerse en A prueba, pero requiere seguimiento sobre estos puntos antes de migrar.'}
+                  </p>
+                  {resumenPuntajeMotor.motivosIndispensables.length > 0 && (
+                    <ul className="mt-2 text-sm text-red-200 list-disc pl-5">
+                      {resumenPuntajeMotor.motivosIndispensables.map((motivo) => (
+                        <li key={motivo}>{motivo}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               {/* Desglose de Factores */}
               {solicitud.factores_evaluados && (
@@ -611,9 +815,9 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
                       Factores Evaluados
                     </h4>
                     <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
-                      {factoresEvaluados.map(({ nombre, cumple, valor, peso }) => (
+                      {factoresEvaluados.map(({ nombre, cumple, valor, peso, informativo }) => (
                         <React.Fragment key={nombre}>
-                          {renderFactorEvaluacion(nombre, cumple, valor, peso)}
+                          {renderFactorEvaluacion(nombre, cumple, valor, peso, informativo)}
                         </React.Fragment>
                       ))}
                     </div>
@@ -705,7 +909,7 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
             )}
 
             {/* Botón ELIMINAR (Aparece si está Pendiente O Rechazado) */}
-            {(solicitud.estatus_solicitud === 'Pendiente' || solicitud.estatus_solicitud === 'Rechazado') && (
+            {canDeleteSolicitud && (solicitud.estatus_solicitud === 'Pendiente' || solicitud.estatus_solicitud === 'Rechazado') && (
               <button
                 onClick={eliminarSolicitud}
                 className="p-4 bg-red-900/20 border border-red-500/30 rounded-lg hover:bg-red-900/30 transition-all group"
@@ -750,11 +954,57 @@ navigate(`/admin/conductores/${resultado.conductor.id}`);      }
             <div className="mt-6 pt-6 border-t border-white/10">
               <h4 className="text-white font-medium mb-2">Notas de Revisión</h4>
               <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-                <p className="text-gray-300">{solicitud.notas_revision}</p>
+                <p className="text-gray-300">{repararMojibake(solicitud.notas_revision)}</p>
               </div>
             </div>
           )}
           
+
+          {credencialesAcceso && (
+            <div className="mt-6 pt-6 border-t border-white/10">
+              <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-lg p-4 space-y-4">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-5 h-5 text-emerald-300" />
+                  <h4 className="text-white font-medium">Acceso generado para el conductor</h4>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="bg-black/25 border border-white/10 rounded-lg p-3">
+                    <p className="text-xs text-gray-400 mb-1">Correo de acceso</p>
+                    <p className="text-white break-all">{credencialesAcceso.email || 'Sin correo'}</p>
+                    <button
+                      onClick={() => copiarTexto('correo', credencialesAcceso.email)}
+                      className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 text-xs"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      {copiadoCampo === 'correo' ? 'Copiado' : 'Copiar correo'}
+                    </button>
+                  </div>
+
+                  <div className="bg-black/25 border border-white/10 rounded-lg p-3">
+                    <p className="text-xs text-gray-400 mb-1">Contrasena temporal</p>
+                    <p className="text-white break-all">{credencialesAcceso.password || 'No disponible'}</p>
+                    <button
+                      onClick={() => copiarTexto('password', credencialesAcceso.password)}
+                      className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 text-xs"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      {copiadoCampo === 'password' ? 'Copiada' : 'Copiar contrasena'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end">
+                  <button
+                    onClick={() => navigate(`/admin/conductores/${credencialesAcceso.conductorId}`)}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm"
+                  >
+                    Ver perfil del conductor
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {solicitud.migrado_a_conductor && (
             <div className="mt-6 pt-6 border-t border-white/10">
               <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-4">

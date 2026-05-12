@@ -5,14 +5,17 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
+
 const CORE_ADMIN_ROLES = ['super_admin', 'direccion', 'gerente_ops', 'gestor_flota', 'finanzas', 'admin'];
 const SOLICITUDES_ROLES = ['super_admin', 'direccion', 'gerente_ops', 'reclutador', 'secretaria', 'finanzas', 'coordinador', 'admin'];
+const CITAS_SOLICITUDES_ROLES = ['super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador'];
 const PAGOS_ROLES = ['super_admin', 'direccion', 'gerente_ops', 'finanzas', 'secretaria', 'coordinador', 'admin'];
 const RENTAS_ROLES = [...CORE_ADMIN_ROLES, 'secretaria', 'coordinador'];
 import Layout from './components/layout/Layout.jsx';
 import Login from './pages/auth/Login';
 import ForgotPassword from './pages/auth/ForgotPassword';
 import DriverLogin from './pages/conductor/DriverLogin';
+import InversionistaLogin from './pages/inversionista/InversionistaLogin';
 import Usuarios from './pages/admin/Usuarios';
 import { Toaster } from 'react-hot-toast'; // 🔥 IMPORTAR TOASTER
 
@@ -42,6 +45,7 @@ import Inversionistas from './pages/admin/Inversionistas';
 import InversionistaDetalle from './pages/admin/InversionistaDetalle';
 import HubInversiones from './pages/admin/HubInversiones';
 import HubInversionesLista from './pages/admin/HubInversionesLista';
+import SolicitudesRegistroList from './pages/admin/SolicitudesRegistroList';
 
 // Sistema de Rentas Modular
 import RentasDashboard from './pages/admin/rentas/index';
@@ -69,11 +73,23 @@ import SiniestrosHistorialConductor from './pages/admin/siniestros/HistorialCond
 // 🆕 Páginas de Solicitudes
 import Solicitudes from './pages/admin/Solicitudes';
 import SolicitudDetail from './pages/admin/SolicitudDetail';
+import SolicitudesCitas from './pages/admin/SolicitudesCitas';
+import PortalSolicitudInversionista from './pages/public/PortalSolicitudInversionista';
 
 // Portales Públicos
 import PortalInversion from './pages/public/PortalInversion';
 import PortalSolicitud from './pages/public/PortalSolicitud';
 import ConsultarEstado from './pages/public/ConsultarEstado';
+
+// Páginas de Inversionista
+import InversionistaLayout from './layouts/InversionistaLayout';
+import InversionistaDashboard from './pages/inversionista/InversionistaDashboard';
+import ProtectedRouteInversionista from './components/conductor/auth/ProtectedRouteInversionista';
+import InversionistaContratos from './pages/inversionista/InversionistaContratos';
+import InversionistaPagos from './pages/inversionista/InversionistaPagos';
+import InversionistaPerfil from './pages/inversionista/InversionistaPerfil';
+
+
 
 function App() {
   return (
@@ -85,13 +101,13 @@ function App() {
           toastOptions={{
             duration: 3000,
             style: {
-              background: '#1e293b',
+              background: '#07425E',
               color: '#fff',
               border: '1px solid rgba(255, 255, 255, 0.1)',
             },
             success: {
               iconTheme: {
-                primary: '#10b981',
+                primary: '#07425E',
                 secondary: '#fff',
               },
             },
@@ -110,8 +126,9 @@ function App() {
           {/* ================================================ */}
           <Route path="/login" element={<Login />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
-          {/* --- 👇 RUTA NUEVA PARA EL CONDUCTOR 👇 --- */}
+          {/* ---  RUTA NUEVA PARA EL CONDUCTOR  --- */}
           <Route path="/conductor/login" element={<DriverLogin />} />
+          <Route path="/inversionista/login" element={<InversionistaLogin />} />
       
           {/* ================================================ */}
           {/* RUTAS PÚBLICAS (Sin autenticación) */}
@@ -119,6 +136,7 @@ function App() {
           <Route path="/solicitar-conductor" element={<PortalSolicitud />} />
           <Route path="/consultar-estado" element={<ConsultarEstado />} />
           <Route path="/portal-inversion" element={<PortalInversion />} />
+          <Route path="/hazte-inversionista" element={<PortalSolicitudInversionista />} />
 
           {/* ================================================ */}
           {/* 🚗 PORTAL DEL CONDUCTOR (Protegido) */}
@@ -151,6 +169,40 @@ function App() {
           </Route>
           {/* ================================================ */}
           {/* FIN PORTAL DEL CONDUCTOR */}
+          {/* ================================================ */}
+
+
+          {/* ================================================ */}
+          {/* 💼 PORTAL DE INVERSIONISTAS */}
+          {/* ================================================ */}
+          
+          {/* Ruta Pública (Afuera del cadenero) */}
+          <Route path="/inversionista/login" element={<InversionistaLogin />} />
+
+          {/* Rutas Privadas (Protegidas) */}
+          <Route element={<ProtectedRouteInversionista />}>
+            <Route path="/inversionista" element={<InversionistaLayout />}>
+              
+              {/* Redirección por defecto */}
+              <Route index element={<Navigate to="/inversionista/dashboard" replace />} />
+              
+              {/* Dashboard Principal */}
+              <Route path="dashboard" element={<InversionistaDashboard />} />
+
+              {/* Mis Contratos (historial y detalles) */}
+              <Route path="contratos" element={<InversionistaContratos />} />
+
+              {/* Mis Pagos (historial y detalles) */}
+              <Route path="pagos" element={<InversionistaPagos />} />
+
+              {/* Mi Perfil (ver y editar información personal) */}
+              <Route path="perfil" element={<InversionistaPerfil />} />
+              
+
+            </Route>
+          </Route>
+          {/* ================================================ */}
+          {/* FIN PORTAL DE INVERSIONISTAS */}
           {/* ================================================ */}
 
           {/* ================================================ */}
@@ -280,7 +332,7 @@ function App() {
             <Route
               path="admin/inversiones/crear"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'coordinador', 'finanzas']}>
                   <HubInversiones />
                 </ProtectedRoute>
               }
@@ -289,7 +341,7 @@ function App() {
             <Route
               path="admin/inversiones/:id/detalle"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'coordinador', 'finanzas']}>
                   <ContratoDetalle />
                 </ProtectedRoute>
               }
@@ -298,10 +350,19 @@ function App() {
             <Route
               path="admin/inversiones/hub"
               element={
-                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'coordinador', 'finanzas']}>
                   <HubInversionesLista />
                 </ProtectedRoute>
               }
+            />
+
+            <Route 
+              path="/admin/solicitudes-registro" 
+              element={
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'coordinador', 'finanzas']}>
+                  <SolicitudesRegistroList />
+                </ProtectedRoute> 
+              } 
             />
 
             {/* SISTEMA DE RENTAS */}
@@ -363,10 +424,10 @@ function App() {
             <Route 
               path="/admin/mantenimientos/distribuir-gastos" 
               element={
-                <ProtectedRoute allowedRoles={[...CORE_ADMIN_ROLES, 'jefe_taller', 'compras']}>
+                <ProtectedRoute allowedRoles={['super_admin', 'finanzas', 'direccion']}>
                   <DistribuirGastos />
                 </ProtectedRoute>
-              } 
+              }
             />
 
             <Route
@@ -443,6 +504,15 @@ function App() {
             />
 
             <Route
+              path="/admin/siniestros/:id/editar"
+              element={
+                <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
+                  <SiniestroDetalle />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
               path="/admin/siniestros/:id"
               element={
                 <ProtectedRoute allowedRoles={['super_admin', 'direccion', 'gerente_ops', 'admin', 'jefe_taller']}>
@@ -471,6 +541,15 @@ function App() {
             />
 
             <Route
+              path="admin/solicitudes/citas"
+              element={
+                <ProtectedRoute allowedRoles={CITAS_SOLICITUDES_ROLES}>
+                  <SolicitudesCitas />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
               path="admin/solicitudes/:id"
               element={
                 <ProtectedRoute allowedRoles={SOLICITUDES_ROLES}>
@@ -478,6 +557,8 @@ function App() {
                 </ProtectedRoute>
               }
             />
+
+            
 
           </Route>
           

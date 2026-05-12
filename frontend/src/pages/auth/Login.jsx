@@ -72,6 +72,9 @@ const Login = () => {
           case 'admin':
             navigate('/admin/dashboard');
             break;
+          case 'director':
+            navigate('/admin/solicitudes/citas');
+            break;
           case 'coordinador':
             navigate('/admin/rentas');
             break;

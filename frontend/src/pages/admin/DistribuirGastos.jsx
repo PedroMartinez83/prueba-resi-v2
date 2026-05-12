@@ -10,11 +10,22 @@ import adminService from '../../services/adminService';
 
 const DistribuirGastos = () => {
   const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('distribucion');
   const [mantenimientos, setMantenimientos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [distribuyendo, setDistribuyendo] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroFecha, setFiltroFecha] = useState('todos');
+  const [filtrosFinanciero, setFiltrosFinanciero] = useState({ estado_financiero: '', search: '' });
+  const [vistaFinanciera, setVistaFinanciera] = useState({
+    resumen: {},
+    mantenimientos: [],
+    pagination: {}
+  });
+  const [loadingFinanciero, setLoadingFinanciero] = useState(false);
+  const [errorFinanciero, setErrorFinanciero] = useState('');
+  const [estadoFinancieroDraft, setEstadoFinancieroDraft] = useState({});
+  const [updatingFinancieroId, setUpdatingFinancieroId] = useState(null);
 
   // Estado del modal de distribución
   const [modalAbierto, setModalAbierto] = useState(false);
@@ -29,6 +40,7 @@ const DistribuirGastos = () => {
 
   useEffect(() => {
     cargarMantenimientosPendientes();
+    cargarFlujoFinanciero();
   }, []);
 
   const cargarMantenimientosPendientes = async () => {
@@ -45,6 +57,73 @@ const DistribuirGastos = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const cargarFlujoFinanciero = async (filtros = filtrosFinanciero, options = {}) => {
+    const { page = 1, append = false } = options;
+
+    try {
+      setLoadingFinanciero(true);
+      setErrorFinanciero('');
+
+      const data = await adminService.getFlujoFinancieroMantenimientos({
+        ...filtros,
+        page,
+        limit: 30
+      });
+
+      const rows = data?.mantenimientos || [];
+      setVistaFinanciera((prev) => ({
+        resumen: data?.resumen || {},
+        mantenimientos: append ? [...(prev?.mantenimientos || []), ...rows] : rows,
+        pagination: data?.pagination || {}
+      }));
+
+      setEstadoFinancieroDraft((prev) => {
+        const next = { ...prev };
+        rows.forEach((item) => {
+          next[item.id] = item.estado_financiero || 'capturado';
+        });
+        return next;
+      });
+    } catch (error) {
+      console.error('Error cargando flujo financiero:', error);
+      setErrorFinanciero(error.message || 'No se pudo cargar el flujo financiero');
+      setVistaFinanciera({
+        resumen: {},
+        mantenimientos: [],
+        pagination: {}
+      });
+    } finally {
+      setLoadingFinanciero(false);
+    }
+  };
+
+  const actualizarEstadoFinanciero = async (mantenimientoId) => {
+    const estadoNuevo = estadoFinancieroDraft[mantenimientoId];
+    if (!estadoNuevo) return;
+
+    try {
+      setUpdatingFinancieroId(mantenimientoId);
+      await adminService.actualizarEstadoFlujoFinanciero(mantenimientoId, estadoNuevo);
+      await cargarFlujoFinanciero();
+    } catch (error) {
+      console.error('Error actualizando flujo financiero:', error);
+      alert(error.message || 'No se pudo actualizar el flujo financiero');
+    } finally {
+      setUpdatingFinancieroId(null);
+    }
+  };
+
+  const handleVerMasFinanciero = async () => {
+    if (loadingFinanciero) return;
+    const currentPage = Number(vistaFinanciera?.pagination?.page || 1);
+    const totalPages = Number(vistaFinanciera?.pagination?.totalPages || 1);
+    if (currentPage >= totalPages) return;
+    await cargarFlujoFinanciero(filtrosFinanciero, {
+      page: currentPage + 1,
+      append: true
+    });
   };
 
   const abrirModalDistribucion = (mantenimiento) => {
@@ -222,6 +301,59 @@ const DistribuirGastos = () => {
     });
   };
 
+  const formatDateTime = (value) => {
+    if (!value) return '-';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString('es-MX', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getEstadoFinancieroLabel = (estado) => {
+    const map = {
+      capturado: 'Capturado',
+      validado_finanzas: 'Validado por Finanzas',
+      pagado: 'Pagado'
+    };
+    return map[estado] || 'Capturado';
+  };
+
+  const getBadgeEstadoOperativo = (estado) => {
+    const classes = {
+      Pendiente: 'bg-slate-500/20 text-slate-300 border-slate-500/30',
+      Programado: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+      'En proceso': 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
+      Completado: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+      Cancelado: 'bg-red-500/20 text-red-300 border-red-500/30',
+      Reprogramado: 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+    };
+
+    return (
+      <span className={`px-2 py-1 rounded-full text-xs font-semibold border ${classes[estado] || classes.Pendiente}`}>
+        {estado || 'Pendiente'}
+      </span>
+    );
+  };
+
+  const getBadgeEstadoFinanciero = (estado) => {
+    const classes = {
+      capturado: 'bg-slate-500/20 text-slate-300 border-slate-500/30',
+      validado_finanzas: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+      pagado: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+    };
+
+    return (
+      <span className={`px-2 py-1 rounded-full text-xs font-semibold border ${classes[estado] || classes.capturado}`}>
+        {getEstadoFinancieroLabel(estado)}
+      </span>
+    );
+  };
+
   const mantenimientosFiltrados = mantenimientos.filter(m => {
     const coincideBusqueda = 
       m.numero_vehiculo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -240,7 +372,7 @@ const DistribuirGastos = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-8">
+      <div className="min-h-screen bg-[#07425E] p-8">
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-16 w-16 border-4 border-cyan-500 border-t-transparent"></div>
         </div>
@@ -249,7 +381,7 @@ const DistribuirGastos = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-4 md:p-8">
+    <div className="min-h-screen bg-[#07425E] p-4 md:p-8">
       {/* Header */}
       <div className="mb-8">
         <button
@@ -281,6 +413,36 @@ const DistribuirGastos = () => {
           </div>
         </div>
       </div>
+
+      <div className="mb-6">
+        <div className="inline-flex rounded-xl border border-white/20 bg-white/5 p-1 gap-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab('distribucion')}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              activeTab === 'distribucion'
+                ? 'bg-cyan-500/20 border border-cyan-400/30 text-cyan-200'
+                : 'text-gray-300 hover:bg-white/10'
+            }`}
+          >
+            Distribucion de Gastos
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('flujo')}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              activeTab === 'flujo'
+                ? 'bg-emerald-500/20 border border-emerald-400/30 text-emerald-200'
+                : 'text-gray-300 hover:bg-white/10'
+            }`}
+          >
+            Flujo Financiero
+          </button>
+        </div>
+      </div>
+
+      {activeTab === 'distribucion' && (
+      <>
 
       {/* Filtros */}
       <div className="backdrop-blur-xl bg-white/10 rounded-2xl border border-white/20 p-4 mb-6">
@@ -401,6 +563,152 @@ const DistribuirGastos = () => {
           ))
         )}
       </div>
+      </>
+      )}
+
+      {activeTab === 'flujo' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="backdrop-blur-xl bg-white/10 rounded-xl border border-white/20 p-3">
+              <p className="text-xs text-gray-400">Capturado</p>
+              <p className="text-2xl font-bold text-white">{vistaFinanciera?.resumen?.capturado || 0}</p>
+            </div>
+            <div className="backdrop-blur-xl bg-white/10 rounded-xl border border-white/20 p-3">
+              <p className="text-xs text-gray-400">Validado por Finanzas</p>
+              <p className="text-2xl font-bold text-white">{vistaFinanciera?.resumen?.validado_finanzas || 0}</p>
+            </div>
+            <div className="backdrop-blur-xl bg-white/10 rounded-xl border border-white/20 p-3">
+              <p className="text-xs text-gray-400">Pagado</p>
+              <p className="text-2xl font-bold text-white">{vistaFinanciera?.resumen?.pagado || 0}</p>
+            </div>
+          </div>
+
+          <div className="backdrop-blur-xl bg-white/10 rounded-2xl border border-white/20 p-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <input
+                type="text"
+                value={filtrosFinanciero.search}
+                onChange={(e) => setFiltrosFinanciero((prev) => ({ ...prev, search: e.target.value }))}
+                placeholder="Buscar por unidad, folio, conductor o servicio"
+                className="md:col-span-2 px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:border-emerald-400"
+              />
+              <select
+                value={filtrosFinanciero.estado_financiero}
+                onChange={(e) => setFiltrosFinanciero((prev) => ({ ...prev, estado_financiero: e.target.value }))}
+                className="px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white focus:outline-none focus:border-emerald-400"
+              >
+                <option value="">Todos los estados</option>
+                <option value="capturado">Capturado</option>
+                <option value="validado_finanzas">Validado por Finanzas</option>
+                <option value="pagado">Pagado</option>
+              </select>
+              <div className="grid grid-cols-2 md:flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => cargarFlujoFinanciero()}
+                  className="w-full md:flex-1 px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-emerald-200 rounded-lg text-sm font-semibold"
+                >
+                  Filtrar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const reset = { estado_financiero: '', search: '' };
+                    setFiltrosFinanciero(reset);
+                    cargarFlujoFinanciero(reset);
+                  }}
+                  className="w-full px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-gray-200 rounded-lg text-sm"
+                >
+                  Limpiar
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {errorFinanciero && (
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+              {errorFinanciero}
+            </div>
+          )}
+
+          <div className="hidden md:block overflow-auto max-h-[60vh] border border-white/10 rounded-xl">
+            <table className="w-full min-w-[1100px] relative">
+              <thead className="bg-[#1a1a2e] sticky top-0 z-10 shadow-sm border-b border-white/10">
+                <tr className="text-left text-xs uppercase text-gray-400">
+                  <th className="px-4 py-3">Folio</th>
+                  <th className="px-4 py-3">Vehiculo</th>
+                  <th className="px-4 py-3">Servicio</th>
+                  <th className="px-4 py-3">Estado Mant.</th>
+                  <th className="px-4 py-3">Estado Financiero</th>
+                  <th className="px-4 py-3">Costo</th>
+                  <th className="px-4 py-3">Actualizado</th>
+                  <th className="px-4 py-3 text-right">Accion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingFinanciero && vistaFinanciera.mantenimientos.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">Cargando flujo financiero...</td>
+                  </tr>
+                )}
+                {!loadingFinanciero && vistaFinanciera.mantenimientos.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">No hay mantenimientos en flujo financiero.</td>
+                  </tr>
+                )}
+                {vistaFinanciera.mantenimientos.map((item) => (
+                  <tr key={`flujo-financiero-${item.id}`} className="border-t border-white/5">
+                    <td className="px-4 py-3 text-white font-semibold">#{String(item.folio_servicio || item.id).padStart(4, '0')}</td>
+                    <td className="px-4 py-3">
+                      <p className="text-white font-semibold">{item.numero_vehiculo || '-'}</p>
+                      <p className="text-gray-500 text-xs">{item.nombre_conductor || 'Sin conductor'}</p>
+                    </td>
+                    <td className="px-4 py-3 text-gray-200 max-w-[260px]">{item.tipo_servicio || '-'}</td>
+                    <td className="px-4 py-3">{getBadgeEstadoOperativo(item.estado_operativo_label || item.estado)}</td>
+                    <td className="px-4 py-3">{getBadgeEstadoFinanciero(item.estado_financiero)}</td>
+                    <td className="px-4 py-3 text-emerald-300 font-semibold">{formatCurrency(item.costo_total || 0)}</td>
+                    <td className="px-4 py-3 text-gray-300 text-sm">{formatDateTime(item.flujo_actualizado_at || item.updated_at)}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <select
+                          value={estadoFinancieroDraft[item.id] || item.estado_financiero || 'capturado'}
+                          onChange={(e) => setEstadoFinancieroDraft((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                          className="px-2 py-1.5 rounded-md bg-white/10 border border-white/20 text-white text-xs"
+                        >
+                          <option value="capturado">Capturado</option>
+                          <option value="validado_finanzas">Validado por Finanzas</option>
+                          <option value="pagado">Pagado</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => actualizarEstadoFinanciero(item.id)}
+                          disabled={updatingFinancieroId === item.id}
+                          className="px-3 py-1.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-emerald-200 text-xs font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {updatingFinancieroId === item.id ? 'Guardando...' : 'Actualizar'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {Number(vistaFinanciera?.pagination?.page || 1) < Number(vistaFinanciera?.pagination?.totalPages || 1) && (
+            <div className="flex justify-center pt-2">
+              <button
+                type="button"
+                onClick={handleVerMasFinanciero}
+                disabled={loadingFinanciero}
+                className="px-4 py-2 rounded-lg border border-white/20 text-white text-sm hover:bg-white/10 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loadingFinanciero ? 'Cargando...' : 'Ver mas registros'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Modal de Distribución */}
       {modalAbierto && mantenimientoSeleccionado && (

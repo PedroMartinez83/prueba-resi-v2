@@ -51,11 +51,101 @@ const cleanCircularReferences = (obj, seen = new WeakSet()) => {
   return cleaned;
 };
 
+const ROUTE_TABLE_ALIASES = Object.freeze({
+  vehiculos: 'vehiculos',
+  conductores: 'conductores',
+  usuarios: 'usuarios',
+  rentas: 'rentas',
+  pagos: 'pagos',
+  'pagos-rentas': 'pagos_diarios',
+  pagos_rentas: 'pagos_diarios',
+  'pagos-diarios': 'pagos_diarios',
+  pagos_diarios: 'pagos_diarios',
+  mantenimientos: 'mantenimientos',
+  clientes: 'clientes',
+  inversiones: 'inversiones',
+  inversionistas: 'inversionistas',
+  solicitudes: 'solicitudes',
+  asignaciones: 'asignaciones',
+  siniestros: 'siniestros'
+});
+
+const normalizeRouteSegment = (value) => String(value || '')
+  .trim()
+  .toLowerCase();
+
+const parseNumericId = (value) => {
+  const parsed = Number.parseInt(String(value || '').trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const safeParseJson = (value) => {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch (_error) {
+    return null;
+  }
+};
+
+const extractAuditTargetFromRequest = ({ req, responseData }) => {
+  const fullPath = String(req.originalUrl || req.url || '').split('?')[0];
+  const routeParts = fullPath.split('/').filter(Boolean);
+
+  let tabla_afectada = null;
+  let indexTabla = -1;
+
+  for (let i = 0; i < routeParts.length; i += 1) {
+    const normalizedSegment = normalizeRouteSegment(routeParts[i]);
+    const tablaCanonica = ROUTE_TABLE_ALIASES[normalizedSegment];
+
+    if (tablaCanonica) {
+      tabla_afectada = tablaCanonica;
+      indexTabla = i;
+      break;
+    }
+  }
+
+  let registro_id =
+    parseNumericId(req.params?.id) ||
+    parseNumericId(req.body?.id) ||
+    parseNumericId(req.query?.id);
+
+  if (!registro_id && indexTabla >= 0) {
+    registro_id = parseNumericId(routeParts[indexTabla + 1]);
+  }
+
+  if (!registro_id) {
+    const responseObject =
+      responseData && typeof responseData === 'object'
+        ? responseData
+        : safeParseJson(responseData);
+
+    registro_id =
+      parseNumericId(responseObject?.data?.id) ||
+      parseNumericId(responseObject?.result?.id) ||
+      parseNumericId(responseObject?.id) ||
+      parseNumericId(responseObject?.data?.registro_id) ||
+      parseNumericId(responseObject?.result?.registro_id) ||
+      parseNumericId(responseObject?.registro_id);
+  }
+
+  return { tabla_afectada, registro_id };
+};
+
 /**
  * Middleware para auditar todas las peticiones HTTP
  */
 const auditMiddleware = (options = {}) => {
   return async (req, res, next) => {
+
+    // 🛑 APAGADOR MAESTRO PARA INVERSIONISTAS 🛑
+    // Si la ruta incluye 'inversionistas', no reescribimos NADA.
+    // Pasamos el control directamente al siguiente middleware o controlador.
+    // Esto permite que el Trigger de PostgreSQL haga el log exacto sin interferencias.
+    if (req.originalUrl && req.originalUrl.includes('inversionistas')) {
+      return next();
+    }
     // Marcar tiempo de inicio
     req.startTime = Date.now();
     
@@ -137,30 +227,21 @@ const auditMiddleware = (options = {}) => {
             break;
         }
 
-        // Determinar tabla afectada desde la ruta
-        const rutaParts = req.originalUrl.split('/').filter(Boolean);
-        const tablasConocidas = [
-          'vehiculos', 'conductores', 'usuarios', 'rentas',
-          'mantenimientos', 'clientes', 'inversiones', 'solicitudes'
-        ];
-        
-        for (const tabla of tablasConocidas) {
-          if (rutaParts.includes(tabla)) {
-            auditData.tabla_afectada = tabla;
-            // Intentar obtener el ID del registro
-            const indexTabla = rutaParts.indexOf(tabla);
-            if (rutaParts[indexTabla + 1] && !isNaN(rutaParts[indexTabla + 1])) {
-              auditData.registro_id = parseInt(rutaParts[indexTabla + 1]);
-            }
-            break;
-          }
+        // Determinar tabla y registro afectado desde request/response
+        const objetivoAuditoria = extractAuditTargetFromRequest({ req, responseData });
+        if (objetivoAuditoria.tabla_afectada) {
+          auditData.tabla_afectada = objetivoAuditoria.tabla_afectada;
+        }
+        if (objetivoAuditoria.registro_id) {
+          auditData.registro_id = objetivoAuditoria.registro_id;
         }
 
         // Solo auditar si está configurado para esta ruta
         const rutasExcluidas = options.exclude || [
           '/api/health',
           '/api/audit/stats',
-          '/favicon.ico'
+          '/favicon.ico',
+          '/api/admin/inversionistas/mi-perfil'
         ];
         
         const debeAuditar = !rutasExcluidas.some(ruta => 
@@ -196,6 +277,40 @@ const auditMiddleware = (options = {}) => {
           ) {
             const deletedData = responseData?.data || responseData?.result || responseData;
             await auditService.notificarEliminacionCoordinador({
+              actor: req.user,
+              ruta_api: auditData.ruta_api,
+              tabla_afectada: auditData.tabla_afectada,
+              registro_id: auditData.registro_id,
+              ip_address: auditData.ip_address,
+              user_agent: auditData.user_agent,
+              fecha: new Date(),
+              datos_registro: deletedData
+            });
+          }
+
+          if (
+            auditData.accion === 'DELETE' &&
+            auditData.resultado === 'success' &&
+            ['gerente_ops', 'direccion', 'director', 'super_admin'].includes(req.user?.rol) &&
+            auditData.tabla_afectada === 'solicitudes'
+          ) {
+            const deletedData = responseData?.data || responseData?.result || responseData;
+            await auditService.notificarEliminacionRolSuperior({
+              actor: req.user,
+              tabla_afectada: auditData.tabla_afectada,
+              registro_id: auditData.registro_id,
+              fecha: new Date(),
+              datos_registro: deletedData
+            });
+          }
+
+          if (
+            auditData.accion === 'DELETE' &&
+            auditData.resultado === 'success' &&
+            auditData.tabla_afectada === 'mantenimientos'
+          ) {
+            const deletedData = responseData?.data || responseData?.result || responseData;
+            await auditService.notificarEliminacionMantenimientoSuperAdmin({
               actor: req.user,
               ruta_api: auditData.ruta_api,
               tabla_afectada: auditData.tabla_afectada,

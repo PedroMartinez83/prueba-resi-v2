@@ -1,5 +1,5 @@
 // frontend/src/pages/conductor/MisPagos.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import conductorService from '../../services/conductorService';
 import { 
@@ -15,9 +15,11 @@ import {
   FileText,
   AlertTriangle,
   Trash2,
-  MessageSquareX
+  MessageSquareX, 
+  Lock
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('es-MX', {
@@ -84,6 +86,45 @@ const calcularDiasSinDomingos = (inicio, fin) => {
   return diasHabiles;
 };
 
+const calcularDiasAtraso = (fechaEsperada, fechaReal) => {
+    if (!fechaEsperada || !fechaReal) return 0;
+
+    // 1. Extraemos solo la parte "YYYY-MM-DD" para evitar desfases de zona horaria
+    const strEsperada = fechaEsperada.split('T')[0];
+    const strReal = fechaReal.split('T')[0];
+
+    // 2. Convertimos a fechas locales seguras (Año, Mes - 1, Día)
+    const [yearE, monthE, dayE] = strEsperada.split('-');
+    const [yearR, monthR, dayR] = strReal.split('-');
+    
+    const fechaInicio = new Date(yearE, monthE - 1, dayE);
+    const fechaFin = new Date(yearR, monthR - 1, dayR);
+
+    // Si pagó a tiempo o antes, el atraso es 0
+    if (fechaFin <= fechaInicio) return 0;
+
+    // 3. Contamos los días saltando los domingos
+    let diasAtraso = 0;
+    let fechaActual = new Date(fechaInicio);
+    fechaActual.setDate(fechaActual.getDate() + 1); // Empezamos a contar desde el día siguiente
+
+    while (fechaActual <= fechaFin) {
+      // getDay() devuelve 0 para el Domingo. Si NO es domingo, lo sumamos a la deuda.
+      if (fechaActual.getDay() !== 0) {
+        diasAtraso++;
+      }
+      fechaActual.setDate(fechaActual.getDate() + 1); // Avanzamos un día
+    }
+
+    return diasAtraso;
+  };
+
+const esDomingo = (fechaStr) => {
+  if (!fechaStr) return false;
+  const fecha = new Date(`${fechaStr}T12:00:00`);
+  return !Number.isNaN(fecha.getTime()) && fecha.getDay() === 0;
+};
+
 const MisPagos = () => {
   const navigate = useNavigate();
   const [pagos, setPagos] = useState([]);
@@ -96,6 +137,7 @@ const MisPagos = () => {
   
   // Form de pago
   const hoy = new Date().toLocaleDateString('en-CA');
+  const inputFechaFinRef = useRef(null);
   const [fechaInicio, setFechaInicio] = useState(hoy);
   const [fechaFin, setFechaFin] = useState(hoy);
   const [comprobante, setComprobante] = useState(null);
@@ -108,6 +150,7 @@ const MisPagos = () => {
   const totalDiario = rentaDiaria + polizaDiaria;
   const diasReales = calcularDiasSinDomingos(fechaInicio, fechaFin);
   const diasSeleccionados = diasReales;
+
 
 
     
@@ -157,81 +200,103 @@ const estaAlCorriente = React.useMemo(() => {
     return ultimo >= hoy; 
 
   }, [resumen, pagos]);
+
+  
   useEffect(() => {
     cargarPagos();
     cargarResumen();
   }, []);
 
-  // NUEVO USEEFFECT: Autocompletar fecha cuando llegue el resumen
-useEffect(() => {
-    // Si no hay resumen, no podemos calcular nada seguro
+  // NUEVO USEEFFECT: Autocompletar fecha de forma inteligente (Anti-Domingos)
+  useEffect(() => {
     if (!resumen) return;
 
-    // --- 1. LÓGICA DE BÚSQUEDA DEL ÚLTIMO PAGO REAL ---
-    let fechaBase = resumen.ultimo_pago_aprobado; // Empezamos con lo que dice el resumen
+    // 1. Extraemos las fechas limpiando la zona horaria ("YYYY-MM-DD")
+    // 🛡️ ESCUDO: Si viene null, no hacemos split, usamos la fecha de hoy por seguridad
+const fechaAsignacionStr = resumen.fecha_inicio_asignacion 
+    ? resumen.fecha_inicio_asignacion.split('T')[0] 
+    : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mazatlan' });
+    let fechaBase = resumen.ultimo_pago_aprobado ? resumen.ultimo_pago_aprobado.split('T')[0] : null;
 
-    // PERO, si tenemos la lista de pagos cargada, buscamos si hay uno más reciente (Pendiente)
+    // 🚀 DETECTOR DE DOMINGOS (Solo para cuando arranca en limpio) 🚀
+    let fechaArranqueLimpio = fechaAsignacionStr;
+    const objAsignacion = new Date(`${fechaAsignacionStr}T12:00:00`); // T12 para evitar brincos de zona horaria
+    
+    if (objAsignacion.getDay() === 0) { // Si es 0, es Domingo
+        console.log('⚠️ Asignación en Domingo detectada, ajustando arranque del conductor al Lunes...');
+        objAsignacion.setDate(objAsignacion.getDate() + 1); // Sumamos 1 día
+        fechaArranqueLimpio = objAsignacion.toISOString().split('T')[0]; // Guardamos el Lunes
+    }
+
+    // 🚨 LA REGLA DE ORO 🚨
+    // Si la fecha del último pago es ANTERIOR a cuando se le dio el carro,
+    // significa que ese pago es de un chofer anterior. ¡Lo borramos de la memoria!
+    if (fechaBase && fechaBase < fechaAsignacionStr) {
+        console.log('🧹 Ignorando pagos viejos del chofer anterior...');
+        fechaBase = null; 
+    }
+
+    // 2. Revisión en la tabla local (por si acaba de registrar un pago y está "Pendiente")
     if (pagos && pagos.length > 0) {
-        // Filtramos pagos válidos (ignoramos rechazados)
-        const pagosValidos = pagos.filter(p => 
-            ['Aprobado', 'Pendiente', 'Confirmado'].includes(p.status)
-        );
+        const pagosValidos = pagos.filter(p => {
+            const esStatusValido = ['Aprobado', 'Pendiente', 'Confirmado'].includes(p.status);
+            
+            // Extraemos la fecha del pago local limpiamente
+            const fechaPagoLocal = p.fecha_pago_fin ? p.fecha_pago_fin.split('T')[0] : p.fecha_pago.split('T')[0];
+            
+            // Solo tomamos pagos que se hayan hecho DESDE que se le asignó el carro
+            return esStatusValido && (fechaPagoLocal >= fechaAsignacionStr);
+        });
 
         if (pagosValidos.length > 0) {
-            // Ordenamos por fecha descendente (el más nuevo primero)
+            // Ordenamos del más nuevo al más viejo
             pagosValidos.sort((a, b) => {
-                const fA = new Date(a.fecha_pago_fin || a.fecha_pago);
-                const fB = new Date(b.fecha_pago_fin || b.fecha_pago);
-                return fB - fA; 
+                const fA = a.fecha_pago_fin || a.fecha_pago;
+                const fB = b.fecha_pago_fin || b.fecha_pago;
+                return new Date(fB) - new Date(fA);
             });
 
-            // Tomamos la fecha del último pago encontrado en la lista local
             const ultimaFechaLocal = pagosValidos[0].fecha_pago_fin || pagosValidos[0].fecha_pago;
+            const ultimaFechaLocalStr = ultimaFechaLocal.split('T')[0];
             
-            // Si la fecha local es más reciente que la del resumen (o si resumen era null), la usamos
-            if (!fechaBase || new Date(ultimaFechaLocal) > new Date(fechaBase)) {
-                fechaBase = ultimaFechaLocal;
+            // Comparamos si el pago local es más nuevo que el de la base de datos
+            if (!fechaBase || ultimaFechaLocalStr > fechaBase) {
+                fechaBase = ultimaFechaLocalStr;
             }
         }
     }
-    // -----------------------------------------------------------
 
-    // 2. Definimos el "Día Cero"
-    const fechaArranque = '2026-01-01';
-    const hoy = new Date().toLocaleDateString('en-CA');
+    // 3. Calculamos las fechas finales para el Datepicker
+    const hoy = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD formato local
 
-    // Lógica 1: MODO "PONERSE AL TANTO"
     if (ponerseAlTanto) {
       if (fechaBase) {
-        // Tiene historial (Pendiente o Aprobado) -> Sigue la cadena
-        const inicioCalculado = getSiguienteDiaHabil(fechaBase);
+        // Tiene historial válido -> Sigue la cadena
+        const inicioCalculado = getSiguienteDiaHabil(fechaBase); // Tu función que brinca domingos
         
-        if (new Date(inicioCalculado) > new Date(hoy)) {
-           // Ya estás al día o adelantado
+        if (inicioCalculado > hoy) {
            setFechaInicio(inicioCalculado);
            setFechaFin(inicioCalculado);
         } else {
-           // Debes días -> Rango hasta hoy
            setFechaInicio(inicioCalculado);
            setFechaFin(hoy);
         }
       } else {
-        // 🆕 LIMPIO TOTAL: Empieza el 1 de Enero
-        setFechaInicio(fechaArranque);
+        // 🆕 LIMPIO TOTAL: Empieza el día exacto que arrancó (¡ya sin domingos!)
+        setFechaInicio(fechaArranqueLimpio);
         setFechaFin(hoy);
       }
     } 
-    // Lógica 2: MODO MANUAL
+    // MODO MANUAL
     else {
       if (fechaBase) {
-        // Tiene historial -> Siguiente día
         const siguienteDia = getSiguienteDiaHabil(fechaBase);
         setFechaInicio(siguienteDia);
         setFechaFin(siguienteDia);
       } else {
-        // 🆕 LIMPIO TOTAL -> 1 de Enero
-        setFechaInicio(fechaArranque);
-        setFechaFin(fechaArranque);
+        // 🆕 LIMPIO TOTAL: Arranca justo el día de asignación (¡ya sin domingos!)
+        setFechaInicio(fechaArranqueLimpio);
+        setFechaFin(fechaArranqueLimpio);
       }
     }
 
@@ -272,14 +337,24 @@ useEffect(() => {
 
   const handleComprobanteChange = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      // Validar tamaño (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error('El comprobante no puede superar los 5MB');
-        return;
-      }
-      setComprobante(file);
+    
+    // 🛡️ BLINDAJE 1: Si el usuario abrió la galería y le dio "Cancelar", 
+    // matamos el archivo fantasma para evitar desincronizaciones.
+    if (!file) {
+      setComprobante(null);
+      return;
     }
+
+    // 🛡️ BLINDAJE 2: Validación de tamaño
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('El comprobante no puede superar los 5MB');
+      e.target.value = ''; // Limpiamos la memoria del HTML
+      setComprobante(null); // Limpiamos la memoria de React
+      return;
+    }
+
+    // Si todo está perfecto, lo guardamos
+    setComprobante(file);
   };
 
   const handlePonerseAlTantoChange = (e) => {
@@ -295,24 +370,19 @@ useEffect(() => {
   };
 
   const handleFechaFinChange = (valor) => {
-      if (!valor) {
-        setFechaFin('');
-        return;
-      }
+    if (!valor) {
+      setFechaFin('');
+      return;
+    }
 
-      // 🟢 VALIDACIÓN: Prohibir elegir Domingo como día final
-      const fechaObj = new Date(`${valor}T12:00:00`);
-      if (fechaObj.getDay() === 0) {
-        alert("⛔ No se puede seleccionar domingo como fecha final (No laboral). Por favor selecciona sábado o lunes.");
-        // Limpiamos el input o no hacemos nada
-        return; 
-      }
+    setFechaFin(valor);
+  };
 
-      setFechaFin(valor);
-    };
-
-const handleSubmitPago = async (e) => {
+const handleSubmitPago = async (  e) => {
     e.preventDefault();
+
+    // 🚨 PRUEBA DE FUEGO:
+    console.log("Estado exacto del comprobante al dar clic:", comprobante);
     
     // 1. Validaciones Visuales
     if (!comprobante) {
@@ -321,6 +391,10 @@ const handleSubmitPago = async (e) => {
     }
     if (!fechaInicio) {
       toast.error('Selecciona una fecha de inicio');
+      return;
+    }
+    if (esDomingo(fechaFin || fechaInicio)) {
+      toast.error('⛔ No se puede registrar domingo como fecha final. Selecciona sábado o lunes.');
       return;
     }
 
@@ -385,9 +459,64 @@ const handleSubmitPago = async (e) => {
       </div>
     );
   }
+  
+  // 1. Formato para la fecha de creación (Ej: 21 ene 2026)
+  const formatDiaCorrespondiente = (fecha) => {
+    if (!fecha) return 'N/A';
+    const date = new Date(fecha);
+    return date.toLocaleDateString('es-MX', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
+  // 2. Función para formatear el rango que cubre (Versión blindada)
+  const formatRangoCubre = (fechaInicio, fechaFin) => {
+    if (!fechaInicio) return 'Sin fecha';
+
+    const parseFecha = (fecha) => {
+      if (!fecha) return null;
+      const fechaSegura = fecha.includes('T') ? fecha : `${fecha}T12:00:00`;
+      return new Date(fechaSegura);
+    };
+
+    const dInicio = parseFecha(fechaInicio);
+    const dFin = fechaFin ? parseFecha(fechaFin) : dInicio;
+
+    const getDia = (d) => d.getDate();
+    // Usamos 'short' si quieres que diga 'ene' en vez de 'enero' para ahorrar espacio en móvil
+    const getMes = (d) => d.toLocaleDateString('es-MX', { month: 'short' }).replace('.', '');
+    const getAnio = (d) => d.getFullYear();
+
+    if (dInicio.toDateString() === dFin.toDateString()) {
+      return `${getDia(dInicio)} ${getMes(dInicio)} ${getAnio(dInicio)}`;
+    }
+
+    if (dInicio.getMonth() === dFin.getMonth() && dInicio.getFullYear() === dFin.getFullYear()) {
+      return `${getDia(dInicio)} al ${getDia(dFin)} ${getMes(dInicio)} ${getAnio(dInicio)}`;
+    }
+
+    return `${getDia(dInicio)} ${getMes(dInicio)} al ${getDia(dFin)} ${getMes(dFin)} ${getAnio(dFin)}`;
+  };
+
+  // Helper para mostrar la fecha bonita
+  const formatearFechaElegante = (fechaStr) => {
+    if (!fechaStr) return 'Selecciona una fecha';
+    // Cortamos el string para evitar problemas de zona horaria al crear el Date
+    const [year, month, day] = fechaStr.split('-');
+    const date = new Date(year, month - 1, day);
+    
+    return date.toLocaleDateString('es-MX', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+  };
+
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 bg-[#07425E] p-6 rounded-2xl">
       
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -423,10 +552,18 @@ const handleSubmitPago = async (e) => {
               <h2 className="text-3xl font-bold text-white">{progresoPagos}%</h2>
               <p className="text-sm text-gray-400">Pagos registrados: {pagosRealizados}</p>
               {resumen?.ultimo_pago_aprobado && (
-                <p className="text-sm text-gray-400 mt-1">
+              <p className="text-sm text-gray-400 mt-1">
                   Último pago aprobado:{' '}
                   <span className="text-white font-semibold">
-                    {new Date(resumen.ultimo_pago_aprobado).toLocaleDateString('es-MX')}
+                    {resumen.ultimo_pago_aprobado 
+                      ? new Date(resumen.ultimo_pago_aprobado).toLocaleDateString('es-MX', {
+                          timeZone: 'UTC', // 🛡️ Evita que te reste un día por tu zona horaria
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric'
+                        })
+                      : 'Ninguno'
+                    }
                   </span>
                 </p>
               )}
@@ -538,33 +675,66 @@ const handleSubmitPago = async (e) => {
                   <Calendar className="w-5 h-5 text-cyan-400" />
                   Rango de Pago
                 </label>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4 mb-6">
                   
-                  {/* 🔒 INPUT INICIO: BLOQUEADO (READONLY) */}
+                  {/* 🔒 INPUT INICIO: VISUALMENTE BLOQUEADO (MORADITO) */}
                   <div className="relative">
-                    <input
-                      type="date"
-                      value={fechaInicio}
-                      readOnly // <--- ESTO LO BLOQUEA
-                      className="w-full p-3 bg-slate-800/50 border border-slate-700 rounded-lg text-gray-400 cursor-not-allowed" // Estilo visual de bloqueado
-                      required
-                    />
-                    {/* Tooltip opcional para explicar por qué está bloqueado */}
-                    <span className="text-[13px] text-gray-500 absolute bottom-[-25px] left-1">
-                      * Automático (Día siguiente al último pago)
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Fecha de Inicio (Automática)
+                    </label>
+                    {/* DIV simulando un input, ahora con tonos morados */}
+                    <div className="w-full p-3 bg-[#07425E] border border-blue-500/30 rounded-lg text-white-300 flex items-center justify-between shadow-inner cursor-not-allowed">
+                      <span className=" font-medium">
+                        {formatearFechaElegante(fechaInicio)}
+                      </span>
+                      <Lock className="w-4 h-4 text-white-400" />
+                    </div>
+                    {/* Tooltip */}
+                    <span className="text-[12px] text-white-400 absolute -bottom-5 left-1 font-medium">
+                      * Calculado desde tu último pago
                     </span>
                   </div>
 
-                  {/* 🟢 INPUT FIN: CON VALIDACIÓN DE DOMINGOS */}
-                  <input
-                    type="date"
-                    value={fechaFin}
-                    onChange={(e) => handleFechaFinChange(e.target.value)} // <--- Llama a nuestra validación
-                    min={fechaInicio} // No puedes elegir una fecha anterior al inicio
-                    className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white disabled:opacity-60 focus:border-cyan-400 focus:outline-none transition-colors"
-                    required
-                    disabled={ponerseAlTanto}
-                  />
+
+                  {/* 🟢 INPUT FIN: HITBOX GIGANTE CON useRef */}
+                  <div className="relative">
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Fecha de Fin
+                    </label>
+                    
+                    {/* Contenedor que agrupa el input real y el diseño visual */}
+                    <div className="relative w-full">
+                      
+                      {/* 1. INPUT REAL (Transparente y encima de todo) */}
+                      {/* 🔒 MAGIA AQUÍ: absolute inset-0 lo estira por todo el div, opacity-0 lo hace invisible pero clickeable */}
+                      <input
+                        type="date"
+                        value={fechaFin}
+                        onChange={(e) => handleFechaFinChange(e.target.value)}
+                        min={fechaInicio}
+                        disabled={ponerseAlTanto}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 disabled:cursor-not-allowed"
+                        required
+                      />
+                      
+                      {/* 2. DISEÑO VISUAL (Lo que el usuario ve, pero está debajo del input real) */}
+                      <div 
+                        className={`w-full p-3 border rounded-lg flex items-center justify-between transition-colors ${
+                          ponerseAlTanto 
+                            ? 'bg-gray-200 text-gray-400 border-gray-300' 
+                            : 'bg-white text-black border-gray-300 hover:border-cyan-500 shadow-sm'
+                        }`}
+                      >
+                        <span className="font-medium">
+                          {fechaFin ? formatearFechaElegante(fechaFin) : 'Selecciona una fecha'}
+                        </span>
+                        
+                        <span className="text-gray-500">📅</span> 
+                      </div>
+                      
+                    </div>
+                  </div>
+                  
                 </div>
               </div>
             </div>
@@ -602,7 +772,10 @@ const handleSubmitPago = async (e) => {
               </label>
               <input
                 type="file"
-                accept="image/*,.pdf"
+                // 🚀 ESTRICTO: Forzamos a que el celular haga la conversión a JPG/PNG o pida PDF
+                accept="image/jpeg, image/png, image/jpg, application/pdf" 
+                // 🚀 ANTI-BUG: Limpiamos el caché temporal para que deje re-seleccionar la misma foto
+                onClick={(e) => (e.target.value = null)} 
                 onChange={handleComprobanteChange}
                 className="w-full p-3 bg-white/5 border border-white/10 rounded-lg text-white"
                 required
@@ -666,6 +839,9 @@ const handleSubmitPago = async (e) => {
           <h2 className="text-2xl font-bold text-white">Historial de Pagos</h2>
           <p className="text-sm text-gray-300">Historial completo de pagos</p>
         </div>
+        <p className="text-xs text-red-200 font-medium mb-4">
+          Los pagos rechazados o eliminados se muestran en rojo para identificarlos rapido.
+        </p>
         
         {pagos.length === 0 ? (
 
@@ -689,72 +865,40 @@ const handleSubmitPago = async (e) => {
               </thead>
               <tbody>
                 {pagos.map((pago) => (
-                  <tr key={pago.id} className="border-b border-white/5 hover:bg-white/5 transition-all">
-                    <td className="p-3 text-white font-mono text-sm">
+                  <tr
+                    key={pago.id}
+                    className={`border-b transition-all ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'border-red-400/70 bg-red-600/30 hover:bg-red-600/40 shadow-[inset_0_0_0_1px_rgba(248,113,113,0.45)]' : 'border-white/5 hover:bg-white/5'}`}
+                  >
+                    <td className={`p-3 font-mono text-sm ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-50' : 'text-white'}`}>
                       {pago.folio_pago || `#${pago.id}`}
                     </td>
-                    <td className="p-3 text-white">
-                      {(() => {
-                        // 1. Limpieza de fecha y zona horaria
-                        const parseDate = (dateStr) => {
-                          if (!dateStr) return null;
-                          return new Date(`${dateStr.substring(0, 10)}T12:00:00`);
-                        };
-
-                        const dInicio = parseDate(pago.fecha_pago);
-                        const dFin = parseDate(pago.fecha_pago_fin);
-
-                        if (!dInicio) return '-';
-
-                        // 2. FUNCIONES DE FORMATEO MANUAL (Anti-Guiones 🛡️)
-                        // Extraemos las partes por separado para unirlas nosotros mismos
-                        const getDia = (d) => d.toLocaleDateString('es-MX', { day: '2-digit' });
-                        const getMes = (d) => d.toLocaleDateString('es-MX', { month: 'short' }).replace('.', '');
-                        const getAnio = (d) => d.getFullYear();
-
-                        // Construye "21 ene" (sin guiones sorpresa)
-                        const fmtDiaMes = (d) => `${getDia(d)} ${getMes(d)}`;
-                        // Construye "21 ene 2026"
-                        const fmtCompleto = (d) => `${getDia(d)} ${getMes(d)} ${getAnio(d)}`;
-
-                        // CASO 1: MISMO DÍA (O sin fin)
-                        if (!dFin || dFin.getTime() === dInicio.getTime()) {
-                          return fmtCompleto(dInicio);
-                        }
-
-                        // CASO 2: RANGO
-                        const esMismoMes = 
-                          dInicio.getMonth() === dFin.getMonth() && 
-                          dInicio.getFullYear() === dFin.getFullYear();
-
-                        if (esMismoMes) {
-                          // Mismo mes: "12 al 20 ene 2026"
-                          return (
-                            <span className="text-sm font-medium text-white">
-                              {getDia(dInicio)} al {fmtCompleto(dFin)}
+                      <td className="py-4 px-4 align-top">
+                        <div className="space-y-2">
+                          {/* FECHA DE REGISTRO (CREACIÓN) */}
+                          <div className={`flex items-center gap-2 ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-50' : 'text-gray-200'}`}>
+                            <Calendar className="w-4 h-4" />
+                            <span className="font-medium whitespace-nowrap capitalize">
+                              {formatDiaCorrespondiente(pago.created_at)}
                             </span>
-                          );
-                        } else {
-                          // Meses distintos: "21 ene al 03 feb 2026"
-                          return (
-                            <span className="text-sm font-medium text-white">
-                              {fmtDiaMes(dInicio)} al {fmtCompleto(dFin)}
-                            </span>
-                          );
-                        }
-                      })()}
-                    </td>
-                    <td className="p-3 text-white font-semibold">
+                          </div>
+                          
+                          {/* RANGO QUE CUBRE EL PAGO */}
+                          <p className={`text-xs ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-100' : 'text-gray-500'}`}>
+                            Cubre: {formatRangoCubre(pago.fecha_pago, pago.fecha_pago_fin)}
+                          </p>
+                        </div>
+                      </td>
+                    <td className={`p-3 font-semibold ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-50' : 'text-white'}`}>
                       {formatCurrency(pago.monto_total || pago.monto_renta_pagado)}
-                      <p className="text-xs text-gray-400">
+                      <p className={`text-xs ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-100' : 'text-gray-400'}`}>
                         Renta: {formatCurrency(pago.monto_renta_pagado)} · Póliza: {formatCurrency(pago.monto_poliza_pagado)}
                       </p>
                     </td>
-                    <td className="p-3 text-white">
+                    <td className={`p-3 ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-50' : 'text-white'}`}>
                       {pago.metodo_pago || 'Transferencia'}
                     </td>
-                    <td className="p-3 text-white">
-                      {Math.max(0, parseInt(pago.dias_atraso ?? 0))} días
+                    <td className={`p-3 ${['Rechazado', 'Eliminado'].includes(pago.status) ? 'text-red-50' : 'text-white'}`}>
+                      {calcularDiasAtraso(pago.fecha_pago, pago.created_at)} {calcularDiasAtraso(pago.fecha_pago, pago.created_at) === 1 ? 'día' : 'días'}
                     </td>
                     <td className="p-3">
                       <EstadoBadge estado={pago.status} />
@@ -783,7 +927,7 @@ const handleSubmitPago = async (e) => {
                         {pago.status === 'Eliminado' && (
                       <button
                         onClick={() => alert(`⛔ RAZÓN DE LA ELIMINACIÓN:\n\n${pago.observaciones || 'Sin motivo especificado'}`)}
-                        className="p-2 rounded-lg bg-gray-600/20 text-gray-400 hover:bg-gray-600/30 transition-colors"
+                        className="p-2 rounded-lg bg-red-500/35 text-red-100 hover:bg-red-500/45 transition-colors"
                         title="Ver motivo de eliminación"
                       >
                         <MessageSquareX size={18} />
@@ -810,8 +954,8 @@ const EstadoBadge = ({ estado }) => {
     'Pagada': { bg: 'bg-green-500/20', text: 'text-green-400', icon: Check },
     'Pendiente': { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: Clock },
     'Vencida': { bg: 'bg-red-500/20', text: 'text-red-400', icon: X },
-    'Rechazado': { bg: 'bg-red-500/20', text: 'text-red-400', icon: X },
-    'Eliminado': { bg: 'bg-gray-500/20', text: 'text-gray-400', icon: Trash2 },
+    'Rechazado': { bg: 'bg-red-600/35', text: 'text-red-100', icon: X },
+    'Eliminado': { bg: 'bg-red-600/35', text: 'text-red-100', icon: Trash2 },
   };
   
   const ESTADO = config[estado] || config.Pendiente;

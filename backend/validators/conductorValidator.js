@@ -15,10 +15,10 @@ const conductorSchema = Joi.object({
     }),
   
   numero_telefono: Joi.string()
-    .pattern(/^[0-9+\s\-()]{10,20}$/)
+    .pattern(/^[0-9]{10}$/)
     .required()
     .messages({
-      'string.pattern.base': 'El teléfono debe tener entre 10 y 20 caracteres',
+      'string.pattern.base': 'El teléfono debe tener exactamente 10 dígitos numéricos',
       'any.required': 'El número de teléfono es requerido'
     }),
   
@@ -34,17 +34,20 @@ const conductorSchema = Joi.object({
   
   // Documentación
   numero_de_ine_ife: Joi.string()
-    .max(255)
+    .pattern(/^[0-9]{9}$/)
     .optional()
-    .allow(null, ''),
+    .allow(null, '')
+    .messages({
+      'string.pattern.base': 'El número de INE/IFE debe tener exactamente 9 dígitos'
+    }),
   
   curp: Joi.string()
-    .length(18)
+    .pattern(/^[A-Z0-9]{18}$/)
     .uppercase()
     .optional()
     .allow(null, '')
     .messages({
-      'string.length': 'CURP debe tener exactamente 18 caracteres'
+      'string.pattern.base': 'CURP debe tener exactamente 18 caracteres alfanuméricos'
     }),
   
   rfc: Joi.string()
@@ -61,10 +64,11 @@ const conductorSchema = Joi.object({
   
   // Licencia
   licencia_conducir: Joi.string()
-    .max(255)
+    .pattern(/^[0-9]{14}$/)
     .trim()
     .required()
     .messages({
+      'string.pattern.base': 'El número de licencia debe tener exactamente 14 dígitos',
       'any.required': 'El número de licencia es requerido'
     }),
   
@@ -117,9 +121,12 @@ const conductorSchema = Joi.object({
     .allow(null, ''),
   
   telefono_emergencia: Joi.string()
-    .max(255)
+    .pattern(/^[0-9]{10}$/)
     .optional()
-    .allow(null, ''),
+    .allow(null, '')
+    .messages({
+      'string.pattern.base': 'El teléfono de emergencia debe tener exactamente 10 dígitos'
+    }),
   
   ubicacion_actual: Joi.string()
     .max(255)
@@ -181,6 +188,24 @@ const conductorSchema = Joi.object({
   tasa_completacion: Joi.number()
     .min(0)
     .max(100)
+    .precision(2)
+    .default(0)
+    .allow(null),
+
+  total_viajes: Joi.number()
+    .integer()
+    .min(0)
+    .default(0)
+    .allow(null),
+
+  horas_trabajadas: Joi.number()
+    .min(0)
+    .precision(2)
+    .default(0)
+    .allow(null),
+
+  ingreso_promedio_diario: Joi.number()
+    .min(0)
     .precision(2)
     .default(0)
     .allow(null),

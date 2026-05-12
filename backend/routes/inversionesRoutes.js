@@ -13,7 +13,13 @@ router.use(verifyToken);
 // Crear nuevo contrato de inversión
 router.post('/crear-contrato',
   requirePermission('inversiones.create'),
-  inversionistasController.crearContrato
+  inversionesController.crearInversionVehiculo
+);
+
+//  Borrado lógico de contrato
+router.delete('/contratos/:id', 
+  requirePermission('inversiones.delete'), 
+  inversionesController.eliminarInversion
 );
 
 // Obtener vehículos disponibles
@@ -25,6 +31,35 @@ router.get('/vehiculos-disponibles',
 router.get('/contratos/:id',
   requirePermission('inversiones.view'),
   inversionistasController.getContratoDetalle
+);
+
+router.post('/inversiones/:id/pagos', 
+  requirePermission('inversiones.create'), 
+  inversionesController.registrarPagoInversion);
+
+  router.delete('/inversiones/pagos/:id', 
+    requirePermission('inversiones.delete'),
+    inversionesController.eliminarPagoInversion
+  );
+
+  
+router.put('/inversiones/pagos/:id', 
+  requirePermission('inversiones.update'), 
+  inversionesController.actualizarPagoInversion
+);
+
+router.put('/contratos/:id/rescindir', 
+  requirePermission('inversiones.update'), 
+  inversionesController.rescindirContrato);
+
+router.post('/contratos/:id/pago-rescision', 
+  requirePermission('inversiones.create'), 
+  inversionesController.registrarPagoRescision
+);  
+
+router.put('/contratos/:id/reanudar', 
+  requirePermission('inversiones.update'), 
+  inversionesController.reanudarContrato
 );
 
 // Marcar un pago como pagado
@@ -87,10 +122,5 @@ router.put('/parametros/multiplicador',
   inversionesController.gestionarMultiplicador
 );
 
-// Crear inversión completa con nuevo flujo
-router.post('/crear-completa',
-  requirePermission('inversiones.create'),
-  inversionesController.crearInversionCompleta
-);
 
 module.exports = router;

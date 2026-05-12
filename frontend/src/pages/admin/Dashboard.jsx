@@ -156,6 +156,8 @@ const Dashboard = () => {
     }
   };
 
+
+
   const solicitudes = solicitudesStats || initialSolicitudesStats;
 
   return (
@@ -176,6 +178,7 @@ const Dashboard = () => {
               Bienvenido, {user?.nombre || 'Administrador'}
             </p>
           </div>
+
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right">

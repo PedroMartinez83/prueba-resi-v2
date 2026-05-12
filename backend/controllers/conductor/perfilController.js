@@ -2,15 +2,99 @@
 const { db } = require('../../config/database');
 const bcrypt = require('bcrypt');
 
+const parsePositiveInt = (value) => {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value !== 'string') return null;
+
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) return null;
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const normalizeEmail = (value) => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+};
+
+const resolveConductorContext = async (user = {}) => {
+  const tokenUserId = parsePositiveInt(user.id);
+
+  if (tokenUserId) {
+    const conductorByUser = await db('conductores')
+      .where({ usuario_id: tokenUserId })
+      .select('id', 'usuario_id')
+      .orderBy('id', 'desc')
+      .first();
+
+    const conductorId = parsePositiveInt(conductorByUser?.id);
+    if (conductorId) {
+      return {
+        conductorId,
+        userId: parsePositiveInt(conductorByUser?.usuario_id) || tokenUserId
+      };
+    }
+  }
+
+  const tokenConductorId = parsePositiveInt(user.conductorId);
+  if (tokenConductorId) {
+    const conductorById = await db('conductores')
+      .where({ id: tokenConductorId })
+      .select('id', 'usuario_id')
+      .first();
+
+    const conductorId = parsePositiveInt(conductorById?.id);
+    if (conductorId) {
+      return {
+        conductorId,
+        userId: parsePositiveInt(conductorById?.usuario_id) || tokenUserId || null
+      };
+    }
+  }
+
+  const emailCandidates = [normalizeEmail(user.email), normalizeEmail(user.name)].filter(Boolean);
+  if (emailCandidates.length > 0) {
+    const conductorByEmail = await db('conductores as c')
+      .leftJoin('usuarios as u', 'u.id', 'c.usuario_id')
+      .where((qb) => {
+        qb.whereIn('u.email', emailCandidates)
+          .orWhereIn('u.name', emailCandidates)
+          .orWhereIn('c.email', emailCandidates);
+      })
+      .select('c.id', 'c.usuario_id')
+      .orderBy('c.id', 'desc')
+      .first();
+
+    const conductorId = parsePositiveInt(conductorByEmail?.id);
+    if (conductorId) {
+      return {
+        conductorId,
+        userId: parsePositiveInt(conductorByEmail?.usuario_id) || tokenUserId || null
+      };
+    }
+  }
+
+  return null;
+};
+
 // =====================================================
 // OBTENER MI PERFIL COMPLETO
 // =====================================================
 const getMiPerfil = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
-    const userId = req.user.id;
+    const context = await resolveConductorContext(req.user);
+    const conductorId = context?.conductorId;
+    const userId = context?.userId;
 
-    // Obtener datos del conductor
+    if (!conductorId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se pudo identificar al conductor autenticado'
+      });
+    }
+
     const conductor = await db('conductores')
       .where({ id: conductorId })
       .first();
@@ -22,13 +106,14 @@ const getMiPerfil = async (req, res) => {
       });
     }
 
-    // Obtener datos del usuario (email)
-    const usuario = await db('usuarios')
-      .where({ id: userId })
-      .select('email', 'created_at')
-      .first();
+    let usuario = null;
+    if (userId) {
+      usuario = await db('usuarios')
+        .where({ id: userId })
+        .select('email', 'created_at')
+        .first();
+    }
 
-    // Obtener vehículo asignado (si existe)
     const asignacion = await db('asignaciones')
       .where({ conductor_id: conductorId, activa: true })
       .first();
@@ -41,42 +126,39 @@ const getMiPerfil = async (req, res) => {
         .first();
     }
 
-    res.json({
+    return res.json({
       success: true,
       perfil: {
-        // Datos personales
         nombre_conductor: conductor.nombre_conductor,
         numero_telefono: conductor.numero_telefono,
-        email: usuario.email,
+        email: usuario?.email || conductor.email || null,
         fecha_nacimiento: conductor.fecha_nacimiento,
-        direccion: conductor.direccion,
-        
-        // Estado y categoría
+        direccion: conductor.direccion_completa || null,
+
         status: conductor.status,
         categoria: conductor.categoria,
         fecha_ingreso: conductor.fecha_ingreso,
-        
-        // Documentos
+
         url_ine_frente: conductor.url_ine_frente,
         url_ine_reverso: conductor.url_ine_reverso,
         url_licencia_frente: conductor.url_licencia_frente,
         url_licencia_reverso: conductor.url_licencia_reverso,
         url_comprobante_domicilio: conductor.url_comprobante_domicilio,
         fecha_vencimiento_licencia: conductor.fecha_vencimiento_licencia,
-        
-        // Finanzas
+
         tipo_poliza: conductor.tipo_poliza,
         saldo_poliza_mecanica: parseFloat(conductor.saldo_poliza_mecanica || 0),
         saldo_ahorro_mantenimiento: parseFloat(conductor.saldo_ahorro_mantenimiento || 0),
-        
-        // Vehículo asignado
+        // 👇 2. AQUÍ CONECTAMOS LOS CABLES EXACTOS PARA EL FRONTEND
+        saldo_poliza: parseFloat(conductor.saldo_poliza_mecanica || 0),
+        vehiculo_actual: vehiculo ? vehiculo.numero_vehiculo : 'Sin vehículo asignado',
+
         vehiculo_asignado: vehiculo
       }
     });
-
   } catch (error) {
     console.error('Error en getMiPerfil:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al obtener perfil',
       error: error.message
@@ -89,10 +171,17 @@ const getMiPerfil = async (req, res) => {
 // =====================================================
 const actualizarPerfil = async (req, res) => {
   try {
-    const conductorId = req.user.conductorId;
+    const context = await resolveConductorContext(req.user);
+    const conductorId = context?.conductorId;
     const { numero_telefono, direccion } = req.body;
 
-    // Validación básica
+    if (!conductorId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se pudo identificar al conductor autenticado'
+      });
+    }
+
     if (!numero_telefono && !direccion) {
       return res.status(400).json({
         success: false,
@@ -100,7 +189,6 @@ const actualizarPerfil = async (req, res) => {
       });
     }
 
-    // Preparar datos a actualizar
     const datosActualizar = {
       updated_at: db.fn.now()
     };
@@ -110,10 +198,9 @@ const actualizarPerfil = async (req, res) => {
     }
 
     if (direccion) {
-      datosActualizar.direccion = direccion;
+      datosActualizar.direccion_completa = direccion;
     }
 
-    // Actualizar conductor
     const updated = await db('conductores')
       .where({ id: conductorId })
       .update(datosActualizar);
@@ -125,14 +212,13 @@ const actualizarPerfil = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Perfil actualizado correctamente'
     });
-
   } catch (error) {
     console.error('Error en actualizarPerfil:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al actualizar perfil',
       error: error.message
@@ -148,7 +234,6 @@ const cambiarPassword = async (req, res) => {
     const userId = req.user.id;
     const { password_actual, password_nueva } = req.body;
 
-    // Validación
     if (!password_actual || !password_nueva) {
       return res.status(400).json({
         success: false,
@@ -163,7 +248,6 @@ const cambiarPassword = async (req, res) => {
       });
     }
 
-    // Obtener usuario
     const usuario = await db('usuarios')
       .where({ id: userId })
       .first();
@@ -175,9 +259,8 @@ const cambiarPassword = async (req, res) => {
       });
     }
 
-    // Verificar contraseña actual
     const passwordValido = await bcrypt.compare(password_actual, usuario.password);
-    
+
     if (!passwordValido) {
       return res.status(401).json({
         success: false,
@@ -185,10 +268,8 @@ const cambiarPassword = async (req, res) => {
       });
     }
 
-    // Hash de la nueva contraseña
     const hashedPassword = await bcrypt.hash(password_nueva, 10);
 
-    // Actualizar contraseña
     await db('usuarios')
       .where({ id: userId })
       .update({
@@ -196,14 +277,13 @@ const cambiarPassword = async (req, res) => {
         updated_at: db.fn.now()
       });
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Contraseña actualizada correctamente'
     });
-
   } catch (error) {
     console.error('Error en cambiarPassword:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Error al cambiar contraseña',
       error: error.message

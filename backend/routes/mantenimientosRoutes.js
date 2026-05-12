@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const { requirePermission } = require('../middleware/roleMiddleware');
+const { checkRole } = require('../middleware/authMiddleware');
 
 // ✅ UN SOLO NOMBRE: mantenimientosController
 const mantenimientosController = require('../controllers/admin/mantenimientosAdminController');
@@ -22,6 +23,11 @@ router.get('/reportes/vehiculos-costosos',
   mantenimientosController.getVehiculosMasCostosos
 );
 
+router.get('/reportes/conductores-gasto',
+  requirePermission('mantenimientos.view'),
+  mantenimientosController.getConductoresPorGasto
+);
+
 router.get('/reportes/comparativa',
   requirePermission('mantenimientos.view'),
   mantenimientosController.getComparativaEstimadoReal
@@ -38,6 +44,11 @@ router.get('/opciones',
   mantenimientosController.getOpciones
 );
 
+router.get('/disponibilidad',
+  requirePermission('mantenimientos.view'),
+  mantenimientosController.getDisponibilidadAgenda
+);
+
 router.get('/servicios-preventivos',
   requirePermission('mantenimientos.view'),
   mantenimientosController.getServiciosPreventivos
@@ -46,6 +57,11 @@ router.get('/servicios-preventivos',
 router.get('/estadisticas',
   requirePermission('mantenimientos.view'),
   mantenimientosController.getEstadisticas
+);
+
+router.get('/top-vehiculos',
+  requirePermission('mantenimientos.view'),
+  mantenimientosController.getTopVehiculosGasto
 );
 
 router.get('/alertas',
@@ -62,6 +78,31 @@ router.get('/pendientes-distribucion',
 router.post('/:id/distribuir-gasto',
   requirePermission('mantenimientos.update'),
   mantenimientosController.distribuirGastoMantenimiento
+);
+
+router.get('/estado-operativo',
+  requirePermission('mantenimientos.view'),
+  mantenimientosController.getMantenimientosPorEstadoOperativo
+);
+
+router.get('/flujo-financiero',
+  requirePermission('mantenimientos.view'),
+  mantenimientosController.getFlujoFinancieroMantenimientos
+);
+
+router.post('/vehiculo/:vehiculoId/kilometraje',
+  requirePermission('mantenimientos.update'),
+  mantenimientosController.registrarKilometrajeVehiculo
+);
+
+router.get('/proximos-kilometraje',
+  requirePermission('mantenimientos.view'),
+  mantenimientosController.getVehiculosProximosKilometraje
+);
+
+router.put('/:id/flujo-financiero',
+  requirePermission('mantenimientos.update'),
+  mantenimientosController.actualizarEstadoFlujoFinanciero
 );
 
 // ========== RUTAS CON PARÁMETROS ESPECÍFICOS ==========
@@ -109,6 +150,7 @@ router.put('/:id',
 );
 
 router.delete('/:id',
+  checkRole('super_admin', 'direccion', 'gerente', 'gerente_ops'),
   requirePermission('mantenimientos.delete'),
   mantenimientosController.deleteMantenimiento
 );

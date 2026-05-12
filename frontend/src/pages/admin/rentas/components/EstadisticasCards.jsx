@@ -1,8 +1,8 @@
 import React from 'react';
-import { 
-  DollarSign, 
-  TrendingUp, 
-  TrendingDown, 
+import {
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
   ArrowUpRight,
   Calendar,
   Users,
@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 
 const EstadisticasCards = ({ estadisticas, loading, periodo }) => {
-  
+
   const formatearDinero = (monto) => {
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -21,32 +21,35 @@ const EstadisticasCards = ({ estadisticas, loading, periodo }) => {
     }).format(monto);
   };
 
-  const periodoLabel = periodo ? `Últimos ${periodo} días` : 'Periodo seleccionado';
+  const periodoLabel = periodo ? `Ultimos ${periodo} dias` : 'Periodo seleccionado';
+  const totalCobradoPeriodo = estadisticas?.total_cobrado_total ?? estadisticas?.total_cobrado ?? 0;
+  const totalRentaPeriodo = estadisticas?.total_cobrado_renta ?? 0;
+  const totalPolizaPeriodo = estadisticas?.total_ahorrado_poliza ?? 0;
 
   const cards = [
     {
-      titulo: 'Total Cobrado Hoy',
-      valor: estadisticas?.cobrado_hoy || 0,
+      titulo: 'Total Cobrado',
+      valor: totalCobradoPeriodo,
       formato: 'dinero',
       icono: DollarSign,
       color: 'from-emerald-500 to-teal-500',
-      cambio: estadisticas?.cambio_dia
+      descripcion: periodoLabel
     },
     {
-      titulo: 'Total Semana',
-      valor: estadisticas?.cobrado_semana || 0,
+      titulo: 'Total Renta',
+      valor: totalRentaPeriodo,
       formato: 'dinero',
       icono: Calendar,
       color: 'from-blue-500 to-indigo-500',
-      cambio: estadisticas?.cambio_semana
+      descripcion: periodoLabel
     },
     {
-      titulo: 'Total Mes',
-      valor: estadisticas?.cobrado_mes || 0,
+      titulo: 'Total Poliza',
+      valor: totalPolizaPeriodo,
       formato: 'dinero',
       icono: TrendingUp,
       color: 'from-purple-500 to-pink-500',
-      cambio: estadisticas?.cambio_mes
+      descripcion: periodoLabel
     },
     {
       titulo: 'Pendientes de Validar',
@@ -70,7 +73,7 @@ const EstadisticasCards = ({ estadisticas, loading, periodo }) => {
       formato: 'numero',
       icono: Users,
       color: 'from-cyan-500 to-blue-500',
-      descripcion: 'Pagando regularmente'
+      descripcion: periodoLabel
     }
   ];
 
@@ -103,7 +106,7 @@ const EstadisticasCards = ({ estadisticas, loading, periodo }) => {
             <div className={`p-3 rounded-xl bg-gradient-to-br ${card.color} group-hover:scale-110 transition-transform`}>
               <card.icono className="h-6 w-6 text-white" />
             </div>
-            
+
             {card.cambio !== undefined && (
               <div className={`flex items-center gap-1 text-sm ${
                 card.cambio >= 0 ? 'text-emerald-400' : 'text-red-400'
@@ -122,7 +125,7 @@ const EstadisticasCards = ({ estadisticas, loading, periodo }) => {
           <div>
             <p className="text-gray-400 text-sm mb-2">{card.titulo}</p>
             <p className="text-3xl font-bold text-white mb-1">
-              {card.formato === 'dinero' 
+              {card.formato === 'dinero'
                 ? formatearDinero(card.valor)
                 : card.valor.toLocaleString('es-MX')
               }

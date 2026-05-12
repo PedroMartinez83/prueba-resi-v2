@@ -210,8 +210,33 @@ const SiniestroDetalle = () => {
   };
 
   const handleCrearMantenimiento = () => {
-    console.log('Crear mantenimiento para siniestro:', id);
-    setToast({ message: 'Función en desarrollo', type: 'info' });
+    if (!siniestro) return;
+
+    const confirmar = window.confirm(
+      `¿Deseas crear la Orden de Mantenimiento para el Siniestro #${siniestro.folio_siniestro}?`
+    );
+
+    if (!confirmar) return;
+
+    navigate('/admin/mantenimientos/programar', {
+      state: {
+        vehiculo_id: siniestro.vehiculo_id,
+        conductor_id: siniestro.conductor_id || null,
+        siniestro_id: siniestro.id,
+        siniestro_folio: siniestro.folio_siniestro,
+        tipo_servicio: 'Reparación por Siniestro',
+        kilometraje_servicio: siniestro.kilometraje_actual || siniestro.kilometraje || 0,
+        observaciones: `Reparación por Siniestro #${siniestro.folio_siniestro}: ${siniestro.descripcion || 'Reparación necesaria'}`,
+        costo_estimado: siniestro.costo_estimado || 0,
+        vehiculo_info: {
+          id: siniestro.vehiculo_id,
+          numero_vehiculo: siniestro.numero_vehiculo,
+          marca: siniestro.marca,
+          modelo: siniestro.modelo,
+          kilometraje_actual: siniestro.kilometraje_actual || siniestro.kilometraje || 0
+        }
+      }
+    });
   };
 
   const handleDistribuirGastos = () => {
@@ -253,7 +278,7 @@ const SiniestroDetalle = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] flex items-center justify-center">
         <div className="text-white text-xl">Cargando detalle del siniestro...</div>
       </div>
     );
@@ -261,7 +286,7 @@ const SiniestroDetalle = () => {
 
   if (!siniestro) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6 flex items-center justify-center">
+      <div className="min-h-screen bg-[#07425E] p-6 flex items-center justify-center">
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-8 text-center backdrop-blur-sm">
           <AlertTriangle className="w-16 h-16 text-red-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-white mb-2">Siniestro no encontrado</h2>
@@ -286,7 +311,7 @@ const SiniestroDetalle = () => {
   const tieneDistribucion = (siniestro.pagado_por_poliza || 0) + (siniestro.pagado_por_empresa || 0) + (siniestro.pagado_por_conductor || 0) + (siniestro.pagado_por_seguro || 0) > 0;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-6">
+    <div className="min-h-screen bg-[#07425E] p-6">
       <div className="max-w-6xl mx-auto space-y-6">
         
         {/* Toast */}

@@ -110,7 +110,7 @@ const DriverLogin = () => {
       {/* Fondo animado con partículas sutiles */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         {/* Gradiente principal */}
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900" />
+        <div className="absolute inset-0 bg-[#07425E] via-slate-950 to-slate-900" />
         
         {/* Orbes de luz */}
         <div className="absolute top-1/4 -left-32 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl animate-pulse" />
@@ -165,7 +165,7 @@ const DriverLogin = () => {
             
             <p className="text-xl text-gray-400 leading-relaxed">
               Más que conductores, somos una familia que construye juntos un mejor futuro. 
-              Aquí puedes ver tus ganancias, registrar pagos y crecer profesionalmente.
+              Aquí puedes ver tus rendimientos, registrar pagos y crecer profesionalmente.
             </p>
           </div>
 

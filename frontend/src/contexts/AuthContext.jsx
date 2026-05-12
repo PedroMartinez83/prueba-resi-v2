@@ -128,7 +128,7 @@ export const AuthProvider = ({ children }) => {
   // Verificar roles
   const isAdmin = () => {
     const userRole = user?.role || user?.rol;
-    return ['admin', 'super_admin', 'direccion', 'gerente_ops', 'finanzas', 'coordinador', 'secretaria'].includes(userRole);
+    return ['admin', 'super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador', 'secretaria'].includes(userRole);
   };
 
     const isSuperAdmin = () => {

@@ -95,6 +95,45 @@ class SolicitudesService {
   }
 
   /**
+   * Obtiene la agenda de citas de solicitudes
+   * @param {Object} filtros - Filtros opcionales
+   * @returns {Promise<Object>} Lista de citas y resumen
+   */
+  async getCitasSolicitudes(filtros = {}) {
+    try {
+      const queryParams = new URLSearchParams(filtros).toString();
+      const endpoint = queryParams
+        ? `/admin/solicitudes/citas?${queryParams}`
+        : '/admin/solicitudes/citas';
+
+      return await this.fetchWithAuth(endpoint);
+    } catch (error) {
+      console.error('Error al obtener agenda de citas:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Registra asistencia de una cita
+   * @param {string|number} id - ID de la solicitud
+   * @param {Object} payload - Datos de asistencia
+   * @returns {Promise<Object>} Solicitud actualizada
+   */
+  async registrarAsistenciaCita(id, payload) {
+    if (!id) throw new Error('ID de solicitud requerido');
+
+    try {
+      return await this.fetchWithAuth(`/admin/solicitudes/${id}/asistencia-cita`, {
+        method: 'PUT',
+        body: JSON.stringify(payload || {})
+      });
+    } catch (error) {
+      console.error('Error al registrar asistencia:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Obtiene una solicitud por ID
    * @param {string|number} id - ID de la solicitud
    * @returns {Promise<Object>} Datos de la solicitud
@@ -177,7 +216,7 @@ class SolicitudesService {
     }
   }
 
-  // --- 👇 ¡AQUÍ ESTÁ LA CORRECCIÓN / CÓDIGO AÑADIDO! 👇 ---
+  // ---  ¡AQUÍ ESTÁ LA CORRECCIÓN / CÓDIGO AÑADIDO!  ---
   
   /**
    * Elimina una solicitud permanentemente

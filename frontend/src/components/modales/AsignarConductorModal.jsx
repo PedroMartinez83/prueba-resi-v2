@@ -26,12 +26,28 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
   
   // Datos del formulario de asignación
   const [formData, setFormData] = useState({
-    rentaDiaria: 400,
-    abonoPoliza: 100,
+    rentaDiaria: 0,
+    abonoPoliza: 0,
     fechaInicio: new Date().toISOString().split('T')[0]
   });
 
   const [formErrors, setFormErrors] = useState({});
+
+// 🧮 FUNCIÓN PARA CALCULAR LOS VALORES SUGERIDOS
+  const getValoresSugeridos = () => {
+    // 🕵️‍♂️ LOG PARA DEPURAR: Abre la consola (F12) y mira qué trae este objeto
+    console.log("Datos del vehículo que llegaron al modal:", vehiculo);
+
+    // Buscamos la renta en cualquier formato posible que pueda mandar el backend
+    const valorBD = vehiculo?.renta_sugerida || vehiculo?.RentaSugerida || vehiculo?.renta_diaria;
+    
+    // Si viene el valor de BD lo usamos, si no (undefined/null), usamos 500
+    const sugerida = valorBD ? parseFloat(valorBD) : 500;
+    const polizaFija = 100;
+    const rentaCalculada = sugerida > polizaFija ? sugerida - polizaFija : sugerida;
+    
+    return { sugerida, rentaCalculada, polizaFija };
+  };
 
   // Cargar conductores disponibles
   useEffect(() => {
@@ -39,7 +55,7 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
       cargarConductoresDisponibles();
       resetForm();
     }
-  }, [isOpen]);
+  }, [isOpen, vehiculo]); // 👈 Agregamos vehiculo a las dependencias
 
   const cargarConductoresDisponibles = async () => {
     try {
@@ -63,9 +79,13 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
   const resetForm = () => {
     setSelectedConductor(null);
     setSearchTerm('');
+    
+    // 💡 Inicializamos con los valores calculados dinámicamente
+    const { rentaCalculada, polizaFija } = getValoresSugeridos();
+    
     setFormData({
-      rentaDiaria: 400,
-      abonoPoliza: 100,
+      rentaDiaria: rentaCalculada,
+      abonoPoliza: polizaFija,
       fechaInicio: new Date().toISOString().split('T')[0]
     });
     setFormErrors({});
@@ -148,7 +168,12 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
       }
     } catch (err) {
       console.error('Error asignando conductor:', err);
-      setError(err.message);
+      const apiCode = err?.response?.code || err?.code;
+      if (apiCode === 'INVENTARIO_INICIAL_REQUERIDO') {
+        setError('Este vehiculo requiere inventario inicial completado antes de asignar conductor. Ve a Vehiculos > Llenar inventario y completa el alta inicial.');
+      } else {
+        setError(err.message);
+      }
     } finally {
       setSaving(false);
     }
@@ -166,6 +191,11 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
     );
   });
 
+  // Variables para la lógica visual
+  const { sugerida: rentaOriginalSugerida } = getValoresSugeridos();
+  const totalActual = parseFloat(formData.rentaDiaria || 0) + parseFloat(formData.abonoPoliza || 0);
+  const respetaSugerido = totalActual === rentaOriginalSugerida;
+
   if (!isOpen) return null;
 
   return (
@@ -178,7 +208,7 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
               Asignar Conductor
             </h2>
             <p className="text-sm text-gray-400">
-              Vehículo: <span className="text-primary font-semibold">{vehiculo?.NumeroVehiculo}</span> - {vehiculo?.Marca} {vehiculo?.Modelo}
+              Vehículo: <span className="text-primary font-semibold">{vehiculo?.NumeroVehiculo || vehiculo?.numero_vehiculo}</span> - {vehiculo?.Marca || vehiculo?.marca} {vehiculo?.Modelo || vehiculo?.modelo}
             </p>
           </div>
           <button
@@ -295,7 +325,8 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
               </h3>
 
               {selectedConductor ? (
-                <div className="space-y-4">
+                <div className="space-y-4 animate-fadeIn">
+                  
                   {/* Conductor Seleccionado */}
                   <div className="p-4 bg-primary/10 border border-primary/30 rounded-lg">
                     <p className="text-xs text-gray-400 mb-1">Conductor Seleccionado</p>
@@ -308,54 +339,67 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
                     </div>
                   </div>
 
-                  {/* Renta Diaria */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-2">
-                      Renta Diaria <span className="text-red-400">*</span>
-                    </label>
-                    <div className="relative">
-                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
-                      <input
-                        type="number"
-                        value={formData.rentaDiaria}
-                        onChange={(e) => handleFormChange('rentaDiaria', e.target.value)}
-                        min="0"
-                        step="10"
-                        className={`w-full pl-10 pr-4 py-2 bg-surface-secondary border rounded-lg text-white focus:outline-none focus:ring-2 ${
-                          formErrors.rentaDiaria
-                            ? 'border-red-500 focus:ring-red-500/50'
-                            : 'border-gray-700 focus:ring-primary/50'
-                        }`}
-                      />
+                  {/* 💡 AVISO VISUAL PARA EL ADMIN */}
+                  <div className="bg-cyan-900/20 border border-cyan-500/30 p-3 rounded-lg flex gap-3 items-start">
+                    <div className="text-cyan-400 mt-0.5">💡</div>
+                    <div>
+                      <p className="text-cyan-300 text-sm font-medium">Valores calculados por el sistema</p>
+                      <p className="text-gray-400 text-xs mt-0.5">
+                        Se recomienda ampliamente mantener estos montos, ya que están basados en la proyección financiera original del vehículo.
+                      </p>
                     </div>
-                    {formErrors.rentaDiaria && (
-                      <p className="text-red-400 text-xs mt-1">{formErrors.rentaDiaria}</p>
-                    )}
                   </div>
 
-                  {/* Abono Póliza */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-2">
-                      Abono Póliza/Mantenimiento <span className="text-red-400">*</span>
-                    </label>
-                    <div className="relative">
-                      <Shield className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
-                      <input
-                        type="number"
-                        value={formData.abonoPoliza}
-                        onChange={(e) => handleFormChange('abonoPoliza', e.target.value)}
-                        min="0"
-                        step="10"
-                        className={`w-full pl-10 pr-4 py-2 bg-surface-secondary border rounded-lg text-white focus:outline-none focus:ring-2 ${
-                          formErrors.abonoPoliza
-                            ? 'border-red-500 focus:ring-red-500/50'
-                            : 'border-gray-700 focus:ring-primary/50'
-                        }`}
-                      />
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Renta Diaria */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-400 mb-2">
+                        Renta Diaria <span className="text-red-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
+                        <input
+                          type="number"
+                          value={formData.rentaDiaria}
+                          onChange={(e) => handleFormChange('rentaDiaria', e.target.value)}
+                          min="0"
+                          step="10"
+                          className={`w-full pl-10 pr-4 py-2 bg-surface-secondary border rounded-lg text-white focus:outline-none focus:ring-2 ${
+                            formErrors.rentaDiaria
+                              ? 'border-red-500 focus:ring-red-500/50'
+                              : 'border-gray-700 focus:ring-primary/50'
+                          }`}
+                        />
+                      </div>
+                      {formErrors.rentaDiaria && (
+                        <p className="text-red-400 text-xs mt-1">{formErrors.rentaDiaria}</p>
+                      )}
                     </div>
-                    {formErrors.abonoPoliza && (
-                      <p className="text-red-400 text-xs mt-1">{formErrors.abonoPoliza}</p>
-                    )}
+
+                    {/* Abono Póliza */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-400 mb-2">
+                        Abono Póliza <span className="text-red-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <Shield className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
+                        <input
+                          type="number"
+                          value={formData.abonoPoliza}
+                          onChange={(e) => handleFormChange('abonoPoliza', e.target.value)}
+                          min="0"
+                          step="10"
+                          className={`w-full pl-10 pr-4 py-2 bg-surface-secondary border rounded-lg text-white focus:outline-none focus:ring-2 ${
+                            formErrors.abonoPoliza
+                              ? 'border-red-500 focus:ring-red-500/50'
+                              : 'border-gray-700 focus:ring-primary/50'
+                          }`}
+                        />
+                      </div>
+                      {formErrors.abonoPoliza && (
+                        <p className="text-red-400 text-xs mt-1">{formErrors.abonoPoliza}</p>
+                      )}
+                    </div>
                   </div>
 
                   {/* Fecha Inicio */}
@@ -381,16 +425,32 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
                     )}
                   </div>
 
-                  {/* Total Diario */}
-                  <div className="p-4 bg-gradient-to-r from-green-500/10 to-primary/10 border border-green-500/30 rounded-lg">
-                    <p className="text-xs text-gray-400 mb-1">Total Diario</p>
-                    <p className="text-2xl font-bold text-white">
-                      ${(parseFloat(formData.rentaDiaria || 0) + parseFloat(formData.abonoPoliza || 0)).toFixed(2)}
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Mensual estimado: ${((parseFloat(formData.rentaDiaria || 0) + parseFloat(formData.abonoPoliza || 0)) * 30).toFixed(2)}
-                    </p>
+                  {/* 📊 RECUADRO DE TOTAL DIARIO */}
+                  <div className={`p-4 rounded-lg border transition-colors ${
+                    respetaSugerido 
+                      ? 'bg-emerald-500/10 border-emerald-500/30' 
+                      : 'bg-amber-500/10 border-amber-500/30'
+                  }`}>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-xs text-gray-400 mb-1">Total Diario a Cobrar</p>
+                        <p className={`text-2xl font-bold ${respetaSugerido ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          ${totalActual.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Mensual estimado: ${(totalActual * 30).toFixed(2)}
+                        </p>
+                      </div>
+                      
+                      {/* Textito dinámico de advertencia */}
+                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-black/20 text-gray-300 mt-1">
+                        {respetaSugerido 
+                          ? '✓ Coincide con sugerido' 
+                          : `⚠️ Diferente a $${rentaOriginalSugerida.toFixed(2)}`}
+                      </span>
+                    </div>
                   </div>
+
                 </div>
               ) : (
                 <div className="text-center py-12">
@@ -436,4 +496,4 @@ const AsignarConductorModal = ({ isOpen, onClose, vehiculo, onSuccess }) => {
   );
 };
 
-export default AsignarConductorModal;
+export default AsignarConductorModal; 

@@ -41,7 +41,7 @@ router.patch('/:id/poliza-mecanica',
   conductoresAdminController.ajustarPolizaMecanica
 );
 
-// --- 👇 ¡AQUÍ ESTÁ LA NUEVA RUTA QUE AÑADIMOS! 👇 ---
+// ---  ¡AQUÍ ESTÁ LA NUEVA RUTA QUE AÑADIMOS!  ---
 /**
  * Crea una cuenta de acceso (usuario) para un conductor existente
  */

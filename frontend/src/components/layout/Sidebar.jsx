@@ -18,6 +18,8 @@ import {
   Shield
 } from 'lucide-react';
 
+import logo from '../../assets/logo.png'; // Asegúrate de tener un logo en esta ruta
+
 const Sidebar = ({ isOpen, toggleSidebar }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -34,7 +36,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { path: '/admin/vehiculos', icon: Car, label: 'Vehículos', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'jefe_taller', 'coordinador', 'admin'] },
     { path: '/admin/conductores', icon: Users, label: 'Conductores', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'jefe_taller', 'coordinador', 'admin'] },
     { path: '/admin/solicitudes', icon: UserPlus, label: 'Solicitudes', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'reclutador', 'secretaria', 'coordinador', 'admin'] },
-    { path: '/admin/usuarios', icon: Shield, label: 'Usuarios', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'coordinador'] }, // 🆕 MÓDULO DE USUARIOS
+    { path: '/admin/usuarios', icon: Shield, label: 'Usuarios', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'coordinador', 'jefe_taller'] }, // 🆕 MÓDULO DE USUARIOS
     { path: '/admin/inversionistas-home', icon: TrendingUp, label: 'Inversionistas', roles: ['super_admin', 'direccion', 'finanzas', 'admin'] },
     { path: '/admin/mantenimientos', icon: Wrench, label: 'Mantenimientos', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'gestor_flota', 'jefe_taller', 'compras', 'admin'] },
     { path: '/admin/siniestros', icon: AlertTriangle, label: 'Siniestros', roles: ['super_admin', 'direccion', 'finanzas', 'gerente_ops', 'admin', 'jefe_taller'] },
@@ -50,7 +52,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   // Determinar qué menú mostrar según el rol
   const userRole = user?.rol || user?.role;
-  const adminRoles = ['admin', 'super_admin', 'direccion', 'gerente_ops', 'finanzas', 'coordinador', 'gestor_flota', 'secretaria', 'reclutador', 'jefe_taller', 'compras'];
+  const adminRoles = ['admin', 'super_admin', 'direccion', 'director', 'gerente_ops', 'finanzas', 'coordinador', 'gestor_flota', 'secretaria', 'reclutador', 'jefe_taller', 'compras'];
   
   // Filtrar items del menú según roles permitidos
   const menuItems = adminRoles.includes(userRole) 
@@ -84,9 +86,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
           {/* Header del Sidebar */}
           <div className="flex items-center justify-between p-6 border-b border-white/10">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-purple-500 rounded-lg flex items-center justify-center shadow-lg">
-                <span className="text-white font-bold text-lg">AM</span>
-              </div>
+              <img 
+                          src={logo} 
+                          alt="Auto Manager" 
+                          className="h-10 w-auto"
+                        />
               <h2 className="text-white font-semibold text-lg">Auto Manager</h2>
             </div>
             <button

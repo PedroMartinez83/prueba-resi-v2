@@ -22,6 +22,7 @@ const conductorRoutes = require('./routes/conductorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const paymentsRoutes = require('./routes/paymentsRoutes');
 const solicitudesRoutes = require('./routes/solicitudes');
+const solicitudesInversionistaRoutes = require('./routes/solicitudesInversionistaRoutes');
 const inversionistasRoutes = require('./routes/inversionistasRoutes');
 const inversionesRoutes = require('./routes/inversionesRoutes');
 const asignacionesRoutes = require('./routes/asignacionesRoutes');
@@ -45,7 +46,8 @@ const shouldSkipMiddleware = (req) => {
   // Rutas que pueden usar multipart/form-data (express-fileupload)
   const multipartPaths = [
     '/api/solicitudes',
-    '/api/admin/conductores'  // Se usa para subir documentos de conductores
+    '/api/admin/conductores',  // Se usa para subir documentos de conductores
+    '/api/admin/mantenimientos'
   ];
 
   // Solo saltar middlewares si la petición ES multipart. De lo contrario
@@ -61,10 +63,12 @@ const shouldSkipMiddleware = (req) => {
 const shouldSkipFileUpload = (req) => {
   const fullPath = req.originalUrl || req.url;
   const skipPaths = [
+    '/api/admin/siniestros',
     '/api/conductor/vehiculo/revision-diaria',
     '/api/conductor/siniestros/registrar',
     '/api/conductor/pagos/registrar',
-    '/api/conductor/pagos/ponerse-al-tanto'
+    '/api/conductor/pagos/ponerse-al-tanto',
+    '/api/conductor/documentos/subir'
   ];
 
   return skipPaths.some(path => fullPath.startsWith(path));
@@ -166,6 +170,7 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['x-refreshed-token'],
   optionsSuccessStatus: 200
 };
 
@@ -200,7 +205,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['x-refreshed-token']
 }));
 app.options('*', cors(corsOptions));
 
@@ -222,6 +228,14 @@ const fileUploadMiddleware = fileUpload({
 });
 
 app.use((req, res, next) => {
+  // 🚀 AGREGAMOS ESTA CONDICIÓN:
+  // Si la URL contiene la ruta de inversionistas, saltamos el middleware
+  if (req.originalUrl.includes('/api/solicitudes-inversionistas')) {
+    console.log(`⏭️  Skipping fileUpload middleware para: ${req.originalUrl}`); // Debug opcional
+    return next();
+  }
+
+  // Tu lógica actual se queda igual
   if (shouldSkipFileUpload(req) || !isMultipartRequest(req)) {
     return next();
   }
@@ -300,6 +314,7 @@ app.use('/api/auth/register', rateLimiters.login);
 
 // Rate limiter específico para solicitudes (más permisivo)
 app.use('/api/solicitudes', rateLimiters.public);
+app.use('/api/solicitudes-inversionistas', solicitudesInversionistaRoutes);
 
 // ===== AUDITORÍA =====
 app.use((req, res, next) => {
@@ -351,7 +366,7 @@ app.use('/api/admin/asignaciones', asignacionesRoutes);
 app.use('/api/admin/aurora', auroraRoutes);
 
 // Ruta admin genérica (incluye /api/admin/conductores)
-app.use('/api/admin', rateLimiters.create, adminRoutes);
+app.use('/api/admin', rateLimiters.general, adminRoutes);
 
 // ===== AUDIT STATS (solo super_admin) =====
 app.get('/api/audit/stats', async (req, res) => {

@@ -1,5 +1,5 @@
 // frontend/src/components/pagos/ModalRegistrarPago.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, DollarSign, CreditCard, Receipt, AlertCircle, CheckCircle, User, Calendar, Shield, Wrench, Clock } from 'lucide-react';
 import api from '../../services/api';
 
@@ -67,80 +67,147 @@ const TOLERANCIA_DIAS = 2;
     return diasHabiles;
   };
 
-//  LÓGICA ACTUALIZADA DE TOLERANCIA
-const obtenerInfoTolerancia = (ultimoPagoData) => {
-    // Validaciones básicas
-    if (!ultimoPagoData || !ultimoPagoData.siguiente_fecha_pendiente) {
-      return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información', fechaLimite: null };
+//  LÓGICA MAESTRA DE TOLERANCIA (Días Naturales vs Días Hábiles)
+  const obtenerInfoTolerancia = (ultimoPagoData) => {
+    if (!ultimoPagoData) {
+      return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información' };
     }
-
-    const fechaCorresponde = obtenerFechaCorrespondiente(ultimoPagoData.siguiente_fecha_pendiente);
-    if (!fechaCorresponde) return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información', fechaLimite: null };
 
     const hoy = new Date();
+    const fechaHoyLimpia = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()); // Sin horas
 
-    // 1. CALCULAR FECHA LÍMITE (Fecha Pago + 2 días hábiles)
-    const fechaLimite = sumarDiasHabiles(fechaCorresponde.toISOString().split('T')[0], TOLERANCIA_DIAS);
-    
-    // 2. CALCULAR DÍAS RESTANTES DE VIDA (Hoy vs Límite)
-    const diasRestantes = calcularDiferenciaDiasReales(hoy, fechaLimite);
+    let fechaCorresponde;
 
-    // 3. CALCULAR DÍAS TRANSCURRIDOS (Fecha Corte vs Hoy) - 🟢 CORREGIDO
-    // Si sale negativo (-15) significa que está adelantado 15 días.
-    // Si sale positivo (3) significa que ya pasaron 3 días desde que debió pagar.
-    const diasTranscurridos = calcularDiferenciaDiasReales(fechaCorresponde, hoy);
+    // 1. OBTENEMOS LA FECHA DE CORTE (Asignación o Último Pago)
+    if (ultimoPagoData.sin_historial) {
+      if (!ultimoPagoData.fecha_asignacion) return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información' };
+      fechaCorresponde = new Date(`${ultimoPagoData.fecha_asignacion}T12:00:00`); 
+    } else {
+      if (!ultimoPagoData.siguiente_fecha_pendiente) return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información' };
+      // Asumiendo que esta función tuya devuelve un objeto Date válido:
+      fechaCorresponde = obtenerFechaCorrespondiente(ultimoPagoData.siguiente_fecha_pendiente);
+    }
 
-    // 4. Determinar Estado
+    if (!fechaCorresponde) return { fechaCorresponde: null, diasHabilesTranscurridos: null, diasRestantesTolerancia: null, estadoTolerancia: 'Sin información' };
+
+    const fechaCorteLimpia = new Date(fechaCorresponde.getFullYear(), fechaCorresponde.getMonth(), fechaCorresponde.getDate());
+
+    // --- 📊 CÁLCULO 1: DÍAS NATURALES (Para la Tarjeta 1) ---
+    const msPorDia = 1000 * 60 * 60 * 24;
+    let diasNaturales = Math.floor((fechaHoyLimpia - fechaCorteLimpia) / msPorDia);
+
+    // --- ⏳ CÁLCULO 2: DÍAS HÁBILES SIN DOMINGOS (Para la Tolerancia) ---
+    let diasHabiles = 0;
+    let tempDate = new Date(fechaCorteLimpia);
+
+    if (fechaHoyLimpia > fechaCorteLimpia) {
+      // Han pasado días, los contamos uno por uno saltando domingos
+      while (tempDate < fechaHoyLimpia) {
+        tempDate.setDate(tempDate.getDate() + 1);
+        if (tempDate.getDay() !== 0) { // Si NO es domingo (0)
+          diasHabiles++;
+        }
+      }
+    } else if (fechaHoyLimpia < fechaCorteLimpia) {
+      // Va adelantado, calculamos días a favor (negativos)
+      while (tempDate > fechaHoyLimpia) {
+        tempDate.setDate(tempDate.getDate() - 1);
+        if (tempDate.getDay() !== 0) {
+          diasHabiles--;
+        }
+      }
+    }
+
+    // 🛡️ PARCHE PARA NUEVOS: Evita que deban días si el carro se les dio hoy o mañana
+    if (ultimoPagoData.sin_historial && diasNaturales < 0) {
+      diasNaturales = 0;
+      diasHabiles = 0;
+    }
+
+    // --- 🎯 CÁLCULO 3: LA CUENTA REGRESIVA Y EL ESTADO ---
     let estadoTolerancia = 'Al corriente';
-    
-    // Si ya pasó la fecha límite (días restantes negativos) -> Atrasado
-    if (diasRestantes < 0) {
-      estadoTolerancia = 'Atrasado';
-    } 
-    // Si ya pasó la fecha de corte pero no la límite (0 a 2 días restantes) -> En tolerancia
-    else if (diasTranscurridos > 0) {
-      estadoTolerancia = 'En tolerancia';
-    } 
-    // Si días transcurridos es negativo o cero -> Al corriente (Adelantado)
-    else {
+    let diasRestantes = TOLERANCIA_DIAS; // Inicia con el máximo (ej. 2)
+
+    if (diasHabiles > 0) {
+      // Ya empezaron a consumirse los días de tolerancia
+      diasRestantes = TOLERANCIA_DIAS - diasHabiles;
+      
+      if (diasRestantes < 0) {
+        estadoTolerancia = 'Atrasado';
+        diasRestantes = 0; // Topamos a 0 para que no muestre números negativos
+      } else {
+        estadoTolerancia = 'En tolerancia';
+      }
+    } else {
+      // Va al día o va adelantado
       estadoTolerancia = 'Al corriente';
+      diasRestantes = TOLERANCIA_DIAS; // Mantiene sus 2 días intactos
     }
 
     return {
       fechaCorresponde,
-      diasHabilesTranscurridos: diasTranscurridos, // 🟢 AHORA SÍ DEVUELVE EL NÚMERO
+      // ⚠️ Ojo: Mandamos diasNaturales bajo este nombre para no romper el HTML de tu primera tarjeta
+      diasHabilesTranscurridos: diasNaturales, 
       diasRestantesTolerancia: diasRestantes,
-      estadoTolerancia,
-      fechaLimite
+      estadoTolerancia
     };
   };
-  const obtenerInfoToleranciaPago = (fechaPago) => {
-    const fechaCorresponde = obtenerFechaCorrespondiente(fechaPago);
-    if (!fechaCorresponde) {
-      return {
-        fechaCorresponde: null,
-        diasHabilesTranscurridos: null,
-        diasRestantesTolerancia: null,
-        estadoTolerancia: 'Sin información'
-      };
+
+
+// SIMULADOR: Estado después de registrar el pago
+  // ⚠️ IMPORTANTE: Tienes que mandarle formData.fecha_fin, no fecha_pago
+  const obtenerInfoToleranciaPago = (fechaFin) => {
+    if (!fechaFin) return null;
+
+    // Convertimos la fecha que seleccionó como FINAL del pago (al mediodía para evitar zonas horarias)
+    const fechaCorteLimpia = new Date(`${fechaFin}T12:00:00`);
+    
+    const hoy = new Date();
+    const fechaHoyLimpia = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+
+    // --- ⏳ CÁLCULO DE DÍAS HÁBILES (Brincando domingos) ---
+    // Medimos cuántos días de diferencia hay entre el final del pago y HOY
+    let diasHabiles = 0;
+    let tempDate = new Date(fechaCorteLimpia);
+
+    if (fechaHoyLimpia > fechaCorteLimpia) {
+      // Si a pesar de este pago sigue debiendo días pasados:
+      while (tempDate < fechaHoyLimpia) {
+        tempDate.setDate(tempDate.getDate() + 1);
+        if (tempDate.getDay() !== 0) diasHabiles++; // Suma 1 si no es domingo
+      }
+    } else if (fechaHoyLimpia < fechaCorteLimpia) {
+      // Si con este pago se adelanta a días futuros:
+      while (tempDate > fechaHoyLimpia) {
+        tempDate.setDate(tempDate.getDate() - 1);
+        if (tempDate.getDay() !== 0) diasHabiles--; // Resta 1 (días a favor)
+      }
     }
 
-    const diasHabilesTranscurridos = contarDiasHabilesSinDomingos(fechaCorresponde, new Date());
-    const diasRestantesTolerancia = diasHabilesTranscurridos === null
-      ? null
-      : Math.max(0, TOLERANCIA_DIAS - diasHabilesTranscurridos);
-
+    // --- 🎯 LA CUENTA REGRESIVA ---
     let estadoTolerancia = 'Al corriente';
-    if (diasHabilesTranscurridos > TOLERANCIA_DIAS) {
-      estadoTolerancia = 'Atrasado';
-    } else if (diasHabilesTranscurridos > 0) {
-      estadoTolerancia = 'En tolerancia';
+    let diasRestantes = TOLERANCIA_DIAS;
+
+    if (diasHabiles > 0) {
+      // Ya empezó a comerse los días de tolerancia a pesar del pago
+      diasRestantes = TOLERANCIA_DIAS - diasHabiles;
+      
+      if (diasRestantes < 0) {
+        estadoTolerancia = 'Atrasado';
+        diasRestantes = 0; // Topamos a 0
+      } else {
+        estadoTolerancia = 'En tolerancia';
+      }
+    } else {
+      // Con este pago queda exactamente al día, o adelantado
+      estadoTolerancia = 'Al corriente';
+      diasRestantes = TOLERANCIA_DIAS;
     }
 
     return {
-      fechaCorresponde,
-      diasHabilesTranscurridos,
-      diasRestantesTolerancia,
+      fechaCorresponde: fechaCorteLimpia, // Para que tu HTML imprima "Día que cubrirá"
+      diasHabilesTranscurridos: diasHabiles, 
+      diasRestantesTolerancia: diasRestantes,
       estadoTolerancia
     };
   };
@@ -233,27 +300,43 @@ const ModalRegistrarPago = ({ isOpen, onClose, conductor, onSuccess }) => {
   const [infoToleranciaPagoActual, setInfoToleranciaPagoActual] = useState(null);
   const [ultimoPagoConductor, setUltimoPagoConductor] = useState(null);
   const [diaCorrespondiente, setDiaCorrespondiente] = useState(null);
+  const inputAdminFechaFinRef = useRef(null);
 
 
-useEffect(() => {
+    // useEffect: Calcular fecha de inicio sugerida (A prueba de 1970 y Domingos)
+  useEffect(() => {
     if (!ultimoPagoConductor) return;
 
-    const FECHA_ARRANQUE = '2026-01-01'; 
     const fechaBackend = ultimoPagoConductor.siguiente_fecha_pendiente;
+    const esUsuarioNuevo = ultimoPagoConductor.sin_historial;
+    const fechaAsignacion = ultimoPagoConductor.fecha_asignacion; 
 
-    // CASO 1: NUEVO o SIN HISTORIAL (Fecha < 2026 o vacía)
-    if (!fechaBackend || fechaBackend < FECHA_ARRANQUE) {
-      console.log('📅 Usuario Nuevo: Iniciando el 01/01/2026');
+    // CASO 1: NUEVO o SIN HISTORIAL
+    if (esUsuarioNuevo || !fechaBackend) {
+      let fechaArranque = fechaAsignacion || new Date().toISOString().split('T')[0];
+      
+      // 🚀 DETECTOR DE DOMINGOS 🚀
+      // Armamos la fecha forzando el mediodía (T12:00:00) para evitar que la zona horaria nos reste un día
+      const fechaObj = new Date(`${fechaArranque}T12:00:00`); 
+      
+      if (fechaObj.getDay() === 0) { // Si es 0, es Domingo
+        console.log('⚠️ La asignación cayó en Domingo, brincando automáticamente al Lunes...');
+        fechaObj.setDate(fechaObj.getDate() + 1); // Le sumamos 1 día
+        fechaArranque = fechaObj.toISOString().split('T')[0]; // Lo volveamos a formato YYYY-MM-DD
+      }
+      
+      console.log(`📅 Usuario Nuevo/Sin Historial: Arrancando el -> ${fechaArranque}`);
+      
       setFormData(prev => ({
         ...prev,
-        fecha_pago: FECHA_ARRANQUE,
-        fecha_fin: FECHA_ARRANQUE
+        fecha_pago: fechaArranque,
+        fecha_fin: fechaArranque
       }));
     } 
     // CASO 2: TIENE HISTORIAL (Confirmado/Pendiente)
     else {
-      // El backend nos manda el "Fin del último pago".
-      // Nosotros calculamos el "Inicio del NUEVO pago" (Día siguiente)
+      // El backend nos manda la fecha FIN del último pago.
+      // Tu función calcularSiguienteFechaPago ya debe saber brincar domingos
       const siguienteDia = calcularSiguienteFechaPago(fechaBackend);
       
       console.log(`📅 Historial detectado. Último: ${fechaBackend} -> Siguiente: ${siguienteDia}`);
@@ -261,7 +344,7 @@ useEffect(() => {
       setFormData(prev => ({
         ...prev,
         fecha_pago: siguienteDia,
-        fecha_fin: siguienteDia // Por defecto 1 día
+        fecha_fin: siguienteDia 
       }));
     }
   }, [ultimoPagoConductor]);
@@ -302,16 +385,18 @@ useEffect(() => {
   const obtenerUltimoPagoConductor = async (conductorId) => {
     try {
       const response = await api.get(`/admin/pagos-rentas/conductor/${conductorId}/siguiente-pendiente`);
+      
+      // 🚨 ¡AQUÍ ESTÁ EL CHISMOSO! 🚨
+      console.log('📦 RESPUESTA CRUDA DEL BACKEND:', response.data);
+
       if (response.data && response.data.success) {
         setUltimoPagoConductor(response.data);
       } else if (response.data && response.data.error) {
-        // El conductor no tiene asignación activa, es normal
         setUltimoPagoConductor(null);
         console.log('Info: Conductor sin asignación activa');
       }
     } catch (err) {
       console.error('Error cargando último pago:', err);
-      // No mostrar error al usuario, solo log
       setUltimoPagoConductor(null);
     }
   };
@@ -346,21 +431,34 @@ useEffect(() => {
     }
   }, [ultimoPagoConductor, obtenerInfoTolerancia]);
 
-  // Calcular info de tolerancia del pago actual cuando cambia la fecha
+// Calcular info de tolerancia del pago actual cuando cambia la fecha FINAL
   useEffect(() => {
-    if (formData.fecha_pago) {
-      const info = obtenerInfoToleranciaPago(formData.fecha_pago);
+    // 🚨 CAMBIO CLAVE: Usamos fecha_fin para saber hasta qué día cubrió realmente 🚨
+    if (formData.fecha_fin) {
+      const info = obtenerInfoToleranciaPago(formData.fecha_fin);
       setInfoToleranciaPagoActual(info);
     } else {
       setInfoToleranciaPagoActual(null);
     }
-  }, [formData.fecha_pago, obtenerInfoToleranciaPago]);
+  }, [formData.fecha_fin, obtenerInfoToleranciaPago]); // 👈 No olvides cambiarlo aquí también
+
+  const esDomingo = (fechaStr) => {
+    if (!fechaStr) return false;
+    const fecha = new Date(`${fechaStr}T12:00:00`);
+    return !Number.isNaN(fecha.getTime()) && fecha.getDay() === 0;
+  };
 
 
 const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+
+    if (esDomingo(formData.fecha_fin || formData.fecha_pago)) {
+      setError('⛔ La fecha fin no puede ser domingo (no se cobra). Selecciona sábado o lunes.');
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const dataToSend = {
@@ -582,71 +680,109 @@ const handleSubmit = async (e) => {
           {/* BLOQUE DE FECHAS (RANGO) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
-            {/* 1. FECHA INICIO (Ya la tenías) */}
+            {/* 1. FECHA INICIO (FORMATO ELEGANTE) */}
             <div>
               <label className="block text-white font-medium mb-2">
                 Fecha Inicio (Cubre desde) *
               </label>
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 z-10" />
+                
+                {/* INPUT REAL (Escondido visualmente, pero mantiene toda tu lógica intacta) */}
                 <input
                   type="date"
                   required
                   value={formData.fecha_pago}
                   readOnly
-                  min={ultimoPagoConductor?.siguiente_fecha_pendiente 
-                    ? calcularSiguienteFechaPago(ultimoPagoConductor.siguiente_fecha_pendiente)
-                    : "2024-01-01"
+                  min={ultimoPagoConductor?.sin_historial 
+                      ? ultimoPagoConductor.fecha_asignacion
+                      : ultimoPagoConductor?.siguiente_fecha_pendiente 
+                          ? calcularSiguienteFechaPago(ultimoPagoConductor.siguiente_fecha_pendiente)
+                          : "" 
                   }
                   onChange={(e) => {
                     const selectedDate = new Date(`${e.target.value}T12:00:00`);
                     if (selectedDate.getDay() === 0) {
-                      setError('⛔ No se pueden seleccionar domingos en fecha inicio.');
-                      // Ajuste automático al lunes
+                      setError('No se pueden seleccionar domingos en fecha inicio.');
+                      // Ajuste automatico al lunes
                       const lunes = new Date(selectedDate);
                       lunes.setDate(selectedDate.getDate() + 1);
                       setFormData({ 
                         ...formData, 
                         fecha_pago: lunes.toISOString().split('T')[0],
-                        fecha_fin: lunes.toISOString().split('T')[0] // Reseteamos fin al cambiar inicio
+                        fecha_fin: lunes.toISOString().split('T')[0] 
                       });
                       return;
                     }
                     setError(null);
-                    // Al cambiar inicio, actualizamos fin para que sea coherente
                     setFormData({ 
                       ...formData, 
                       fecha_pago: e.target.value,
                       fecha_fin: e.target.value 
                     });
                   }}
-                  className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent"
+                  className="sr-only" // 👈 Lo escondemos
                 />
+
+                {/* INPUT VISUAL FALSO (Solo muestra el texto bonito y se ve bloqueado) */}
+                <div className="w-full pl-10 pr-4 py-3 bg-white/5 border border-white/10 rounded-lg text-gray-300 cursor-not-allowed flex items-center">
+                  <span className="font-medium capitalize">
+                    {formData.fecha_pago 
+                      ? new Date(`${formData.fecha_pago}T12:00:00`).toLocaleDateString('es-MX', {day: 'numeric', month: 'long', year: 'numeric' }) 
+                      : 'Calculando fecha...'}
+                  </span>
+                </div>
+
               </div>
             </div>
 
-            {/* 2. FECHA FIN (NUEVO) */}
+            {/* 2. FECHA FIN (HITBOX GIGANTE) */}
             <div>
               <label className="block text-white font-medium mb-2">
                 Fecha Fin (Hasta) *
               </label>
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                
+                {/* INPUT REAL (Escondido visualmente) */}
                 <input
                   type="date"
+                  ref={inputAdminFechaFinRef}
                   required
                   value={formData.fecha_fin || formData.fecha_pago}
                   min={formData.fecha_pago} // No puede ser menor al inicio
                   onChange={(e) => {
-                    const selectedDate = new Date(`${e.target.value}T12:00:00`);
-                    if (selectedDate.getDay() === 0) {
-                      alert('⛔ La fecha fin no puede ser domingo (no se cobra). Selecciona sábado o lunes.');
-                      return;
-                    }
+                    setError(null);
                     setFormData({ ...formData, fecha_fin: e.target.value });
                   }}
-                  className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:ring-2 focus:ring-primary focus:border-transparent"
+                  className="sr-only" // Lo ocultamos
                 />
+
+                {/* INPUT VISUAL FALSO (El botón gigante oscuro) */}
+                <div 
+                  onClick={() => {
+                    if (inputAdminFechaFinRef.current) {
+                      inputAdminFechaFinRef.current.showPicker();
+                    }
+                  }}
+                  className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white hover:bg-white/20 hover:border-cyan-400 cursor-pointer transition-colors flex items-center justify-between"
+                >
+                  {/* El ícono de calendario original a la izquierda */}
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                  
+                  {/* El texto de la fecha (Formateado bonito para México) */}
+                  <span className="font-medium pointer-events-none capitalize">
+                    {formData.fecha_fin || formData.fecha_pago 
+                      ? new Date(`${formData.fecha_fin || formData.fecha_pago}T12:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' }) 
+                      : 'Selecciona una fecha'
+                    }
+                  </span>
+
+                  {/* Un textito extra a la derecha para invitar a hacer clic */}
+                  <span className="text-gray-400 text-xs pointer-events-none hidden sm:block">
+                    Cambiar 📅
+                  </span>
+                </div>
+
               </div>
             </div>
           </div>
@@ -702,7 +838,8 @@ const handleSubmit = async (e) => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Días Transcurridos */}
+                
+                {/* 1. Días Transcurridos */}
                 <div className="bg-white/5 rounded-lg p-4 border border-white/10">
                   <p className="text-gray-400 text-sm mb-1 flex items-center gap-1">
                     {infoTolerancia.diasHabilesTranscurridos < 0 ? (
@@ -716,14 +853,12 @@ const handleSubmit = async (e) => {
                     <p className={`text-2xl font-bold ${
                       infoTolerancia.diasHabilesTranscurridos <= 0 ? 'text-blue-400' : 'text-white'
                     }`}>
-                      {/* LÓGICA VISUAL: */}
                       {infoTolerancia.diasHabilesTranscurridos < 0 
-                        ? `+${Math.abs(infoTolerancia.diasHabilesTranscurridos)}` // Muestra "+15" en vez de "-15"
-                        : infoTolerancia.diasHabilesTranscurridos // Muestra "3" normal
+                        ? `+${Math.abs(infoTolerancia.diasHabilesTranscurridos)}` 
+                        : infoTolerancia.diasHabilesTranscurridos
                       }
                     </p>
                     
-                    {/* Subtexto dinámico */}
                     <span className="text-xs text-gray-400 font-medium">
                        {infoTolerancia.diasHabilesTranscurridos < 0 
                         ? 'días a favor' 
@@ -731,14 +866,17 @@ const handleSubmit = async (e) => {
                     </span>
                   </div>
 
+                  {/* 👇 TEXTO INTELIGENTE: Asignación vs Último pago 👇 */}
                   <p className="text-gray-500 text-[10px] mt-1">
                     {infoTolerancia.diasHabilesTranscurridos < 0 
                       ? 'Conductor adelantado (Pago Seguro)' 
-                      : 'Desde el ultimo pago'}
+                      : ultimoPagoConductor?.sin_historial 
+                        ? 'Desde su asignación' 
+                        : 'Desde el último pago'}
                   </p>
                 </div>
 
-                {/* Días Restantes */}
+                {/* 2. Días Restantes */}
                 <div className={`bg-gradient-to-br rounded-lg p-4 border ${
                   infoTolerancia.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
                   infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
@@ -759,7 +897,7 @@ const handleSubmit = async (e) => {
                   </p>
                 </div>
 
-                {/* Estado Actual */}
+                {/* 3. Estado Actual */}
                 <div className={`bg-gradient-to-br rounded-lg p-4 border ${
                   infoTolerancia.estadoTolerancia === 'Al corriente' ? 'from-green-500/10 to-green-600/10 border-green-500/30' :
                   infoTolerancia.estadoTolerancia === 'En tolerancia' ? 'from-yellow-500/10 to-yellow-600/10 border-yellow-500/30' :
@@ -775,8 +913,13 @@ const handleSubmit = async (e) => {
                   }`}>
                     {infoTolerancia.estadoTolerancia}
                   </p>
+                  
+                  {/* 👇 SOLUCIÓN AL 1969: Muestra la asignación si es nuevo 👇 */}
                   <p className="text-gray-400 text-xs mt-1">
-                    Último pago: {ultimoPagoConductor ? new Date(ultimoPagoConductor.siguiente_fecha_pendiente).toLocaleDateString('es-MX') : 'N/A'}
+                    {ultimoPagoConductor?.sin_historial 
+                      ? `Asignado el: ${ultimoPagoConductor.fecha_asignacion ? new Date(ultimoPagoConductor.fecha_asignacion + 'T12:00:00').toLocaleDateString('es-MX') : 'N/A'}`
+                      : `Último pago: ${ultimoPagoConductor?.siguiente_fecha_pendiente ? new Date(ultimoPagoConductor.siguiente_fecha_pendiente + 'T12:00:00').toLocaleDateString('es-MX') : 'N/A'}`
+                    }
                   </p>
                 </div>
               </div>
@@ -920,8 +1063,6 @@ const handleSubmit = async (e) => {
               >
                 <option value="Transferencia" className="bg-gray-800">Transferencia</option>
                 <option value="Deposito" className="bg-gray-800">Deposito</option>
-                <option value="Tarjeta" className="bg-gray-800">Tarjeta</option>
-                <option value="Stripe" className="bg-gray-800">Stripe</option>
               </select>
             </div>
           </div>

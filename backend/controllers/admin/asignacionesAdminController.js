@@ -108,23 +108,22 @@ exports.subirContrato = async (req, res) => {
 // ============================================
 exports.getConductoresDisponibles = async (req, res) => {
   try {
-    // 1. Buscamos a los "Ocupados": 
-    // Aquellos que tienen una asignación donde el campo 'activa' es explícitamente TRUE o 1
+    // 1. Buscar IDs ocupados (con asignacion activa)
     const ocupados = await db('asignaciones')
       .where(function() {
         this.where('activa', true)
-            .orWhere('activa', 1); // Por si la base de datos lo guarda como número
+            .orWhere('activa', 1);
       })
-      .pluck('conductor_id'); // Obtenemos solo la lista de sus IDs [2, 5, 9...]
+      .pluck('conductor_id');
 
-    console.log('🚫 IDs de conductores que el sistema va a ocultar por tener carro activo:', ocupados);
-
-    // 2. Traemos a los conductores disponibles:
-    // - Que su status personal permita reasignacion
-    // - Y que su ID NO ESTÉ en la lista de los que tienen una asignación activa
+    // 2. Traer conductores disponibles con contrato unico para frontend
     const disponibles = await db('conductores as c')
       .whereIn('c.status', ['Aprobado', 'Activo', 'Inactivo'])
-      .whereNotIn('c.id', ocupados) // Aquí ocurre la magia del filtro
+      .modify((queryBuilder) => {
+        if (ocupados.length > 0) {
+          queryBuilder.whereNotIn('c.id', ocupados);
+        }
+      })
       .select(
         'c.id',
         'c.nombre_conductor',
@@ -134,23 +133,31 @@ exports.getConductoresDisponibles = async (req, res) => {
       )
       .orderBy('c.nombre_conductor', 'asc');
 
-    // 3. Respuesta para el frontend
+    const conductores = disponibles.map(c => ({
+      id: c.id,
+      nombre: c.nombre_conductor || '',
+      telefono: c.numero_telefono || '',
+      email: c.email || '',
+      calificacion: parseFloat(c.calificacion_promedio || 0),
+      tiene_asignacion: false,
+      vehiculo_asignado_numero: null
+    }));
+
     res.json({
       success: true,
-      conductores: disponibles.map(c => ({
-        id: c.id,
-        nombre: c.nombre_conductor,
-        telefono: c.numero_telefono,
-        email: c.email,
-        calificacion: parseFloat(c.calificacion_promedio || 0)
-      }))
+      conductores,
+      estadisticas: {
+        total: conductores.length,
+        disponibles: conductores.length,
+        ocupados: 0
+      }
     });
 
   } catch (error) {
     console.error('Error filtrando conductores:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al filtrar conductores por asignación activa'
+      message: 'Error al filtrar conductores por asignacion activa'
     });
   }
 };
@@ -775,3 +782,4 @@ exports.getHistorialVehiculoPorSerie = async (req, res) => {
     });
   }
 };
+
